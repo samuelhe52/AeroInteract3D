@@ -1,7 +1,7 @@
 [project]
-name = "cv-group-project"
+name = "aero-interact-3d"
 version = "0.1.0"
-description = "Add your description here"
+description = "AeroInteract3D: Real-time 3D mid-air interaction prototype."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

@@ -66,3 +66,31 @@ Implementation decisions should stay aligned with the design direction while pri
 - Assistant responses should follow the user's chosen language.
 - Developer-facing documentation (for example, this file and other development docs) should use English as the primary language.
 - User-facing documentation (for example, README) should be bilingual (English + Chinese).
+
+## Module Conformance Checklist (MVP)
+
+Use this checklist before integrating teammate modules into bridge.
+
+### Shared Contract
+
+- `src/contract_stub.md` is treated as single source of truth.
+- All payloads include `contract_version` and required fields.
+- Any incompatible contract change is agreed first and version-bumped.
+
+### Gesture Module
+
+- Emits valid `GesturePacket` stream with monotonic `frame_id` and `timestamp_ms`.
+- Emits `pinch_state` and `tracking_state` values exactly from the contract.
+- Uses `camera_norm` coordinate space and includes confidence.
+
+### Rendering Module
+
+- Consumes valid `SceneCommand` stream and applies command types correctly.
+- Handles duplicate commands idempotently and tolerates stale frames safely.
+- Uses `world_norm` as canonical input space for object pose updates.
+
+### Bridge Integration Gate
+
+- Bridge imports only module interfaces, not module internals.
+- Bridge state machine behavior is deterministic for identical input sequences.
+- Tracking loss path resets interaction safely without crash.
