@@ -1,0 +1,5 @@
+# AeroInteract3D
+
+[English Version](README.md)
+
+项目仍处于早期阶段。当前面向用户的文档暂时保持精简，后续会逐步完善。
