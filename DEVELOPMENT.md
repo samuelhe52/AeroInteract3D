@@ -95,5 +95,5 @@ After any intentional dependency change, commit both:
 
 ## Notes for rendering on macOS
 
-The rendering group installs Python bindings (`PyOpenGL`) and GLFW wrapper (`glfw`).
-OpenGL runtime availability depends on your OS graphics stack.
+The rendering group installs Panda3D (`panda3d`).
+Runtime behavior still depends on your OS graphics stack and windowing environment.

@@ -19,7 +19,7 @@ Single-hand tracking, pinch-to-grab, and smooth cube translation in real time. F
 ## Basic Tech Stack
 
 - MediaPipe for gesture recognition.
-- OpenGL with Python for rendering.
+- Panda3D with Python for rendering.
 - uv for Python dependency and virtual environment management.
 
 ## Architecture Direction (Concise)
@@ -49,7 +49,7 @@ Current minimal module skeleton:
 - `src/contract_stub.md`
 - `src/rendering/`
 
-Rendering backend choice is fixed to Python + OpenGL for current milestones.
+Rendering backend choice is fixed to Python + Panda3D for current milestones.
 
 ## Team Collaboration Context
 

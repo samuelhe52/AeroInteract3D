@@ -4,6 +4,6 @@
 
 Early-stage project. Public-facing documentation is intentionally minimal for now.
 
-Current module decision: rendering implementation uses **Python + OpenGL**.
+Current module decision: rendering implementation uses **Python + Panda3D**.
 
 Developer environment setup: see [DEVELOPMENT.md](DEVELOPMENT.md).
