@@ -5,6 +5,8 @@ Purpose: detect hand landmarks and emit an ordered stream of contract-compliant 
 ## Deliverable Contract
 
 Gesture module MUST produce `GesturePacket` exactly as defined in `src/contract_stub.md`.
+Gesture module MUST import `GesturePacket` from `src/contracts.py`.
+Gesture module MUST NOT define a local `GesturePacket` dataclass copy.
 
 ## Functional Requirements
 

@@ -7,6 +7,8 @@
 ## 交付契约
 
 Rendering 模块必须严格按照 `src/contract_stub.md` 定义消费 `SceneCommand`。
+Rendering 模块必须从 `src/contracts.py` 导入 `SceneCommand`。
+Rendering 模块不得在本地重复定义 `SceneCommand` 数据类。
 
 ## 功能要求
 

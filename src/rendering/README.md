@@ -7,6 +7,8 @@ Rendering backend remains implementation-defined, but contract behavior is fixed
 ## Deliverable Contract
 
 Rendering module MUST consume `SceneCommand` exactly as defined in `src/contract_stub.md`.
+Rendering module MUST import `SceneCommand` from `src/contracts.py`.
+Rendering module MUST NOT define a local `SceneCommand` dataclass copy.
 
 ## Functional Requirements
 

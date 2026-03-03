@@ -4,6 +4,11 @@ This file is the single source of truth for module integration contracts.
 
 All modules MUST implement this contract. Any incompatible change MUST increment `contract_version` and be reviewed by all module owners.
 
+Canonical Python dataclass definitions live in `src/contracts.py`.
+
+- Modules MUST import shared dataclasses from `src/contracts.py`.
+- Modules MUST NOT redefine local copies of `GesturePacket` or `SceneCommand`.
+
 ## 1) Contract Versioning
 
 - `contract_version`: string, semantic version format (`MAJOR.MINOR.PATCH`).

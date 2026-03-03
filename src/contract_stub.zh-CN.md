@@ -4,6 +4,11 @@
 
 所有模块都必须实现该契约。任何不兼容变更都必须升级 `contract_version`，并由各模块负责人共同评审。
 
+Python 数据类（dataclass）的唯一定义位于 `src/contracts.py`。
+
+- 各模块必须从 `src/contracts.py` 导入共享数据类。
+- 各模块不得在本地重复定义 `GesturePacket` 或 `SceneCommand`。
+
 ## 1）契约版本
 
 - `contract_version`：字符串，语义化版本格式（`MAJOR.MINOR.PATCH`）。

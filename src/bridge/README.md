@@ -19,6 +19,9 @@ Purpose: translate and synchronize upstream `GesturePacket` stream into downstre
 
 Bridge MUST integrate through these abstract ports (or equivalent interfaces), not by importing concrete teammate internals.
 
+Bridge MUST import `GesturePacket` and `SceneCommand` from `src/contracts.py`.
+Bridge MUST NOT define local dataclass copies of these contract types.
+
 ## Core Responsibilities
 
 - Validate incoming `GesturePacket` against shared contract.

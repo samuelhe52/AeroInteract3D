@@ -19,6 +19,9 @@
 
 Bridge 必须通过上述抽象端口（或等价接口）集成，不得直接导入队友模块内部实现。
 
+Bridge 必须从 `src/contracts.py` 导入 `GesturePacket` 与 `SceneCommand`。
+Bridge 不得在本地重复定义这两个契约数据类。
+
 ## 核心职责
 
 - 校验输入 `GesturePacket` 是否符合共享契约。
