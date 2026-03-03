@@ -11,16 +11,31 @@ Purpose: translate and synchronize upstream `GesturePacket` stream into downstre
 ## In-Process Interfaces (MVP)
 
 - `GestureInputPort`
+  - `start() -> None`
   - `poll() -> GesturePacket | None`
   - `health() -> dict`
+  - `stop() -> None`
 - `RenderOutputPort`
+  - `start() -> None`
   - `push(command: SceneCommand) -> None`
   - `health() -> dict`
+  - `stop() -> None`
+- `BridgeService`
+  - `start() -> None`
+  - `process(packet: GesturePacket) -> list[SceneCommand]`
+  - `health() -> dict`
+  - `stop() -> None`
 
 Bridge MUST integrate through these abstract ports (or equivalent interfaces), not by importing concrete teammate internals.
 
 Bridge MUST import `GesturePacket` and `SceneCommand` from `src/contracts.py`.
 Bridge MUST NOT define local dataclass copies of these contract types.
+
+## Implementation Ownership
+
+- Bridge maintainers MUST implement a concrete service class inheriting `BridgeService` from `src/ports.py`.
+- Use `BridgeServiceStub` in `src/bridge/service_stub.py` as the initial scaffold and replace no-op behavior incrementally.
+- Application wiring in `main.py` imports this stub today so integration can proceed before full implementation.
 
 ## Core Responsibilities
 

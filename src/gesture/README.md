@@ -8,6 +8,12 @@ Gesture module MUST produce `GesturePacket` exactly as defined in `src/contract_
 Gesture module MUST import `GesturePacket` from `src/contracts.py`.
 Gesture module MUST NOT define a local `GesturePacket` dataclass copy.
 
+## Implementation Ownership
+
+- Gesture maintainers MUST implement a concrete service class inheriting `GestureInputPort` from `src/ports.py`.
+- Use `GestureInputServiceStub` in `src/gesture/service_stub.py` as the initial scaffold and replace no-op behavior incrementally.
+- Application wiring in `main.py` imports this stub today so integration can proceed before full implementation.
+
 ## Functional Requirements
 
 - MUST support single-hand tracking for MVP.

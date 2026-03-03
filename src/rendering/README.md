@@ -21,6 +21,12 @@ Rendering module MUST consume `SceneCommand` exactly as defined in `src/contract
 Rendering module MUST import `SceneCommand` from `src/contracts.py`.
 Rendering module MUST NOT define a local `SceneCommand` dataclass copy.
 
+## Implementation Ownership
+
+- Rendering maintainers MUST implement a concrete service class inheriting `RenderOutputPort` from `src/ports.py`.
+- Use `RenderOutputServiceStub` in `src/rendering/service_stub.py` as the initial scaffold and replace no-op behavior incrementally.
+- Application wiring in `main.py` imports this stub today so integration can proceed before full implementation.
+
 ## Functional Requirements
 
 - MUST initialize scene via `init_scene` command before object updates.

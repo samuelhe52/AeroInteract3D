@@ -11,16 +11,31 @@
 ## 进程内接口（MVP）
 
 - `GestureInputPort`
+  - `start() -> None`
   - `poll() -> GesturePacket | None`
   - `health() -> dict`
+  - `stop() -> None`
 - `RenderOutputPort`
+  - `start() -> None`
   - `push(command: SceneCommand) -> None`
   - `health() -> dict`
+  - `stop() -> None`
+- `BridgeService`
+  - `start() -> None`
+  - `process(packet: GesturePacket) -> list[SceneCommand]`
+  - `health() -> dict`
+  - `stop() -> None`
 
 Bridge 必须通过上述抽象端口（或等价接口）集成，不得直接导入队友模块内部实现。
 
 Bridge 必须从 `src/contracts.py` 导入 `GesturePacket` 与 `SceneCommand`。
 Bridge 不得在本地重复定义这两个契约数据类。
+
+## 实现归属
+
+- Bridge 模块维护者必须实现继承自 `src/ports.py` 中 `BridgeService` 的具体服务类。
+- 请以 `src/bridge/service_stub.py` 中的 `BridgeServiceStub` 作为起始骨架，逐步替换 no-op 逻辑。
+- `main.py` 当前已接入该 stub，便于在完整实现前继续集成联调。
 
 ## 核心职责
 

@@ -21,6 +21,12 @@ Rendering 模块必须严格按照 `src/contract_stub.md` 定义消费 `SceneCom
 Rendering 模块必须从 `src/contracts.py` 导入 `SceneCommand`。
 Rendering 模块不得在本地重复定义 `SceneCommand` 数据类。
 
+## 实现归属
+
+- Rendering 模块维护者必须实现继承自 `src/ports.py` 中 `RenderOutputPort` 的具体服务类。
+- 请以 `src/rendering/service_stub.py` 中的 `RenderOutputServiceStub` 作为起始骨架，逐步替换 no-op 逻辑。
+- `main.py` 当前已接入该 stub，便于在完整实现前继续集成联调。
+
 ## 功能要求
 
 - 必须先处理 `init_scene`，再处理对象更新命令。

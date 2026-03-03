@@ -8,6 +8,12 @@ Gesture 模块必须严格按照 `src/contract_stub.md` 定义输出 `GesturePac
 Gesture 模块必须从 `src/contracts.py` 导入 `GesturePacket`。
 Gesture 模块不得在本地重复定义 `GesturePacket` 数据类。
 
+## 实现归属
+
+- Gesture 模块维护者必须实现继承自 `src/ports.py` 中 `GestureInputPort` 的具体服务类。
+- 请以 `src/gesture/service_stub.py` 中的 `GestureInputServiceStub` 作为起始骨架，逐步替换 no-op 逻辑。
+- `main.py` 当前已接入该 stub，便于在完整实现前继续集成联调。
+
 ## 功能要求
 
 - MVP 必须支持单手跟踪。
