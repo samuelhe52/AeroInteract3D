@@ -60,6 +60,8 @@ Python 数据类（dataclass）的唯一定义位于 `src/contracts.py`。
 
 必须以有序流的形式消费，并尽可能按幂等方式应用。
 
+当前项目决策：渲染消费端采用 **Python + OpenGL** 实现。该决策不改变 `SceneCommand` 的 schema 要求。
+
 ### 必填字段（`SceneCommand`）
 
 - `contract_version: str`

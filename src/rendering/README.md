@@ -2,7 +2,17 @@
 
 Purpose: consume bridge `SceneCommand` stream and render deterministic scene and object interaction feedback.
 
-Rendering backend remains implementation-defined, but contract behavior is fixed.
+Rendering stack is fixed for current milestones: **Python + OpenGL**.
+
+Contract behavior remains fixed regardless of implementation details.
+
+## Technical Baseline (Python + OpenGL)
+
+- MUST implement renderer logic in Python.
+- MUST use OpenGL as the graphics API.
+- SHOULD keep windowing/context management behind an adapter boundary so the command consumer remains testable.
+- SHOULD keep rendering loop timing decoupled from command ingestion (consume latest valid command state each frame).
+- SHOULD treat GPU/resource initialization failures as structured startup errors.
 
 ## Deliverable Contract
 

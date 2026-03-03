@@ -60,6 +60,8 @@ MUST be emitted as an ordered stream.
 
 MUST be consumed as an ordered stream and applied idempotently where possible.
 
+Current project decision: the rendering consumer is implemented in **Python + OpenGL**. This does not change `SceneCommand` schema requirements.
+
 ### Required fields (`SceneCommand`)
 
 - `contract_version: str`

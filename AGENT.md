@@ -19,7 +19,7 @@ Single-hand tracking, pinch-to-grab, and smooth cube translation in real time. F
 ## Basic Tech Stack
 
 - MediaPipe for gesture recognition.
-- OpenGL with Python or Three.js for web-based rendering.
+- OpenGL with Python for rendering.
 
 ## Architecture Direction (Concise)
 
@@ -48,7 +48,7 @@ Current minimal module skeleton:
 - `src/contract_stub.md`
 - `src/rendering/`
 
-Rendering backend choice remains open and will be decided later without changing this high-level split.
+Rendering backend choice is fixed to Python + OpenGL for current milestones.
 
 ## Team Collaboration Context
 
