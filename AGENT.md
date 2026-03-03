@@ -20,6 +20,7 @@ Single-hand tracking, pinch-to-grab, and smooth cube translation in real time. F
 
 - MediaPipe for gesture recognition.
 - OpenGL with Python for rendering.
+- uv for Python dependency and virtual environment management.
 
 ## Architecture Direction (Concise)
 
@@ -59,6 +60,14 @@ This is a 3-member group project:
 - Member C: responsible for practical implementation.
 
 Implementation decisions should stay aligned with the design direction while prioritizing feasible, testable, and maintainable execution.
+
+## Development Environment Policy
+
+- Python version baseline is `3.12` (see `.python-version`).
+- Use uv as the single environment/package workflow.
+- Do not install project dependencies with raw `pip` unless explicitly troubleshooting.
+- Use `uv sync` to reproduce the environment from `pyproject.toml` and `uv.lock`.
+- Keep `uv.lock` updated whenever dependencies are intentionally changed.
 
 ## Language Policy
 

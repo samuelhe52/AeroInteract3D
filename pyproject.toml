@@ -7,4 +7,18 @@ requires-python = ">=3.12"
 dependencies = [
     "mediapipe>=0.10.32",
     "opencv-python>=4.13.0.92",
+    "numpy>=2.2.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+    "ruff>=0.13.0",
+]
+rendering = [
+    "glfw>=2.10.0",
+    "pyopengl>=3.1.10",
+]
+
+[tool.uv]
+default-groups = ["dev"]
