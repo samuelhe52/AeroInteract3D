@@ -39,7 +39,7 @@ class GestureInputServiceStub(GestureInputPort):
         self._last_palm_center = Vec3(0.0, 0.0, 0.0)
         self._last_velocity: Vec3 | None = None
 
-        self._backend: Any = None
+        self._backend: Any = None # Placeholder for the actual backend implementation(i.e., camera)
 
     def start(self) -> None:
         if self._started:
@@ -64,13 +64,14 @@ class GestureInputServiceStub(GestureInputPort):
 
         try:
             raw_frame = self._read_frame()
+            timestamp_ms = int(raw_frame.get("timestamp_ms", self._next_timestamp_ms()))
             hand_data = self._detect_hand(raw_frame)
 
             if hand_data is None:
                 self._tracking_loss_streak += 1
                 tracking_state = self._compute_tracking_state(None)
                 pinch_state = self._compute_pinch_state(None, None)
-                confidence = self._compute_confidence(None, tracking_state)
+                confidence = self._compute_confidence(None, tracking_state, pinch_state)
                 velocity = Vec3(0.0, 0.0, 0.0)
 
                 self._tracking_state = tracking_state
@@ -79,6 +80,7 @@ class GestureInputServiceStub(GestureInputPort):
                 self._last_velocity = velocity
 
                 return self._build_packet(
+                    timestamp_ms=timestamp_ms,
                     tracking_state=tracking_state,
                     pinch_state=pinch_state,
                     confidence=confidence,
@@ -100,7 +102,7 @@ class GestureInputServiceStub(GestureInputPort):
 
             tracking_state = self._compute_tracking_state(hand_data)
             pinch_state = self._compute_pinch_state(index_tip, thumb_tip)
-            confidence = self._compute_confidence(hand_data, tracking_state)
+            confidence = self._compute_confidence(hand_data, tracking_state, pinch_state)
 
             index_tip = self._smooth_vec3(index_tip, self._last_index_tip)
             thumb_tip = self._smooth_vec3(thumb_tip, self._last_thumb_tip)
@@ -116,6 +118,7 @@ class GestureInputServiceStub(GestureInputPort):
             self._last_velocity = velocity
 
             return self._build_packet(
+                timestamp_ms=timestamp_ms,
                 tracking_state=tracking_state,
                 pinch_state=pinch_state,
                 confidence=confidence,
@@ -131,7 +134,7 @@ class GestureInputServiceStub(GestureInputPort):
         except Exception as exc:
             self._last_error = str(exc)
             self._status = "DEGRADED"
-            return None
+            raise RuntimeError("Gesture input backend failure") from exc
 
     def health(self) -> dict:
         return {
@@ -282,7 +285,12 @@ class GestureInputServiceStub(GestureInputPort):
         self._release_candidate_streak = 0
         return "open"
 
-    def _compute_confidence(self, hand_data: dict[str, Any] | None, tracking_state: str) -> float:
+    def _compute_confidence(
+        self,
+        hand_data: dict[str, Any] | None,
+        tracking_state: str,
+        pinch_state: str,
+    ) -> float:
         if tracking_state != "tracked":
             if tracking_state == "temporarily_lost":
                 return 0.25
@@ -290,7 +298,7 @@ class GestureInputServiceStub(GestureInputPort):
 
         assert hand_data is not None
         raw_confidence = float(hand_data.get("raw_confidence", 0.5))
-        confidence_bonus = 0.05 if self._pinch_state == "pinched" else 0.0
+        confidence_bonus = 0.05 if pinch_state == "pinched" else 0.0
         return max(0.0, min(1.0, raw_confidence + confidence_bonus))
 
     def _smooth_vec3(self, current: Vec3, previous: Vec3, alpha: float = 0.7) -> Vec3:
@@ -302,6 +310,7 @@ class GestureInputServiceStub(GestureInputPort):
 
     def _build_packet(
         self,
+        timestamp_ms: int,
         tracking_state: str,
         pinch_state: str,
         confidence: float,
@@ -316,7 +325,7 @@ class GestureInputServiceStub(GestureInputPort):
         return GesturePacket(
             contract_version="0.1.0",
             frame_id=self._frame_id,
-            timestamp_ms=self._next_timestamp_ms(),
+            timestamp_ms=timestamp_ms,
             hand_id=self._hand_id,
             tracking_state=tracking_state,
             confidence=confidence,

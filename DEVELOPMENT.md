@@ -36,6 +36,13 @@ make sync
 make run
 ```
 
+At the current milestone, `make run` expects bridge and rendering services to be implemented.
+If you only need a gesture smoke test while those services are still placeholders, use:
+
+```bash
+uv run python src/gesture/main.py
+```
+
 - Run tests:
 
 ```bash
