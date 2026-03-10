@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.ports import BridgeService
@@ -16,6 +16,15 @@ from src.utils.runtime import (
     error_entry,
     make_command_id,
 )
+
+import math
+import logging
+
+# Create a dedicated logger for bridge service
+logger = logging.getLogger("bridge.service")
+
+# Create a dedicated logger for coordinate transformation
+coordinate_logger = logging.getLogger("bridge.coordinate_transformation")
 
 
 BRIDGE_STATE_IDLE = "idle"
@@ -279,34 +288,63 @@ class BridgeServiceImpl(BridgeService):
             },
         )
 
-    def _camera_to_world_position(self, position: Vec3) -> Vec3:
-        # camera_norm is gesture input space relative to the camera frame.
-        # In this contract, +x means right, +y means up, and +z means toward the user/camera.
-        # world_norm is the renderer-facing scene space after bridge mapping, using the same normalized axes.
-        # Convert camera-relative hand coordinates into stable scene coordinates
+    logger = logging.getLogger("bridge_service")
+    def _camera_to_world_position(self, position: Optional[Vec3]) -> Vec3:
+        '''
+        Complete camera_norm → world_norm coordinate transformation with full fault tolerance.
         
-        # 1. Invert the z-axis to convert from camera space (z toward user) to world space
-        # 2. Apply a small offset to center the interaction area
-        # 3. Scale coordinates to fit within the world_norm range [-1.0, 1.0]
+        camera_norm definition (gesture input space relative to camera frame):
+        - +x: right (camera horizontal)
+        - +y: up (camera vertical)
+        - +z: toward the user/camera (camera depth)
         
-        # Camera to world transformation
-        # - Camera space: +x=right, +y=up, +z=toward user
-        # - World space: +x=right, +y=up, +z=away from camera
+        world_norm definition (renderer-facing scene space after bridge mapping):
+        - +x: right (scene horizontal)
+        - +y: up (scene vertical)
+        - +z: away from the camera (scene depth)
         
-        # Invert z-axis and apply scaling/offset
-        scaled_x = position.x * 0.8  # Scale to fit within world_norm
-        scaled_y = position.y * 0.8  # Scale to fit within world_norm
-        scaled_z = -position.z * 0.8  # Invert z-axis and scale
+        :param position: Original coordinates in camera_norm (Vec3), None is allowed
+        :return: Transformed coordinates in world_norm (Vec3), guaranteed to be within [-1.0, 1.0]
+        '''
+        # 1. Null/illegal input fault tolerance
+        if position is None:
+            self._log_error("Coordinate transformation failed: input position is None")
+            return Vec3(0.0, 0.0, 0.5)  # Return default safe position
         
-        # Add a small offset to position the interaction area in front of the camera
-        offset_z = 0.5
+        # 2. Invalid value (NaN/Inf) validation
+        def is_valid_num(v: float) -> bool:
+            return not (math.isnan(v) or math.isinf(v))
         
-        # Create and return the transformed position
-        return Vec3(
-            scaled_x,
-            scaled_y,
-            scaled_z + offset_z
-        )
+        x = position.x if is_valid_num(position.x) else 0.0
+        y = position.y if is_valid_num(position.y) else 0.0
+        z = position.z if is_valid_num(position.z) else 0.0
+        
+        # 3. Core transformation logic (camera_norm → world_norm)
+        # - Scale by 0.8 to reserve 20% margin for world_norm range [-1.0, 1.0]
+        # - Invert z-axis: camera +z (toward user) → world +z (away from camera)
+        scaled_x = x * 0.8
+        scaled_y = y * 0.8
+        scaled_z = -z * 0.8  # Invert z-axis for world space alignment
+        
+        # 4. Final range clipping (guarantee no out-of-bounds in world_norm)
+        def clip(v: float) -> float:
+            return max(-1.0, min(1.0, v))
+        
+        final_x = clip(scaled_x)
+        final_y = clip(scaled_y)
+        final_z = clip(scaled_z + 0.5)  # Add offset to position interaction area in front of camera
+        
+        # 5. Warning log for clipped coordinates (aids debugging)
+        if abs(scaled_x) > 1.0 or abs(scaled_y) > 1.0 or abs(scaled_z + 0.5) > 1.0:
+            self._log_warning(
+                f"Coordinate clipped: original({x:.2f},{y:.2f},{z:.2f}) → "
+                f"scaled({scaled_x:.2f},{scaled_y:.2f},{scaled_z+0.5:.2f}) → "
+                f"final({final_x:.2f},{final_y:.2f},{final_z:.2f})"
+            )
+        
+        return Vec3(final_x, final_y, final_z)
+
+
 
     def _make_object_state(self, packet: GesturePacket, interaction_state: str) -> SceneCommand:
         return SceneCommand(
