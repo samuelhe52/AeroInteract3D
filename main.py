@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from src.bridge.service import BridgeServiceImpl
 from src.gesture.service_stub import GestureInputServiceStub
 from src.ports import BridgeService, GestureInputPort, RenderOutputPort
-from src.rendering.service_stub import RenderOutputServiceStub
+from src.rendering.service import AeroRenderingService
 
 
 LIFECYCLE_INITIALIZING = "INITIALIZING"
@@ -118,7 +118,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
 def build_app(config: AppConfig) -> App:
     gesture_input = GestureInputServiceStub()
     bridge = BridgeServiceImpl()
-    render_output = RenderOutputServiceStub()
+    render_output = AeroRenderingService()
     return App(config, gesture_input, bridge, render_output)
 
 
