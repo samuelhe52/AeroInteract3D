@@ -34,8 +34,8 @@ Bridge MUST NOT define local dataclass copies of these contract types.
 ## Implementation Ownership
 
 - Bridge maintainers MUST implement a concrete service class inheriting `BridgeService` from `src/ports.py`.
-- Use `BridgeServiceStub` in `src/bridge/service_stub.py` as the initial scaffold and replace no-op behavior incrementally.
-- Application wiring in `main.py` imports this stub today so integration can proceed before full implementation.
+- The current concrete implementation is `BridgeServiceImpl` in `src/bridge/service.py`.
+- Application wiring in `main.py` imports this service today so integration can proceed before full implementation.
 - Current coordination note: the bridge remains the call site for camera-to-world conversion before emitting `world_norm` pose commands, but the rendering maintainer is expected to implement the concrete conversion logic used by that hook.
 
 ## Core Responsibilities

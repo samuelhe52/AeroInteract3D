@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.bridge.service_stub import BridgeServiceStub
+from src.bridge.service import BridgeServiceImpl
 from src.contracts import GesturePacket, Vec3
 
 
@@ -30,7 +30,7 @@ def make_packet(
 
 
 def test_bridge_emits_init_scene_on_first_valid_packet() -> None:
-    bridge = BridgeServiceStub()
+    bridge = BridgeServiceImpl()
     bridge.start()
 
     commands = bridge.process(make_packet(frame_id=1, timestamp_ms=100))
@@ -40,7 +40,7 @@ def test_bridge_emits_init_scene_on_first_valid_packet() -> None:
 
 
 def test_bridge_enters_grab_and_emits_pose_updates() -> None:
-    bridge = BridgeServiceStub()
+    bridge = BridgeServiceImpl()
     bridge.start()
 
     bridge.process(make_packet(frame_id=1, timestamp_ms=100, pinch_state="open"))
@@ -63,7 +63,7 @@ def test_bridge_enters_grab_and_emits_pose_updates() -> None:
 
 
 def test_bridge_resets_when_tracking_is_lost_during_grab() -> None:
-    bridge = BridgeServiceStub()
+    bridge = BridgeServiceImpl()
     bridge.start()
 
     bridge.process(make_packet(frame_id=1, timestamp_ms=100, pinch_state="open"))
@@ -85,7 +85,7 @@ def test_bridge_resets_when_tracking_is_lost_during_grab() -> None:
 
 
 def test_bridge_ignores_duplicate_frames_and_records_health_error() -> None:
-    bridge = BridgeServiceStub()
+    bridge = BridgeServiceImpl()
     bridge.start()
 
     bridge.process(make_packet(frame_id=5, timestamp_ms=200))

@@ -42,7 +42,7 @@ class BridgeMetrics:
     pose_updates: int = 0
 
 
-class BridgeServiceStub(BridgeService):
+class BridgeServiceImpl(BridgeService):
     def __init__(self) -> None:
         self.lifecycle_state = LIFECYCLE_STOPPED
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
@@ -284,7 +284,7 @@ class BridgeServiceStub(BridgeService):
         # In this contract, +x means right, +y means up, and +z means toward the user/camera.
         # world_norm is the renderer-facing scene space after bridge mapping, using the same normalized axes.
         # A real bridge would remap camera-relative hand coordinates into stable scene coordinates here.
-        # This stub keeps the transform as an identity mapping, so camera_norm and world_norm are treated the same.
+        # This implementation keeps the transform as an identity mapping until the concrete mapping is provided.
         return position
 
     def _make_object_state(self, packet: GesturePacket, interaction_state: str) -> SceneCommand:
