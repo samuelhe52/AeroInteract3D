@@ -7,7 +7,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-from src.bridge.service_stub import BridgeServiceStub
+from src.bridge.service import BridgeServiceImpl
 from src.gesture.service_stub import GestureInputServiceStub
 from src.ports import BridgeService, GestureInputPort, RenderOutputPort
 from src.rendering.service_stub import RenderOutputServiceStub
@@ -117,7 +117,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
 
 def build_app(config: AppConfig) -> App:
     gesture_input = GestureInputServiceStub()
-    bridge = BridgeServiceStub()
+    bridge = BridgeServiceImpl()
     render_output = RenderOutputServiceStub()
     return App(config, gesture_input, bridge, render_output)
 
