@@ -46,29 +46,7 @@ class App:
         self.gesture_input.start()
         self.bridge.start()
         self.render_output.start()
-        self._ensure_runtime_ready()
         self.lifecycle_state = LIFECYCLE_RUNNING
-
-    def _ensure_runtime_ready(self) -> None:
-        component_health = {
-            "gesture": self.gesture_input.health(),
-            "bridge": self.bridge.health(),
-            "render": self.render_output.health(),
-        }
-        not_ready = []
-
-        for component_name, health in component_health.items():
-            status = str(health.get("status", "")).strip()
-            if status.upper() != LIFECYCLE_RUNNING:
-                not_ready.append(f"{component_name}={status or 'unknown'}")
-
-        if not_ready:
-            self.lifecycle_state = LIFECYCLE_DEGRADED
-            joined = ", ".join(not_ready)
-            raise RuntimeError(
-                "Application dependencies are not ready: "
-                f"{joined}. Use src/gesture/main.py for gesture-only runs until the full app services are implemented."
-            )
 
     def run(self) -> None:
         if self.lifecycle_state != LIFECYCLE_RUNNING:
@@ -162,9 +140,6 @@ def main(argv: list[str] | None = None) -> int:
         logging.info("Health snapshot: %s", app.health_snapshot())
         app.run()
         return 0
-    except RuntimeError as exc:
-        logging.error("Application error: %s", exc)
-        return 1
     except KeyboardInterrupt:
         logging.info("Interrupted by user")
         return 130
