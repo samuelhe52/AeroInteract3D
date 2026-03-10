@@ -116,7 +116,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
 
 
 def build_app(config: AppConfig) -> App:
-    gesture_input = GestureInputServiceStub()
+    gesture_input = GestureInputServiceStub(camera_index=config.camera_index)
     bridge = BridgeServiceImpl()
     render_output = RenderOutputServiceStub()
     return App(config, gesture_input, bridge, render_output)

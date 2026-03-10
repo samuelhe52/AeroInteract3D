@@ -13,8 +13,8 @@ if __package__ in {None, ""}:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from src.gesture.service import GestureInputServiceStub
-from tests.debug_video import DebugVideoConfig, run_live_preview
+from src.gesture.debug.runtime import DebugVideoConfig, run_live_preview
+from src.gesture.service_stub import GestureInputServiceStub
 
 
 @dataclass(slots=True)
