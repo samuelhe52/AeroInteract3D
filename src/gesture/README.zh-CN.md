@@ -2,6 +2,8 @@
 
 目标：检测手部关键点，并向 Bridge 输出有序且符合契约的 `GesturePacket` 消息流。
 
+实现流程说明见 [workflow.md](workflow.md)。专用实时预览 debug 入口位于 src/gesture/debug/live_preview.py。
+
 ## 交付契约
 
 Gesture 模块必须严格按照 `src/contract_stub.md` 定义输出 `GesturePacket`。
