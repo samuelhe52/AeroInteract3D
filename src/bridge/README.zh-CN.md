@@ -36,6 +36,7 @@ Bridge 不得在本地重复定义这两个契约数据类。
 - Bridge 模块维护者必须实现继承自 `src/ports.py` 中 `BridgeService` 的具体服务类。
 - 请以 `src/bridge/service_stub.py` 中的 `BridgeServiceStub` 作为起始骨架，逐步替换 no-op 逻辑。
 - `main.py` 当前已接入该 stub，便于在完整实现前继续集成联调。
+- 当前协作说明：Bridge 仍然负责在发出 `world_norm` 位姿命令前调用相机到世界坐标的转换钩子，但该转换逻辑的具体实现由渲染模块维护者负责。
 
 ## 核心职责
 

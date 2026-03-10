@@ -15,14 +15,12 @@ from src.rendering.service_stub import RenderOutputServiceStub
 
 LIFECYCLE_INITIALIZING = "INITIALIZING"
 LIFECYCLE_RUNNING = "RUNNING"
-LIFECYCLE_DEGRADED = "DEGRADED"
 LIFECYCLE_STOPPED = "STOPPED"
 
 
 @dataclass(slots=True)
 class AppConfig:
     contract_version: str = "0.1.0"
-    run_mode: str = "live"
     log_level: str = "INFO"
     camera_index: int = 0
     target_fps: int = 60
@@ -95,7 +93,6 @@ class App:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AeroInteract3D bootstrap entrypoint")
-    parser.add_argument("--run-mode", choices=["live", "mock", "replay"], default="live")
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--target-fps", type=int, default=60)
@@ -112,7 +109,6 @@ def setup_logging(level: str) -> None:
 
 def build_config(args: argparse.Namespace) -> AppConfig:
     return AppConfig(
-        run_mode=args.run_mode,
         log_level=args.log_level.upper(),
         camera_index=args.camera_index,
         target_fps=args.target_fps,
