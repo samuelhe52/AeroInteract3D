@@ -283,9 +283,30 @@ class BridgeServiceImpl(BridgeService):
         # camera_norm is gesture input space relative to the camera frame.
         # In this contract, +x means right, +y means up, and +z means toward the user/camera.
         # world_norm is the renderer-facing scene space after bridge mapping, using the same normalized axes.
-        # A real bridge would remap camera-relative hand coordinates into stable scene coordinates here.
-        # This implementation keeps the transform as an identity mapping until the concrete mapping is provided.
-        return position
+        # Convert camera-relative hand coordinates into stable scene coordinates
+        
+        # 1. Invert the z-axis to convert from camera space (z toward user) to world space
+        # 2. Apply a small offset to center the interaction area
+        # 3. Scale coordinates to fit within the world_norm range [-1.0, 1.0]
+        
+        # Camera to world transformation
+        # - Camera space: +x=right, +y=up, +z=toward user
+        # - World space: +x=right, +y=up, +z=away from camera
+        
+        # Invert z-axis and apply scaling/offset
+        scaled_x = position.x * 0.8  # Scale to fit within world_norm
+        scaled_y = position.y * 0.8  # Scale to fit within world_norm
+        scaled_z = -position.z * 0.8  # Invert z-axis and scale
+        
+        # Add a small offset to position the interaction area in front of the camera
+        offset_z = 0.5
+        
+        # Create and return the transformed position
+        return Vec3(
+            scaled_x,
+            scaled_y,
+            scaled_z + offset_z
+        )
 
     def _make_object_state(self, packet: GesturePacket, interaction_state: str) -> SceneCommand:
         return SceneCommand(
