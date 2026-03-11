@@ -1,8 +1,5 @@
-import sys
-sys.path.insert(0, "/home/giraffe/CODE1/AeroInteract3D")
-
 from __future__ import annotations
-
+import sys
 import time
 import logging
 from typing import List, Dict, Optional, Set, Any
