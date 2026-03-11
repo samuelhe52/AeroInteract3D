@@ -13,8 +13,7 @@ Gesture 模块不得在本地重复定义 `GesturePacket` 数据类。
 ## 实现归属
 
 - Gesture 模块维护者必须实现继承自 `src/ports.py` 中 `GestureInputPort` 的具体服务类。
-- 请以 `src/gesture/service_stub.py` 中的 `GestureInputServiceStub` 作为起始骨架，逐步替换 no-op 逻辑。
-- `main.py` 当前已接入该 stub，便于在完整实现前继续集成联调。
+- 请以 `src/gesture/service_impl.py` 中的 `GestureInputServiceImpl` 作为当前正式实现。
 
 ## 功能要求
 

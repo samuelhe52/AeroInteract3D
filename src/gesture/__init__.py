@@ -1,3 +1,3 @@
-from src.gesture.service import GestureInputServiceStub
+from src.gesture.service import GestureInputServiceImpl
 
-__all__ = ["GestureInputServiceStub"]
+__all__ = ["GestureInputServiceImpl"]

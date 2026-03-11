@@ -4,13 +4,13 @@
 
 这个文件描述 gesture 模块当前的最小可用工作流，覆盖三条主线：
 
-1. 实时 GestureInputServiceStub 如何产出可供 bridge 消费的 GesturePacket。
+1. 实时 GestureInputServiceImpl 如何产出可供 bridge 消费的 GesturePacket。
 2. debug 入口如何驱动实时预览窗口与健康检查。
 3. 实时窗口如何叠加骨架、锚点、坐标和 GesturePacket 信号。
 
 实现文件：
 
-- service 实现入口：src/gesture/service_stub.py
+- service 实现入口：src/gesture/service_impl.py
 - 兼容导出层：src/gesture/service.py
 - gesture debug 入口：src/gesture/debug/live_preview.py
 - 实时预览与调试管线：tests/debug_video.py
@@ -46,7 +46,7 @@ flowchart TD
     P --> Q[STOPPED]
 ```
 
-## GestureInputServiceStub 工作流
+## GestureInputServiceImpl 工作流
 
 ### 1. start()
 
@@ -57,7 +57,7 @@ start() 的目标是把服务从 STOPPED 拉到 RUNNING。
 - 先重置运行时字段。
 - 再初始化真实输入后端。
 - 后端初始化失败时：
-  - 记录 last_error。
+  - 记录结构化错误并保留最近一条错误摘要到 stats.last_error。
   - 状态切换为 DEGRADED。
   - 继续抛异常，不静默吞掉。
 
@@ -108,8 +108,8 @@ poll() 是主处理路径，每调用一次处理一帧。
 
 例如摄像头读帧失败或 detector 抛异常：
 
-- last_error 记录异常信息。
-- status 切到 DEGRADED。
+- errors 追加一条结构化 backend failure 记录。
+- lifecycle_state 切到 DEGRADED。
 - 抛出 RuntimeError，错误文本是 Gesture input backend failure。
 
 ### 3. pinch_state 状态机
@@ -146,16 +146,20 @@ tracking_state 使用 tracking_loss_streak 表示连续丢失帧数：
 
 health() 是无副作用快照，只返回状态，不做任何 I/O：
 
+- component
+- lifecycle_state
 - status
-- started
-- frame_id
-- hand_id
-- tracking_state
-- pinch_state
-- confidence
-- tracking_loss_streak
-- last_error
-- detector_backend
+- errors
+- stats.started
+- stats.frame_id
+- stats.hand_id
+- stats.tracking_state
+- stats.pinch_state
+- stats.confidence
+- stats.tracking_loss_streak
+- stats.last_error
+- stats.detector_backend
+- stats.polls_attempted / packets_emitted / tracked_packets / empty_packets / backend_failures
 
 ### 6. stop()
 
@@ -164,8 +168,8 @@ stop() 负责资源释放和状态回收：
 - 已经 STOPPED 时幂等返回。
 - 释放 capture 和 detector。
 - started 置为 False。
-- status 置为 STOPPED。
-- 清理失败只记录 last_error，不让整个进程崩掉。
+- lifecycle_state 置为 STOPPED。
+- 清理失败只追加可恢复错误，不让整个进程崩掉。
 
 ## 实时运行路径
 
@@ -263,9 +267,9 @@ build_event_anchors() 会把状态跃迁固化成事件锚点：
 
 如果要快速理解当前实现，建议按这个顺序读：
 
-1. src/gesture/service_stub.py
+1. src/gesture/service_impl.py
    先看 start() / poll() / health() / stop() 四个公开函数。
-2. src/gesture/service_stub.py
+2. src/gesture/service_impl.py
    再看 _setup_backend()、_detect_hand()、_compute_pinch_state()。
 3. src/gesture/debug/live_preview.py
   看 debug 入口如何组装实时预览配置。
@@ -276,7 +280,7 @@ build_event_anchors() 会把状态跃迁固化成事件锚点：
 
 当前 gesture 模块的设计思路是：
 
-- 用 service_stub.py 作为正式的 GestureInputPort 实现。
+- 用 service_impl.py 作为正式的 GestureInputPort 实现。
 - 用 debug/live_preview.py 作为专用调试入口。
 - 用 debug_video.py 作为实时预览与检测辅助工具。
 - 用统一的 GesturePacket 契约把服务输出和窗口叠加信息对齐。

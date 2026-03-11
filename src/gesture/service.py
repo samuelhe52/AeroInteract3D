@@ -8,8 +8,8 @@ if __package__ in {None, ""}:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-from src.gesture.service_stub import GestureInputServiceStub
-from src.gesture.debug.live_preview import main
+from src.gesture.service_impl import GestureInputServiceImpl
+from src.gesture.service_impl import main
 
 
 if __name__ == "__main__":

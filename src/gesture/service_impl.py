@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import argparse
+import logging
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,14 +18,18 @@ from src.gesture.debug.runtime import (
     DebugVideoConfig,
     create_hand_detector,
     distance,
+    run_live_preview,
 )
 from src.ports import GestureInputPort
-
-
-LIFECYCLE_INITIALIZING = "INITIALIZING"
-LIFECYCLE_RUNNING = "RUNNING"
-LIFECYCLE_DEGRADED = "DEGRADED"
-LIFECYCLE_STOPPED = "STOPPED"
+from src.utils.contracts import EXPECTED_CONTRACT_VERSION
+from src.utils.runtime import (
+    LIFECYCLE_DEGRADED,
+    LIFECYCLE_INITIALIZING,
+    LIFECYCLE_RUNNING,
+    LIFECYCLE_STOPPED,
+    build_health,
+    error_entry,
+)
 
 TRACKING_TEMPORARY_LOSS_FRAMES = 2
 PINCH_ENTER_THRESHOLD = DEFAULT_PINCH_ENTER_THRESHOLD
@@ -39,7 +46,102 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(repo_root))
 
 
-class GestureInputServiceStub(GestureInputPort):
+@dataclass(slots=True)
+class GestureMetrics:
+    polls_attempted: int = 0
+    packets_emitted: int = 0
+    tracked_packets: int = 0
+    empty_packets: int = 0
+    backend_failures: int = 0
+
+
+@dataclass(slots=True)
+class GesturePreviewConfig:
+    log_level: str = "INFO"
+    camera_index: int = 0
+    target_fps: int = 30
+    max_frames: int = 0
+    hand_model: str | None = None
+    min_detection_confidence: float = 0.5
+    min_tracking_confidence: float = 0.5
+    model_complexity: int = 1
+    window_name: str = "Gesture Live Preview"
+    mirror: bool = True
+    draw_coordinates: bool = True
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Gesture live preview debug entrypoint")
+    parser.add_argument("--log-level", default="INFO")
+    parser.add_argument("--camera-index", type=int, default=0)
+    parser.add_argument("--target-fps", type=int, default=30)
+    parser.add_argument("--max-frames", type=int, default=0, help="0 means no frame limit")
+    parser.add_argument("--window-name", default="Gesture Live Preview")
+    parser.add_argument("--no-mirror", action="store_true")
+    parser.add_argument("--hide-coordinates", action="store_true")
+    parser.add_argument("--hand-model", help="path to a MediaPipe hand_landmarker.task model file")
+    parser.add_argument("--min-detection-confidence", type=float, default=0.5)
+    parser.add_argument("--min-tracking-confidence", type=float, default=0.5)
+    parser.add_argument("--model-complexity", type=int, choices=[0, 1, 2], default=1)
+    return parser.parse_args(argv)
+
+
+def setup_logging(level: str) -> None:
+    numeric_level = getattr(logging, level.upper(), logging.INFO)
+    logging.basicConfig(
+        level=numeric_level,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+
+def build_config(args: argparse.Namespace) -> GesturePreviewConfig:
+    return GesturePreviewConfig(
+        log_level=args.log_level.upper(),
+        camera_index=args.camera_index,
+        target_fps=args.target_fps,
+        max_frames=args.max_frames,
+        hand_model=args.hand_model,
+        min_detection_confidence=args.min_detection_confidence,
+        min_tracking_confidence=args.min_tracking_confidence,
+        model_complexity=args.model_complexity,
+        window_name=args.window_name,
+        mirror=not args.no_mirror,
+        draw_coordinates=not args.hide_coordinates,
+    )
+
+
+def build_service(config: GesturePreviewConfig) -> GestureInputServiceImpl:
+    return GestureInputServiceImpl(
+        camera_index=config.camera_index,
+        hand_model=config.hand_model,
+        min_detection_confidence=config.min_detection_confidence,
+        min_tracking_confidence=config.min_tracking_confidence,
+        model_complexity=config.model_complexity,
+    )
+
+
+def build_preview_config(config: GesturePreviewConfig) -> DebugVideoConfig:
+    hand_model = config.hand_model
+    if hand_model is None and GestureInputServiceImpl.DEFAULT_HAND_MODEL_PATH.exists():
+        hand_model = str(GestureInputServiceImpl.DEFAULT_HAND_MODEL_PATH)
+
+    return DebugVideoConfig(
+        input_video=None,
+        camera_index=config.camera_index,
+        hand_model=hand_model,
+        output_dir=None,
+        target_fps=float(config.target_fps),
+        max_frames=config.max_frames,
+        min_detection_confidence=config.min_detection_confidence,
+        min_tracking_confidence=config.min_tracking_confidence,
+        model_complexity=config.model_complexity,
+        window_name=config.window_name,
+        mirror=config.mirror,
+        draw_coordinates=config.draw_coordinates,
+    )
+
+
+class GestureInputServiceImpl(GestureInputPort):
     DEFAULT_HAND_MODEL_PATH = Path(r"C:\Users\22500\Desktop\JAVA\skeleton-sp24\proj0\AeroInteract3D\hand_landmarker.task")
 
     def __init__(
@@ -60,9 +162,10 @@ class GestureInputServiceStub(GestureInputPort):
         self._detector_backend = "uninitialized"
 
         self._started = False
-        self._status = LIFECYCLE_STOPPED
+        self.lifecycle_state = LIFECYCLE_STOPPED
         self._hand_id = "hand-0"
-        self._last_error: str | None = None
+        self._errors: list[dict[str, Any]] = []
+        self._metrics = GestureMetrics()
 
         self._frame_id = 0
         self._last_timestamp_ms = 0
@@ -84,19 +187,32 @@ class GestureInputServiceStub(GestureInputPort):
         if self._started:
             return None
 
-        self._status = LIFECYCLE_INITIALIZING
-        self._last_error = None
+        self.lifecycle_state = LIFECYCLE_INITIALIZING
+        self._errors = []
+        self._metrics = GestureMetrics()
         self._reset_runtime_state()
 
         try:
             self._setup_backend()
         except Exception as exc:
-            self._last_error = str(exc)
-            self._status = LIFECYCLE_DEGRADED
+            self.lifecycle_state = LIFECYCLE_DEGRADED
+            self._record_error(
+                error_entry(
+                    "gesture.backend.startup_failure",
+                    "Failed to initialize gesture input backend",
+                    recoverable=False,
+                    hint="Verify camera access and the hand_landmarker.task path before restarting the service.",
+                    details={
+                        "camera_index": self._camera_index,
+                        "detector_backend": self._detector_backend,
+                        "error": str(exc),
+                    },
+                )
+            )
             raise
 
         self._started = True
-        self._status = LIFECYCLE_RUNNING
+        self.lifecycle_state = LIFECYCLE_RUNNING
         return None
 
     def poll(self) -> GesturePacket | None:
@@ -104,6 +220,7 @@ class GestureInputServiceStub(GestureInputPort):
             return None
 
         try:
+            self._metrics.polls_attempted += 1
             raw_frame = self._read_frame()
             timestamp_ms = self._resolve_timestamp_ms(raw_frame)
             hand_data = self._detect_hand(raw_frame)
@@ -120,7 +237,7 @@ class GestureInputServiceStub(GestureInputPort):
                 self._confidence = confidence
                 self._last_velocity = velocity
 
-                return self._build_packet(
+                packet = self._build_packet(
                     timestamp_ms=timestamp_ms,
                     tracking_state=tracking_state,
                     pinch_state=pinch_state,
@@ -136,6 +253,10 @@ class GestureInputServiceStub(GestureInputPort):
                         "tracking_loss_streak": self._tracking_loss_streak,
                     },
                 )
+                self.lifecycle_state = LIFECYCLE_RUNNING
+                self._metrics.packets_emitted += 1
+                self._metrics.empty_packets += 1
+                return packet
 
             self._tracking_loss_streak = 0
 
@@ -160,7 +281,7 @@ class GestureInputServiceStub(GestureInputPort):
             self._pinch_state = pinch_state
             self._confidence = confidence
 
-            return self._build_packet(
+            packet = self._build_packet(
                 timestamp_ms=timestamp_ms,
                 tracking_state=tracking_state,
                 pinch_state=pinch_state,
@@ -176,37 +297,76 @@ class GestureInputServiceStub(GestureInputPort):
                     "raw_confidence": hand_data.get("raw_confidence"),
                 },
             )
+            self.lifecycle_state = LIFECYCLE_RUNNING
+            self._metrics.packets_emitted += 1
+            self._metrics.tracked_packets += 1
+            return packet
         except Exception as exc:
-            self._last_error = str(exc)
-            self._status = LIFECYCLE_DEGRADED
+            self.lifecycle_state = LIFECYCLE_DEGRADED
+            self._metrics.backend_failures += 1
+            self._record_error(
+                error_entry(
+                    "gesture.backend.failure",
+                    "Gesture input backend failure",
+                    recoverable=False,
+                    hint="Inspect camera availability and detector health before resuming polling.",
+                    details={
+                        "camera_index": self._camera_index,
+                        "detector_backend": self._detector_backend,
+                        "error": str(exc),
+                    },
+                )
+            )
             raise RuntimeError("Gesture input backend failure") from exc
 
-    def health(self) -> dict:
-        return {
-            "status": self._status,
-            "started": self._started,
-            "frame_id": self._frame_id,
-            "hand_id": self._hand_id,
-            "tracking_state": self._tracking_state,
-            "pinch_state": self._pinch_state,
-            "confidence": self._confidence,
-            "tracking_loss_streak": self._tracking_loss_streak,
-            "last_error": self._last_error,
-            "detector_backend": self._detector_backend,
-        }
+    def health(self) -> dict[str, Any]:
+        last_error = self._errors[-1]["message"] if self._errors else None
+        return build_health(
+            component="gesture",
+            lifecycle_state=self.lifecycle_state,
+            errors=self._errors,
+            stats={
+                "started": self._started,
+                "frame_id": self._frame_id,
+                "hand_id": self._hand_id,
+                "tracking_state": self._tracking_state,
+                "pinch_state": self._pinch_state,
+                "confidence": self._confidence,
+                "tracking_loss_streak": self._tracking_loss_streak,
+                "detector_backend": self._detector_backend,
+                "last_error": last_error,
+                "polls_attempted": self._metrics.polls_attempted,
+                "packets_emitted": self._metrics.packets_emitted,
+                "tracked_packets": self._metrics.tracked_packets,
+                "empty_packets": self._metrics.empty_packets,
+                "backend_failures": self._metrics.backend_failures,
+            },
+        )
 
     def stop(self) -> None:
-        if not self._started and self._status == LIFECYCLE_STOPPED:
+        if not self._started and self.lifecycle_state == LIFECYCLE_STOPPED:
             return None
 
         try:
             self._teardown_backend()
         except Exception as exc:
-            self._last_error = str(exc)
+            self._record_error(
+                error_entry(
+                    "gesture.backend.teardown_failure",
+                    "Failed to release gesture backend resources cleanly",
+                    recoverable=True,
+                    hint="Release the capture device manually if the process still holds the camera.",
+                    details={
+                        "camera_index": self._camera_index,
+                        "detector_backend": self._detector_backend,
+                        "error": str(exc),
+                    },
+                )
+            )
         finally:
             self._backend = None
             self._started = False
-            self._status = LIFECYCLE_STOPPED
+            self.lifecycle_state = LIFECYCLE_STOPPED
         return None
 
     def _reset_runtime_state(self) -> None:
@@ -424,7 +584,7 @@ class GestureInputServiceStub(GestureInputPort):
         self._frame_id += 1
         self._last_timestamp_ms = timestamp_ms
         return GesturePacket(
-            contract_version="0.1.0",
+            contract_version=EXPECTED_CONTRACT_VERSION,
             frame_id=self._frame_id,
             timestamp_ms=timestamp_ms,
             hand_id=self._hand_id,
@@ -465,8 +625,22 @@ class GestureInputServiceStub(GestureInputPort):
             return str(default_model)
         return None
 
+    def _record_error(self, error: dict[str, Any]) -> None:
+        self._errors.append(error)
+        self._errors = self._errors[-10:]
+
 
 def main(argv: list[str] | None = None) -> int:
-    from src.gesture.debug.live_preview import main as gesture_main
-
-    return gesture_main(argv)
+    args = parse_args(argv)
+    setup_logging(args.log_level)
+    config = build_config(args)
+    try:
+        run_live_preview(build_preview_config(config))
+        return 0
+    except Exception as exc:
+        logging.exception(
+            "Live gesture preview failed. Expected model path: %s. Error: %s",
+            GestureInputServiceImpl.DEFAULT_HAND_MODEL_PATH,
+            exc,
+        )
+        return 1
