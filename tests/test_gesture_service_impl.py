@@ -6,6 +6,7 @@ from src.contracts import Vec3
 from src.gesture.service_impl import (
     GestureInputServiceImpl,
     GesturePreviewConfig,
+    HAND_MODEL_ENV_VAR,
     build_preview_config,
     build_service,
 )
@@ -100,7 +101,7 @@ def test_build_preview_config_uses_default_model_fallback(
 ) -> None:
     model_path = tmp_path / "hand_landmarker.task"
     model_path.write_text("stub", encoding="utf-8")
-    monkeypatch.setattr(GestureInputServiceImpl, "DEFAULT_HAND_MODEL_PATH", model_path)
+    monkeypatch.setenv(HAND_MODEL_ENV_VAR, str(model_path))
 
     preview_config = build_preview_config(GesturePreviewConfig())
 

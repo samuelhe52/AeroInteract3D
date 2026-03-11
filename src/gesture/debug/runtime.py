@@ -18,6 +18,7 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(repo_root))
 
 from src.contracts import GesturePacket, Vec3
+from src.utils.contracts import EXPECTED_CONTRACT_VERSION
 
 try:
     from mediapipe.tasks.python.core.base_options import BaseOptions as MpBaseOptions
@@ -41,6 +42,8 @@ LIFECYCLE_INITIALIZING = "INITIALIZING"
 LIFECYCLE_RUNNING = "RUNNING"
 LIFECYCLE_DEGRADED = "DEGRADED"
 LIFECYCLE_STOPPED = "STOPPED"
+
+DEFAULT_HAND_MODEL_PATH = Path(__file__).resolve().parents[3] / "hand_landmarker.task"
 
 DEFAULT_PINCH_ENTER_THRESHOLD = 0.10
 DEFAULT_PINCH_HOLD_THRESHOLD = 0.06
@@ -298,7 +301,7 @@ class GestureDebugAnalyzer:
     ) -> GesturePacket:
         self._frame_id += 1
         return GesturePacket(
-            contract_version="0.1.0",
+            contract_version=EXPECTED_CONTRACT_VERSION,
             frame_id=self._frame_id,
             timestamp_ms=timestamp_ms,
             hand_id=self._hand_id,
@@ -434,7 +437,7 @@ def create_hand_detector(config: DebugVideoConfig) -> Any:
     raise RuntimeError(
         "No hand detector backend is available. MediaPipe solutions.hands is unavailable in this environment, "
         "and no hand_landmarker.task model was provided. Put the model at "
-        r"C:\Users\22500\Desktop\JAVA\skeleton-sp24\proj0\AeroInteract3D\hand_landmarker.task"
+        f"{DEFAULT_HAND_MODEL_PATH}"
         " or pass --hand-model with a valid file."
     )
 

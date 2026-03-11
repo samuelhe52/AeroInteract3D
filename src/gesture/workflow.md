@@ -13,7 +13,7 @@
 - service 实现入口：src/gesture/service_impl.py
 - 兼容导出层：src/gesture/service.py
 - gesture debug 入口：src/gesture/debug/live_preview.py
-- 实时预览与调试管线：tests/debug_video.py
+- 实时预览与调试管线：src/gesture/debug/runtime.py
 
 ## 模块职责边界
 
@@ -65,7 +65,7 @@ start() 的目标是把服务从 STOPPED 拉到 RUNNING。
 
 - 用 OpenCV 打开 camera_index 对应摄像头。
 - 构造 DebugVideoConfig。
-- 通过 tests/debug_video.py 中的 create_hand_detector() 获取 MediaPipe 检测器。
+- 通过 src/gesture/debug/runtime.py 中的 create_hand_detector() 获取 MediaPipe 检测器。
 - 如果当前环境没有可用 detector，直接失败，并明确提示默认模型路径，而不是回退成假数据流。
 
 这保证了服务对主程序是诚实的：能跑就 RUNNING，不能跑就 DEGRADED。
@@ -273,7 +273,7 @@ build_event_anchors() 会把状态跃迁固化成事件锚点：
    再看 _setup_backend()、_detect_hand()、_compute_pinch_state()。
 3. src/gesture/debug/live_preview.py
   看 debug 入口如何组装实时预览配置。
-4. tests/debug_video.py
+4. src/gesture/debug/runtime.py
   看 run_live_preview()、GestureDebugAnalyzer、overlay_anchor_points()。
 
 ## 当前实现结论
@@ -282,7 +282,7 @@ build_event_anchors() 会把状态跃迁固化成事件锚点：
 
 - 用 service_impl.py 作为正式的 GestureInputPort 实现。
 - 用 debug/live_preview.py 作为专用调试入口。
-- 用 debug_video.py 作为实时预览与检测辅助工具。
+- 用 debug/runtime.py 作为实时预览与检测辅助工具。
 - 用统一的 GesturePacket 契约把服务输出和窗口叠加信息对齐。
 
 这样一来，实时服务、录制分析、后续 bridge 消费三者共用同一组状态语义，而不是三套互相分叉的数据定义。

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ from src.utils.runtime import (
 # 2. 状态怎么演化。
 # 3. 为什么要在丢帧时继续产包。
 # 4. 输出包里每个字段是如何得到的。
+# 这份文件只用于学习和对照阅读，不应该被项目运行时路径依赖。
 
 # 这一组阈值控制“手丢失多久算真的丢了”和“pinch 进入/保持/释放”的状态机灵敏度。
 # TRACKING_TEMPORARY_LOSS_FRAMES：允许短时间检测失败，但不立刻判定整只手消失。
@@ -53,6 +55,7 @@ RELEASE_CONFIRM_FRAMES = 2
 
 # 平滑参数。越接近 1，越偏向当前帧；越接近 0，越偏向上一帧。
 SMOOTHING_ALPHA = 0.65
+HAND_MODEL_ENV_VAR = "AEROINTERACT3D_HAND_MODEL"
 
 
 # 这段兼容逻辑是为了支持“直接运行这个文件”的场景。
@@ -94,6 +97,40 @@ class GesturePreviewConfig:
     window_name: str = "Gesture Live Preview"
     mirror: bool = True
     draw_coordinates: bool = True
+
+
+def _default_hand_model_path() -> Path:
+    # 默认模型来自仓库根目录，所以在任意平台都能通过相对仓库位置找到。
+    return Path(__file__).resolve().parents[2] / "hand_landmarker.task"
+
+
+def _resolve_hand_model_path(hand_model: str | None) -> str | None:
+    # 配置优先级：显式参数 > 环境变量 > 仓库根目录默认文件。
+    if hand_model:
+        return hand_model
+
+    env_hand_model = os.getenv(HAND_MODEL_ENV_VAR)
+    if env_hand_model:
+        return env_hand_model
+
+    default_model = _default_hand_model_path()
+    if default_model.exists():
+        return str(default_model)
+    return None
+
+
+def _close_detector_resource(detector_owner: Any | None, detector: Any | None = None) -> None:
+    # 初始化中途失败时，需要把已经拿到的 detector 资源及时放掉。
+    if detector_owner is not None and hasattr(detector_owner, "__exit__"):
+        detector_owner.__exit__(None, None, None)
+        return
+
+    if detector is not None and hasattr(detector, "close"):
+        detector.close()
+        return
+
+    if detector_owner is not None and hasattr(detector_owner, "close"):
+        detector_owner.close()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -157,9 +194,7 @@ def build_service(config: GesturePreviewConfig) -> GestureInputServiceImpl:
 def build_preview_config(config: GesturePreviewConfig) -> DebugVideoConfig:
     # 调试预览底层跑的是 debug.runtime 里的 run_live_preview，
     # 它认的是 DebugVideoConfig，所以这里负责做第二次翻译。
-    hand_model = config.hand_model
-    if hand_model is None and GestureInputServiceImpl.DEFAULT_HAND_MODEL_PATH.exists():
-        hand_model = str(GestureInputServiceImpl.DEFAULT_HAND_MODEL_PATH)
+    hand_model = _resolve_hand_model_path(config.hand_model)
 
     return DebugVideoConfig(
         input_video=None,
@@ -182,7 +217,7 @@ class GestureInputServiceImpl(GestureInputPort):
     # 它做的事情可以概括成一句话：
     # 持续读取摄像头帧 -> 提取关键点 -> 推断状态 -> 产出合同化的 GesturePacket。
     # 默认模型文件位置。live preview 和主程序都会依赖这个常量来给出提示。
-    DEFAULT_HAND_MODEL_PATH = Path(r"C:\Users\22500\Desktop\JAVA\skeleton-sp24\proj0\AeroInteract3D\hand_landmarker.task")
+    DEFAULT_HAND_MODEL_PATH = _default_hand_model_path()
 
     def __init__(
         self,
@@ -508,14 +543,20 @@ class GestureInputServiceImpl(GestureInputPort):
             min_tracking_confidence=self._min_tracking_confidence,
             model_complexity=self._model_complexity,
         )
-        detector_owner = create_hand_detector(detector_config)
-        detector = detector_owner.__enter__() if hasattr(detector_owner, "__enter__") else detector_owner
-        backend_name = getattr(detector, "backend_name", type(detector).__name__)
+        detector_owner: Any | None = None
+        detector: Any | None = None
+        try:
+            detector_owner = create_hand_detector(detector_config)
+            detector = detector_owner.__enter__() if hasattr(detector_owner, "__enter__") else detector_owner
+            backend_name = getattr(detector, "backend_name", type(detector).__name__)
+        except Exception:
+            _close_detector_resource(detector_owner, detector)
+            capture.release()
+            raise
 
         # passthrough 代表没有真正的 MediaPipe backend，继续跑没有意义，直接失败。
         if backend_name == "passthrough":
-            if hasattr(detector_owner, "__exit__"):
-                detector_owner.__exit__(None, None, None)
+            _close_detector_resource(detector_owner, detector)
             capture.release()
             raise RuntimeError(
                 "No MediaPipe hand detector backend is available. "
@@ -776,12 +817,7 @@ class GestureInputServiceImpl(GestureInputPort):
     def _resolve_hand_model(self, hand_model: str | None) -> str | None:
         # 显式传入优先；否则看默认路径里有没有模型文件。
         # 这个方法本质上是在做“配置优先级决策”。
-        if hand_model:
-            return hand_model
-        default_model = self.DEFAULT_HAND_MODEL_PATH
-        if default_model.exists():
-            return str(default_model)
-        return None
+        return _resolve_hand_model_path(hand_model)
 
     def _record_error(self, error: dict[str, Any]) -> None:
         # 错误列表只保留最近 10 条，避免 health 无限膨胀。

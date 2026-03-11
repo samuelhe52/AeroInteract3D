@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -38,6 +39,7 @@ PINCH_RELEASE_THRESHOLD = DEFAULT_PINCH_RELEASE_THRESHOLD
 PINCH_CONFIRM_FRAMES = 2
 RELEASE_CONFIRM_FRAMES = 2
 SMOOTHING_ALPHA = 0.65
+HAND_MODEL_ENV_VAR = "AEROINTERACT3D_HAND_MODEL"
 
 
 if __package__ in {None, ""}:
@@ -68,6 +70,37 @@ class GesturePreviewConfig:
     window_name: str = "Gesture Live Preview"
     mirror: bool = True
     draw_coordinates: bool = True
+
+
+def _default_hand_model_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "hand_landmarker.task"
+
+
+def _resolve_hand_model_path(hand_model: str | None) -> str | None:
+    if hand_model:
+        return hand_model
+
+    env_hand_model = os.getenv(HAND_MODEL_ENV_VAR)
+    if env_hand_model:
+        return env_hand_model
+
+    default_model = _default_hand_model_path()
+    if default_model.exists():
+        return str(default_model)
+    return None
+
+
+def _close_detector_resource(detector_owner: Any | None, detector: Any | None = None) -> None:
+    if detector_owner is not None and hasattr(detector_owner, "__exit__"):
+        detector_owner.__exit__(None, None, None)
+        return
+
+    if detector is not None and hasattr(detector, "close"):
+        detector.close()
+        return
+
+    if detector_owner is not None and hasattr(detector_owner, "close"):
+        detector_owner.close()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -121,9 +154,7 @@ def build_service(config: GesturePreviewConfig) -> GestureInputServiceImpl:
 
 
 def build_preview_config(config: GesturePreviewConfig) -> DebugVideoConfig:
-    hand_model = config.hand_model
-    if hand_model is None and GestureInputServiceImpl.DEFAULT_HAND_MODEL_PATH.exists():
-        hand_model = str(GestureInputServiceImpl.DEFAULT_HAND_MODEL_PATH)
+    hand_model = _resolve_hand_model_path(config.hand_model)
 
     return DebugVideoConfig(
         input_video=None,
@@ -142,7 +173,7 @@ def build_preview_config(config: GesturePreviewConfig) -> DebugVideoConfig:
 
 
 class GestureInputServiceImpl(GestureInputPort):
-    DEFAULT_HAND_MODEL_PATH = Path(r"C:\Users\22500\Desktop\JAVA\skeleton-sp24\proj0\AeroInteract3D\hand_landmarker.task")
+    DEFAULT_HAND_MODEL_PATH = _default_hand_model_path()
 
     def __init__(
         self,
@@ -409,12 +440,18 @@ class GestureInputServiceImpl(GestureInputPort):
             min_tracking_confidence=self._min_tracking_confidence,
             model_complexity=self._model_complexity,
         )
-        detector_owner = create_hand_detector(detector_config)
-        detector = detector_owner.__enter__() if hasattr(detector_owner, "__enter__") else detector_owner
-        backend_name = getattr(detector, "backend_name", type(detector).__name__)
+        detector_owner: Any | None = None
+        detector: Any | None = None
+        try:
+            detector_owner = create_hand_detector(detector_config)
+            detector = detector_owner.__enter__() if hasattr(detector_owner, "__enter__") else detector_owner
+            backend_name = getattr(detector, "backend_name", type(detector).__name__)
+        except Exception:
+            _close_detector_resource(detector_owner, detector)
+            capture.release()
+            raise
         if backend_name == "passthrough":
-            if hasattr(detector_owner, "__exit__"):
-                detector_owner.__exit__(None, None, None)
+            _close_detector_resource(detector_owner, detector)
             capture.release()
             raise RuntimeError(
                 "No MediaPipe hand detector backend is available. "
@@ -618,12 +655,7 @@ class GestureInputServiceImpl(GestureInputPort):
         return now
 
     def _resolve_hand_model(self, hand_model: str | None) -> str | None:
-        if hand_model:
-            return hand_model
-        default_model = self.DEFAULT_HAND_MODEL_PATH
-        if default_model.exists():
-            return str(default_model)
-        return None
+        return _resolve_hand_model_path(hand_model)
 
     def _record_error(self, error: dict[str, Any]) -> None:
         self._errors.append(error)
