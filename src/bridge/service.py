@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.ports import BridgeService
@@ -16,6 +16,15 @@ from src.utils.runtime import (
     error_entry,
     make_command_id,
 )
+
+import math
+import logging
+
+# Create a dedicated logger for bridge service
+logger = logging.getLogger("bridge.service")
+
+# Create a dedicated logger for coordinate transformation
+coordinate_logger = logging.getLogger("bridge.coordinate_transformation")
 
 
 BRIDGE_STATE_IDLE = "idle"
@@ -255,7 +264,8 @@ class BridgeServiceImpl(BridgeService):
                 "objects": [
                     {
                         "object_id": OBJECT_ID,
-                        "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+                        "init_pos": {"x": 0.0, "y": 0.0, "z": 0.0},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
                         "coordinate_space": "world_norm",
                         "interaction_state": INTERACTION_IDLE,
                     }
@@ -279,13 +289,56 @@ class BridgeServiceImpl(BridgeService):
             },
         )
 
-    def _camera_to_world_position(self, position: Vec3) -> Vec3:
-        # camera_norm is gesture input space relative to the camera frame.
-        # In this contract, +x means right, +y means up, and +z means toward the user/camera.
-        # world_norm is the renderer-facing scene space after bridge mapping, using the same normalized axes.
-        # A real bridge would remap camera-relative hand coordinates into stable scene coordinates here.
-        # This implementation keeps the transform as an identity mapping until the concrete mapping is provided.
-        return position
+
+    def _camera_to_world_position(self, position: Optional[Vec3]) -> Vec3:
+        '''
+        Complete camera_norm → world_norm coordinate transformation with full fault tolerance.
+        
+        camera_norm definition (gesture input space relative to camera frame):
+        - +x: right (camera horizontal)
+        - +y: up (camera vertical)
+        - +z: toward the user/camera (camera depth)
+        
+        world_norm definition (renderer-facing scene space after bridge mapping):
+        - +x: right (scene horizontal)
+        - +y: up (scene vertical)
+        - +z: toward the user (scene depth)
+        
+        :param position: Original coordinates in camera_norm (Vec3), None is allowed
+        :return: Transformed coordinates in world_norm (Vec3), guaranteed to be within [-1.0, 1.0]
+        '''
+        # 1. Null/illegal input fault tolerance
+        if position is None:
+            coordinate_logger.error("Coordinate transformation failed: input position is None")
+            return Vec3(0.0, 0.0, 0.0)
+        
+        # 2. Invalid value (NaN/Inf) validation
+        def is_valid_num(v: float) -> bool:
+            return not (math.isnan(v) or math.isinf(v))
+        
+        x = position.x if is_valid_num(position.x) else 0.0
+        y = position.y if is_valid_num(position.y) else 0.0
+        z = position.z if is_valid_num(position.z) else 0.0
+        
+        # 3. Current contract keeps camera_norm and world_norm aligned.
+        # Preserve the incoming coordinates and only clip them into world_norm.
+        def clip(v: float) -> float:
+            return max(-1.0, min(1.0, v))
+        
+        final_x = clip(x)
+        final_y = clip(y)
+        final_z = clip(z)
+        
+        # 4. Warning log for clipped coordinates (aids debugging)
+        if (final_x, final_y, final_z) != (x, y, z):
+            coordinate_logger.warning(
+                f"Coordinate clipped: original({x:.2f},{y:.2f},{z:.2f}) → "
+                f"final({final_x:.2f},{final_y:.2f},{final_z:.2f})"
+            )
+        
+        return Vec3(final_x, final_y, final_z)
+
+
 
     def _make_object_state(self, packet: GesturePacket, interaction_state: str) -> SceneCommand:
         return SceneCommand(

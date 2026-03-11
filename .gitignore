@@ -8,5 +8,18 @@ wheels/
 .pytest_cache/
 .ruff_cache/
 
-# Virtual environments
-.venv
+# IDE 配置
+.vscode/
+
+# 渲染模块的主目录
+src/rendering/main/
+
+# 虚拟环境
+.venv/
+
+# 日志文件
+*.log
+
+# 编译产物
+__pycache__/
+*.pyc
