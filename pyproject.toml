@@ -8,15 +8,13 @@ dependencies = [
     "mediapipe>=0.10.32",
     "opencv-python>=4.13.0.92",
     "numpy>=2.2.0",
+    "panda3d>=1.10.15",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.4.0",
     "ruff>=0.13.0",
-]
-rendering = [
-    "panda3d>=1.10.15",
 ]
 
 [tool.uv]

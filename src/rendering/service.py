@@ -1,12 +1,12 @@
 from __future__ import annotations
-import sys
+
 import time
 import logging
 from typing import List, Dict, Optional, Set, Any
 
 from panda3d.core import (
     WindowProperties, Material, AmbientLight, DirectionalLight,
-    PerspectiveLens, LVector3, Vec4, NodePath
+    PerspectiveLens, Vec4, NodePath
 )
 from direct.showbase.ShowBase import ShowBase
 
@@ -20,29 +20,7 @@ from src.utils.runtime import (
 # 日志记录器（配置应在应用入口完成）
 logger = logging.getLogger("rendering_service")
 
-# Error codes
-ERROR_CODES = {
-    "PANDA3D_INIT_FAILED": {
-        "code": "E001",
-        "message": "Panda3D initialization failed",
-        "recoverable": False
-    },
-    "COMMAND_VALIDATE_FAILED": {
-        "code": "E002",
-        "message": "Command validation failed",
-        "recoverable": True
-    },
-    "OBJECT_NOT_FOUND": {
-        "code": "E003",
-        "message": "Object not found",
-        "recoverable": True
-    },
-    "COORDINATE_OUT_OF_RANGE": {
-        "code": "E004",
-        "message": "Coordinate out of range",
-        "recoverable": True
-    }
-}
+
 
 # 物体初始状态
 class ObjectInitialState:
@@ -152,7 +130,7 @@ class AeroRenderingService(RenderOutputPort):
         self._object_initial_states: Dict[str, ObjectInitialState] = {}
         # 命令去重/过时帧控制
         self._executed_command_ids: Set[str] = set()  # 已执行的command_id（去重）
-        self._latest_frame_id: int = 0                # 最新frame_id（防过时）
+        self._latest_frame_id: Optional[int] = None   # 最新frame_id（防过时）
         # 材质缓存（状态映射）
         self._material_cache: Dict[str, Material] = self._init_materials()
         # 重置过程中的命令暂存（reset_interaction时使用）
@@ -330,19 +308,60 @@ class AeroRenderingService(RenderOutputPort):
             object_id = command.object_id
             payload = command.payload
             
-            # 2. Parse position/rotation parameters (fault tolerance: missing fields/type errors)
-            pos = payload.get("position", [0.0, 0.0, 0.0])
-            hpr = payload.get("hpr", [0.0, 0.0, 0.0])  # rotation (heading/pitch/roll)
-            
-            # 3. Format validation: must be 3-dimensional list/tuple
-            if not isinstance(pos, (list, tuple)) or len(pos) != 3:
-                logger.warning(f"set_object_pose command format error: position must be 3-dimensional list (ID: {command.command_id}")
+            # 2. Parse position parameters (support dict{x,y,z} or 3D list/tuple)
+            pos_data = payload.get("position", [0.0, 0.0, 0.0])
+            if isinstance(pos_data, dict):
+                # Handle dict format: {"x": value, "y": value, "z": value}
+                if all(key in pos_data for key in ["x", "y", "z"]):
+                    pos = [pos_data["x"], pos_data["y"], pos_data["z"]]
+                else:
+                    logger.warning(f"set_object_pose command format error: position dict missing required keys (ID: {command.command_id}")
+                    return
+            elif isinstance(pos_data, (list, tuple)):
+                # Handle list/tuple format: [x, y, z]
+                pos = list(pos_data)
+            else:
+                logger.warning(f"set_object_pose command format error: position must be dict or 3-dimensional list (ID: {command.command_id}")
                 return
-            if not isinstance(hpr, (list, tuple)) or len(hpr) != 3:
-                logger.warning(f"set_object_pose command format error: hpr must be 3-dimensional list (ID: {command.command_id}")
+            
+            # 3. Parse hpr parameters (support dict{h,p,r} or 3D list/tuple)
+            hpr_data = payload.get("hpr", [0.0, 0.0, 0.0])
+            if isinstance(hpr_data, dict):
+                # Handle dict format: {"h": value, "p": value, "r": value}
+                if all(key in hpr_data for key in ["h", "p", "r"]):
+                    hpr = [hpr_data["h"], hpr_data["p"], hpr_data["r"]]
+                else:
+                    logger.warning(f"set_object_pose command format error: hpr dict missing required keys (ID: {command.command_id}")
+                    return
+            elif isinstance(hpr_data, (list, tuple)):
+                # Handle list/tuple format: [h, p, r]
+                hpr = list(hpr_data)
+            else:
+                logger.warning(f"set_object_pose command format error: hpr must be dict or 3-dimensional list (ID: {command.command_id}")
                 return
             
-            # 4. Invalid object_id handling
+            # 4. Validate format and convert to float
+            def validate_and_convert_to_float(values):
+                if len(values) != 3:
+                    return False, []
+                try:
+                    return True, [float(v) for v in values]
+                except (ValueError, TypeError):
+                    return False, []
+            
+            # Validate position
+            pos_valid, pos_float = validate_and_convert_to_float(pos)
+            if not pos_valid:
+                logger.warning(f"set_object_pose command format error: position must be 3-dimensional with numeric values (ID: {command.command_id}")
+                return
+            
+            # Validate hpr
+            hpr_valid, hpr_float = validate_and_convert_to_float(hpr)
+            if not hpr_valid:
+                logger.warning(f"set_object_pose command format error: hpr must be 3-dimensional with numeric values (ID: {command.command_id}")
+                return
+            
+            # 5. Invalid object_id handling
             if object_id not in self._object_cache:
                 error = error_entry(
                     "rendering.object.not_found",
@@ -356,24 +375,24 @@ class AeroRenderingService(RenderOutputPort):
                 logger.warning(f"{error['message']}: {error['details']}")
                 return
             
-            # 5. 坐标范围校验+自动裁剪（world_norm [-1.0,1.0]）
-            clipped_pos = self._clip_coordinate(pos)
-            clipped_hpr = self._clip_coordinate(hpr, rotation=True)  # 旋转无范围限制，仅校验类型
+            # 6. 坐标范围校验+自动裁剪（world_norm [-1.0,1.0]）
+            clipped_pos = self._clip_coordinate(pos_float)
+            clipped_hpr = self._clip_coordinate(hpr_float, rotation=True)  # 旋转无范围限制，仅校验类型
             
-            # 6. 更新物体姿态（仅RUNNING状态执行）
+            # 7. 更新物体姿态（仅RUNNING状态执行）
             obj_np = self._object_cache[object_id]
             obj_np.setPos(*clipped_pos)
             obj_np.setHpr(*clipped_hpr)
             
-            # 7. Logging
-            if clipped_pos != pos:
-                logger.warning(f"Coordinate out of world_norm range, automatically clipped: original{pos} → clipped{clipped_pos} (ID: {command.command_id}")
+            # 8. Logging
+            if tuple(clipped_pos) != tuple(pos_float):
+                logger.warning(f"Coordinate out of world_norm range, automatically clipped: original{pos_float} → clipped{clipped_pos} (ID: {command.command_id}")
                 error = error_entry(
                     "rendering.coordinate.out_of_range",
                     "Coordinate out of range",
                     recoverable=True,
                     hint="Ensure coordinates are within the world_norm range [-1.0, 1.0].",
-                    details={"object_id": object_id, "original_coordinate": pos, "clipped_coordinate": clipped_pos}
+                    details={"object_id": object_id, "original_coordinate": pos_float, "clipped_coordinate": clipped_pos}
                 )
                 error["timestamp"] = int(time.time() * 1000)
                 self._errors.append(error)
@@ -381,7 +400,7 @@ class AeroRenderingService(RenderOutputPort):
             
         except Exception as e:
             logger.error(f"set_object_pose processing failed (ID: {command.command_id}): {str(e)}")
-            raise
+            # 仅记录错误，不重新抛出异常，确保模块继续运行
     
     def _handle_set_object_state(self, command: SceneCommand) -> None:
         """处理set_object_state命令"""
@@ -389,12 +408,12 @@ class AeroRenderingService(RenderOutputPort):
             # 1. 解析命令参数
             object_id = command.object_id
             payload = command.payload
-            state = payload.get("state", "idle")
+            state = payload.get("interaction_state", "idle")
             
             # 2. State validation (only process idle/hover/grabbed)
             valid_states = ["idle", "hover", "grabbed"]
             if state not in valid_states:
-                logger.warning(f"Unknown state: {state} (ID: {command.command_id}), defaulting to idle")
+                logger.warning(f"Unknown interaction_state: {state} (ID: {command.command_id}), defaulting to idle")
                 state = "idle"
             
             # 3. Invalid object_id handling
@@ -417,11 +436,11 @@ class AeroRenderingService(RenderOutputPort):
             obj_np.setMaterial(mat, 1)  # 1=force replace material
             
             # 5. Logging
-            logger.info(f"Successfully updated object state: ID={object_id}, state={state} (command ID: {command.command_id}")
+            logger.info(f"Successfully updated object state: ID={object_id}, interaction_state={state} (command ID: {command.command_id}")
             
         except Exception as e:
             logger.error(f"set_object_state processing failed (command ID: {command.command_id}): {str(e)}")
-            raise
+            # 仅记录错误，不重新抛出异常，确保模块继续运行
     
     def _handle_reset_interaction(self, command: SceneCommand) -> None:
         """处理reset_interaction命令"""
@@ -452,7 +471,7 @@ class AeroRenderingService(RenderOutputPort):
             
             # 4. Clear command cache (deduplication/outdated frames)
             self._executed_command_ids.clear()
-            self._latest_frame_id = 0
+            self._latest_frame_id = None
             logger.info("Cleared command_id/frame_id cache, reset completed")
             
             # 5. Set reset flag to False, execute queued commands
@@ -470,11 +489,10 @@ class AeroRenderingService(RenderOutputPort):
         except Exception as e:
             logger.error(f"reset_interaction processing failed (command ID: {command.command_id}): {str(e)}")
             self._is_resetting = False
-            raise
+            # 仅记录错误，不重新抛出异常，确保模块继续运行
     
     def _handle_init_scene(self, command: SceneCommand) -> None:
         """处理init_scene命令"""
-        object_id = "interact_obj_01"
         try:
             # Reset scene
             if self._scene_root is not None and not self._scene_root.isEmpty():
@@ -483,33 +501,98 @@ class AeroRenderingService(RenderOutputPort):
                 self._object_initial_states.clear()
                 logger.info("Duplicate init_scene received, scene cache reset")
             
-            # Create cube
+            # Load cube model
             base = self._window_adapter.get_base()
             cube_model = base.loader.loadModel("box")
             if cube_model.isEmpty():
                 raise RuntimeError("Failed to load cube model")
             
-            # Create NodePath
-            cube_np = self._scene_root.attachNewNode(object_id)
-            cube_model.reparentTo(cube_np)
+            # Parse objects from payload
+            objects = command.payload.get("objects", [])
             
-            # Initial state: pos=(0,0,0), hpr=(0,0,0), state=idle
-            init_pos = (0.0, 0.0, 0.0)
-            init_hpr = (0.0, 0.0, 0.0)
-            cube_np.setPos(*init_pos)
-            cube_np.setHpr(*init_hpr)
-            cube_np.setMaterial(self._material_cache["idle"], 1)
-            cube_np.setScale(0.2)  # fit world_norm
+            # Validate objects format
+            if not isinstance(objects, list):
+                logger.warning(f"init_scene command format error: objects must be a list (ID: {command.command_id}")
+                return
             
-            # Cache object and initial state
-            self._object_cache[object_id] = cube_np
-            self._object_initial_states[object_id] = ObjectInitialState(pos=init_pos, hpr=init_hpr)
+            # Process each object
+            for obj_data in objects:
+                # Validate object data format
+                if not isinstance(obj_data, dict):
+                    logger.warning(f"init_scene command format error: object must be a dict (ID: {command.command_id}")
+                    continue
+                
+                # Extract required fields
+                object_id = obj_data.get("object_id")
+                init_pos_data = obj_data.get("init_pos")
+                init_hpr_data = obj_data.get("init_hpr")
+                
+                # Validate required fields
+                if not object_id:
+                    logger.warning(f"init_scene command format error: object missing object_id (ID: {command.command_id}")
+                    continue
+                
+                # Parse init_pos_data (support dict{x,y,z} or 3D list/tuple)
+                if isinstance(init_pos_data, dict):
+                    # Handle dict format: {"x": value, "y": value, "z": value}
+                    if all(key in init_pos_data for key in ["x", "y", "z"]):
+                        init_pos = (init_pos_data["x"], init_pos_data["y"], init_pos_data["z"])
+                    else:
+                        logger.warning(f"init_scene command format error: init_pos dict missing required keys (ID: {command.command_id}")
+                        continue
+                elif isinstance(init_pos_data, (list, tuple)) and len(init_pos_data) == 3:
+                    # Handle list/tuple format: [x, y, z]
+                    init_pos = tuple(init_pos_data)
+                else:
+                    logger.warning(f"init_scene command format error: object {object_id} missing or invalid init_pos (ID: {command.command_id}")
+                    continue
+                
+                # Parse init_hpr_data (support dict{h,p,r} or 3D list/tuple)
+                if isinstance(init_hpr_data, dict):
+                    # Handle dict format: {"h": value, "p": value, "r": value}
+                    if all(key in init_hpr_data for key in ["h", "p", "r"]):
+                        init_hpr = (init_hpr_data["h"], init_hpr_data["p"], init_hpr_data["r"])
+                    else:
+                        logger.warning(f"init_scene command format error: init_hpr dict missing required keys (ID: {command.command_id}")
+                        continue
+                elif isinstance(init_hpr_data, (list, tuple)) and len(init_hpr_data) == 3:
+                    # Handle list/tuple format: [h, p, r]
+                    init_hpr = tuple(init_hpr_data)
+                else:
+                    logger.warning(f"init_scene command format error: object {object_id} missing or invalid init_hpr (ID: {command.command_id}")
+                    continue
+                
+                # Convert to float
+                try:
+                    init_pos = tuple(float(v) for v in init_pos)
+                    init_hpr = tuple(float(v) for v in init_hpr)
+                except (ValueError, TypeError):
+                    logger.warning(f"init_scene command format error: object {object_id} has invalid numeric values (ID: {command.command_id}")
+                    continue
+                
+                # Create NodePath
+                cube_np = self._scene_root.attachNewNode(object_id)
+                cube_model.reparentTo(cube_np)
+                
+                # Set initial state: pos, hpr, state=idle
+                cube_np.setPos(*init_pos)
+                cube_np.setHpr(*init_hpr)
+                cube_np.setMaterial(self._material_cache["idle"], 1)
+                cube_np.setScale(0.2)  # fit world_norm
+                
+                # Cache object and initial state
+                self._object_cache[object_id] = cube_np
+                self._object_initial_states[object_id] = ObjectInitialState(pos=init_pos, hpr=init_hpr)
+                
+                logger.info(f"init_scene executed: created object {object_id}, initial state pos={init_pos}, hpr={init_hpr}, state=idle")
             
-            logger.info(f"init_scene executed: created object{object_id}, initial state pos={init_pos}, hpr={init_hpr}, state=idle")
+            # Log if no objects were created
+            if not objects:
+                logger.warning(f"init_scene command received with empty objects list (ID: {command.command_id}")
             
         except Exception as e:
             logger.error(f"init_scene processing failed (command ID: {command.command_id}): {str(e)}")
-            raise
+            # 仅记录错误，不重新抛出异常，确保模块继续运行
     
     def _validate_command_effectiveness(self, command: SceneCommand) -> bool:
         """命令有效性校验：去重+过时帧处理"""
@@ -521,15 +604,14 @@ class AeroRenderingService(RenderOutputPort):
             logger.warning(f"Command ID {command_id} already executed, ignoring (deduplication logic)")
             return False
         
-        # 2. Outdated frame check: ignore if frame_id < latest frame_id
-        frame_status = classify_frame(self._latest_frame_id, frame_id)
-        if frame_status == "stale":
+        # 2. Outdated frame check
+        if self._latest_frame_id is not None and frame_id < self._latest_frame_id:
             logger.warning(f"Command ID {command_id} frame_id={frame_id} outdated (latest={self._latest_frame_id}), ignoring")
             return False
         
         # 3. Mark as executed, update latest frame_id
         self._executed_command_ids.add(command_id)
-        if frame_id > self._latest_frame_id:
+        if self._latest_frame_id is None or frame_id > self._latest_frame_id:
             self._latest_frame_id = frame_id
             logger.debug(f"Updated latest frame_id: {self._latest_frame_id} (command ID: {command_id})")
         
@@ -569,11 +651,11 @@ class AeroRenderingService(RenderOutputPort):
         # 3. Ignore unknown payload fields (forward compatibility)
         payload_keys = command.payload.keys()
         valid_payload_keys = {
-            "init_scene": ["scene_config"],
+            "init_scene": ["objects"],
             "set_object_pose": ["coordinate_space", "position", "hpr"],
-            "set_object_state": ["state"],
+            "set_object_state": ["interaction_state"],
             "reset_interaction": [],
-            "heartbeat": ["ping"]
+            "heartbeat": ["interaction_state"]
         }
         current_cmd_type = command.command_type
         if current_cmd_type in valid_payload_keys:

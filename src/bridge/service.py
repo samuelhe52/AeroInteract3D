@@ -264,7 +264,8 @@ class BridgeServiceImpl(BridgeService):
                 "objects": [
                     {
                         "object_id": OBJECT_ID,
-                        "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+                        "init_pos": {"x": 0.0, "y": 0.0, "z": 0.0},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
                         "coordinate_space": "world_norm",
                         "interaction_state": INTERACTION_IDLE,
                     }
@@ -288,7 +289,7 @@ class BridgeServiceImpl(BridgeService):
             },
         )
 
-    logger = logging.getLogger("bridge_service")
+
     def _camera_to_world_position(self, position: Optional[Vec3]) -> Vec3:
         '''
         Complete camera_norm → world_norm coordinate transformation with full fault tolerance.
@@ -301,14 +302,14 @@ class BridgeServiceImpl(BridgeService):
         world_norm definition (renderer-facing scene space after bridge mapping):
         - +x: right (scene horizontal)
         - +y: up (scene vertical)
-        - +z: away from the camera (scene depth)
+        - +z: toward the user (scene depth)
         
         :param position: Original coordinates in camera_norm (Vec3), None is allowed
         :return: Transformed coordinates in world_norm (Vec3), guaranteed to be within [-1.0, 1.0]
         '''
         # 1. Null/illegal input fault tolerance
         if position is None:
-            self._log_error("Coordinate transformation failed: input position is None")
+            logger.error("Coordinate transformation failed: input position is None")
             return Vec3(0.0, 0.0, 0.5)  # Return default safe position
         
         # 2. Invalid value (NaN/Inf) validation
@@ -321,10 +322,10 @@ class BridgeServiceImpl(BridgeService):
         
         # 3. Core transformation logic (camera_norm → world_norm)
         # - Scale by 0.8 to reserve 20% margin for world_norm range [-1.0, 1.0]
-        # - Invert z-axis: camera +z (toward user) → world +z (away from camera)
+        # - No z-axis inversion: camera +z (toward user) â†’ world +z (toward user)
         scaled_x = x * 0.8
         scaled_y = y * 0.8
-        scaled_z = -z * 0.8  # Invert z-axis for world space alignment
+        scaled_z = z * 0.8  # No z-axis inversion for world space alignment
         
         # 4. Final range clipping (guarantee no out-of-bounds in world_norm)
         def clip(v: float) -> float:
@@ -336,7 +337,7 @@ class BridgeServiceImpl(BridgeService):
         
         # 5. Warning log for clipped coordinates (aids debugging)
         if abs(scaled_x) > 1.0 or abs(scaled_y) > 1.0 or abs(scaled_z + 0.5) > 1.0:
-            self._log_warning(
+            logger.warning(
                 f"Coordinate clipped: original({x:.2f},{y:.2f},{z:.2f}) → "
                 f"scaled({scaled_x:.2f},{scaled_y:.2f},{scaled_z+0.5:.2f}) → "
                 f"final({final_x:.2f},{final_y:.2f},{final_z:.2f})"
