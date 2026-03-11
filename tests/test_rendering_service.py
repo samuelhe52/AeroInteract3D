@@ -184,3 +184,22 @@ def test_rendering_health_exposes_structured_metrics() -> None:
     assert stats["duplicate_commands"] == 1
     assert stats["stale_commands"] == 1
     assert stats["rejected_commands"] == 1
+
+
+def test_rendering_records_structured_errors_for_recoverable_command_format_issues() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+
+    service.push(
+        make_command(
+            command_id="pose-invalid-1",
+            frame_id=5,
+            command_type="set_object_pose",
+            payload={"position": "bad-position", "hpr": [0.0, 0.0, 0.0]},
+        )
+    )
+
+    health = service.health()
+
+    assert health["errors"][-1]["code"] == "rendering.set_object_pose.position.invalid_type"
+    assert "timestamp" in health["errors"][-1]

@@ -13,7 +13,7 @@ Gesture module MUST NOT define a local `GesturePacket` dataclass copy.
 ## Implementation Ownership
 
 - Gesture maintainers MUST implement a concrete service class inheriting `GestureInputPort` from `src/ports.py`.
-- Use `GestureInputServiceImpl` in `src/gesture/service_impl.py` as the concrete gesture implementation.
+- Use `GestureInputServiceImpl` in `src/gesture/service.py` as the concrete gesture implementation.
 
 ## Functional Requirements
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any, Optional
 
 from src.contracts import GesturePacket, SceneCommand, Vec3
@@ -309,6 +310,15 @@ class BridgeServiceImpl(BridgeService):
         '''
         # 1. Null/illegal input fault tolerance
         if position is None:
+            self._record_error(
+                error_entry(
+                    "bridge.coordinate.position.missing",
+                    "Coordinate transformation failed because input position is missing",
+                    recoverable=True,
+                    hint="Ensure palm_center is present before emitting pose updates.",
+                    details={"position": None},
+                )
+            )
             coordinate_logger.error("Coordinate transformation failed: input position is None")
             return Vec3(0.0, 0.0, 0.0)
         
@@ -331,13 +341,24 @@ class BridgeServiceImpl(BridgeService):
         
         # 4. Warning log for clipped coordinates (aids debugging)
         if (final_x, final_y, final_z) != (x, y, z):
+            self._record_error(
+                error_entry(
+                    "bridge.coordinate.clipped",
+                    "Coordinate transformation clipped values into world_norm",
+                    recoverable=True,
+                    hint="Keep bridge output coordinates within the world_norm range [-1.0, 1.0].",
+                    details={
+                        "original": {"x": x, "y": y, "z": z},
+                        "clipped": {"x": final_x, "y": final_y, "z": final_z},
+                    },
+                )
+            )
             coordinate_logger.warning(
                 f"Coordinate clipped: original({x:.2f},{y:.2f},{z:.2f}) → "
                 f"final({final_x:.2f},{final_y:.2f},{final_z:.2f})"
             )
         
         return Vec3(final_x, final_y, final_z)
-
 
 
     def _make_object_state(self, packet: GesturePacket, interaction_state: str) -> SceneCommand:
@@ -374,5 +395,7 @@ class BridgeServiceImpl(BridgeService):
         )
 
     def _record_error(self, error: dict[str, Any]) -> None:
-        self._errors.append(error)
+        payload = dict(error)
+        payload.setdefault("timestamp", int(time.time() * 1000))
+        self._errors.append(payload)
         self._errors = self._errors[-10:]

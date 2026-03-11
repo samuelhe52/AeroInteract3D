@@ -10,10 +10,10 @@
 
 实现文件：
 
-- service 实现入口：src/gesture/service_impl.py
+- service 实现入口：src/gesture/service.py
 - 兼容导出层：src/gesture/service.py
 - gesture debug 入口：src/gesture/debug/live_preview.py
-- 实时预览与调试管线：src/gesture/debug/runtime.py
+- 实时预览与调试管线：src/gesture/debug/live_preview_runtime.py
 
 ## 模块职责边界
 
@@ -64,8 +64,8 @@ start() 的目标是把服务从 STOPPED 拉到 RUNNING。
 当前后端初始化逻辑在 _setup_backend() 中：
 
 - 用 OpenCV 打开 camera_index 对应摄像头。
-- 构造 DebugVideoConfig。
-- 通过 src/gesture/debug/runtime.py 中的 create_hand_detector() 获取 MediaPipe 检测器。
+- 构造 GestureRuntimeConfig。
+- 通过 src/gesture/runtime.py 中的 create_hand_detector() 获取 MediaPipe 检测器。
 - 如果当前环境没有可用 detector，直接失败，并明确提示默认模型路径，而不是回退成假数据流。
 
 这保证了服务对主程序是诚实的：能跑就 RUNNING，不能跑就 DEGRADED。
@@ -179,11 +179,11 @@ src/gesture/debug/live_preview.py 提供 gesture 模块的专用 debug 入口。
 
 这个入口面向实时观察摄像头画面、手部骨架和 GesturePacket 流：
 
-1. parse_args() 读取 camera_index、target_fps、window_name 等参数。
+1. live_preview.py 使用 GesturePreviewConfig 提供 camera_index、target_fps、window_name 等调试配置。
 2. build_preview_config() 组装实时预览配置。
-3. run_live_preview() 打开摄像头和窗口。
+3. live_preview_runtime.py 中的 run_live_preview() 打开摄像头和窗口。
 4. create_hand_detector() 执行 MediaPipe 检测。
-5. overlay_packet() 与 overlay_anchor_points() 在画面上叠加状态、锚点、坐标。
+5. overlay_packet() 与 overlay_anchor_points() 在画面上叠加状态、锚点。
 6. 按 q 或 Esc 退出窗口。
 
 适合场景：
@@ -267,22 +267,22 @@ build_event_anchors() 会把状态跃迁固化成事件锚点：
 
 如果要快速理解当前实现，建议按这个顺序读：
 
-1. src/gesture/service_impl.py
+1. src/gesture/service.py
    先看 start() / poll() / health() / stop() 四个公开函数。
-2. src/gesture/service_impl.py
+2. src/gesture/service.py
    再看 _setup_backend()、_detect_hand()、_compute_pinch_state()。
 3. src/gesture/debug/live_preview.py
   看 debug 入口如何组装实时预览配置。
-4. src/gesture/debug/runtime.py
+4. src/gesture/debug/live_preview_runtime.py
   看 run_live_preview()、GestureDebugAnalyzer、overlay_anchor_points()。
 
 ## 当前实现结论
 
 当前 gesture 模块的设计思路是：
 
-- 用 service_impl.py 作为正式的 GestureInputPort 实现。
+- 用 service.py 作为正式的 GestureInputPort 实现。
 - 用 debug/live_preview.py 作为专用调试入口。
-- 用 debug/runtime.py 作为实时预览与检测辅助工具。
+- 用 debug/live_preview_runtime.py 作为实时预览与检测辅助工具。
 - 用统一的 GesturePacket 契约把服务输出和窗口叠加信息对齐。
 
 这样一来，实时服务、录制分析、后续 bridge 消费三者共用同一组状态语义，而不是三套互相分叉的数据定义。

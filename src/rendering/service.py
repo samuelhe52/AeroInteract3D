@@ -265,6 +265,15 @@ class RenderingServiceImpl(RenderOutputPort):
                 self._metrics.commands_applied += 1
                 logger.info(f"Received heartbeat command, module state: {self._status}")
             else:
+                self._record_error(
+                    error_entry(
+                        "rendering.command_type.unknown",
+                        "Unknown command type received",
+                        recoverable=True,
+                        hint="Emit only supported scene command types.",
+                        details={"command_id": command.command_id, "command_type": command_type},
+                    )
+                )
                 logger.warning(f"Unknown command type: {command_type} (ID: {command.command_id}), ignoring")
             
         except Exception as e:
@@ -341,12 +350,30 @@ class RenderingServiceImpl(RenderOutputPort):
                 if all(key in pos_data for key in ["x", "y", "z"]):
                     pos = [pos_data["x"], pos_data["y"], pos_data["z"]]
                 else:
+                    self._record_error(
+                        error_entry(
+                            "rendering.set_object_pose.position.keys_missing",
+                            "Position payload is missing required keys",
+                            recoverable=True,
+                            hint="Provide position as a dict with x, y, z keys.",
+                            details={"command_id": command.command_id, "position": pos_data},
+                        )
+                    )
                     logger.warning(f"set_object_pose command format error: position dict missing required keys (ID: {command.command_id}")
                     return
             elif isinstance(pos_data, (list, tuple)):
                 # Handle list/tuple format: [x, y, z]
                 pos = list(pos_data)
             else:
+                self._record_error(
+                    error_entry(
+                        "rendering.set_object_pose.position.invalid_type",
+                        "Position payload must be a dict or 3-dimensional list",
+                        recoverable=True,
+                        hint="Provide position as either {x, y, z} or [x, y, z].",
+                        details={"command_id": command.command_id, "payload_type": type(pos_data).__name__},
+                    )
+                )
                 logger.warning(f"set_object_pose command format error: position must be dict or 3-dimensional list (ID: {command.command_id}")
                 return
             
@@ -357,12 +384,30 @@ class RenderingServiceImpl(RenderOutputPort):
                 if all(key in hpr_data for key in ["h", "p", "r"]):
                     hpr = [hpr_data["h"], hpr_data["p"], hpr_data["r"]]
                 else:
+                    self._record_error(
+                        error_entry(
+                            "rendering.set_object_pose.hpr.keys_missing",
+                            "Rotation payload is missing required keys",
+                            recoverable=True,
+                            hint="Provide hpr as a dict with h, p, r keys.",
+                            details={"command_id": command.command_id, "hpr": hpr_data},
+                        )
+                    )
                     logger.warning(f"set_object_pose command format error: hpr dict missing required keys (ID: {command.command_id}")
                     return
             elif isinstance(hpr_data, (list, tuple)):
                 # Handle list/tuple format: [h, p, r]
                 hpr = list(hpr_data)
             else:
+                self._record_error(
+                    error_entry(
+                        "rendering.set_object_pose.hpr.invalid_type",
+                        "Rotation payload must be a dict or 3-dimensional list",
+                        recoverable=True,
+                        hint="Provide hpr as either {h, p, r} or [h, p, r].",
+                        details={"command_id": command.command_id, "payload_type": type(hpr_data).__name__},
+                    )
+                )
                 logger.warning(f"set_object_pose command format error: hpr must be dict or 3-dimensional list (ID: {command.command_id}")
                 return
             
@@ -378,12 +423,30 @@ class RenderingServiceImpl(RenderOutputPort):
             # Validate position
             pos_valid, pos_float = validate_and_convert_to_float(pos)
             if not pos_valid:
+                self._record_error(
+                    error_entry(
+                        "rendering.set_object_pose.position.invalid_value",
+                        "Position payload must contain exactly three numeric values",
+                        recoverable=True,
+                        hint="Provide position as three numeric components.",
+                        details={"command_id": command.command_id, "position": pos},
+                    )
+                )
                 logger.warning(f"set_object_pose command format error: position must be 3-dimensional with numeric values (ID: {command.command_id}")
                 return
             
             # Validate hpr
             hpr_valid, hpr_float = validate_and_convert_to_float(hpr)
             if not hpr_valid:
+                self._record_error(
+                    error_entry(
+                        "rendering.set_object_pose.hpr.invalid_value",
+                        "Rotation payload must contain exactly three numeric values",
+                        recoverable=True,
+                        hint="Provide hpr as three numeric components.",
+                        details={"command_id": command.command_id, "hpr": hpr},
+                    )
+                )
                 logger.warning(f"set_object_pose command format error: hpr must be 3-dimensional with numeric values (ID: {command.command_id}")
                 return
             
@@ -447,6 +510,15 @@ class RenderingServiceImpl(RenderOutputPort):
             # 2. State validation (only process idle/hover/grabbed)
             valid_states = ["idle", "hover", "grabbed"]
             if state not in valid_states:
+                self._record_error(
+                    error_entry(
+                        "rendering.interaction_state.unknown",
+                        "Unknown interaction state received",
+                        recoverable=True,
+                        hint="Emit one of idle, hover, or grabbed.",
+                        details={"command_id": command.command_id, "interaction_state": state},
+                    )
+                )
                 logger.warning(f"Unknown interaction_state: {state} (ID: {command.command_id}), defaulting to idle")
                 state = "idle"
             
@@ -567,6 +639,15 @@ class RenderingServiceImpl(RenderOutputPort):
             
             # Validate objects format
             if not isinstance(objects, list):
+                self._record_error(
+                    error_entry(
+                        "rendering.init_scene.objects.invalid_type",
+                        "init_scene objects payload must be a list",
+                        recoverable=True,
+                        hint="Provide init_scene objects as a list of object descriptors.",
+                        details={"command_id": command.command_id, "payload_type": type(objects).__name__},
+                    )
+                )
                 logger.warning(f"init_scene command format error: objects must be a list (ID: {command.command_id}")
                 return
             
@@ -574,6 +655,15 @@ class RenderingServiceImpl(RenderOutputPort):
             for obj_data in objects:
                 # Validate object data format
                 if not isinstance(obj_data, dict):
+                    self._record_error(
+                        error_entry(
+                            "rendering.init_scene.object.invalid_type",
+                            "init_scene object entry must be a dictionary",
+                            recoverable=True,
+                            hint="Provide each init_scene object as a dict.",
+                            details={"command_id": command.command_id, "object_type": type(obj_data).__name__},
+                        )
+                    )
                     logger.warning(f"init_scene command format error: object must be a dict (ID: {command.command_id}")
                     continue
                 
@@ -584,6 +674,15 @@ class RenderingServiceImpl(RenderOutputPort):
                 
                 # Validate required fields
                 if not object_id:
+                    self._record_error(
+                        error_entry(
+                            "rendering.init_scene.object_id.missing",
+                            "init_scene object is missing object_id",
+                            recoverable=True,
+                            hint="Provide a non-empty object_id for each init_scene object.",
+                            details={"command_id": command.command_id, "object": obj_data},
+                        )
+                    )
                     logger.warning(f"init_scene command format error: object missing object_id (ID: {command.command_id}")
                     continue
                 
@@ -593,12 +692,30 @@ class RenderingServiceImpl(RenderOutputPort):
                     if all(key in init_pos_data for key in ["x", "y", "z"]):
                         init_pos = (init_pos_data["x"], init_pos_data["y"], init_pos_data["z"])
                     else:
+                        self._record_error(
+                            error_entry(
+                                "rendering.init_scene.init_pos.keys_missing",
+                                "init_scene init_pos is missing required keys",
+                                recoverable=True,
+                                hint="Provide init_pos as a dict with x, y, z keys.",
+                                details={"command_id": command.command_id, "object_id": object_id, "init_pos": init_pos_data},
+                            )
+                        )
                         logger.warning(f"init_scene command format error: init_pos dict missing required keys (ID: {command.command_id}")
                         continue
                 elif isinstance(init_pos_data, (list, tuple)) and len(init_pos_data) == 3:
                     # Handle list/tuple format: [x, y, z]
                     init_pos = tuple(init_pos_data)
                 else:
+                    self._record_error(
+                        error_entry(
+                            "rendering.init_scene.init_pos.invalid",
+                            "init_scene object is missing a valid init_pos",
+                            recoverable=True,
+                            hint="Provide init_pos as either {x, y, z} or [x, y, z].",
+                            details={"command_id": command.command_id, "object_id": object_id, "init_pos": init_pos_data},
+                        )
+                    )
                     logger.warning(f"init_scene command format error: object {object_id} missing or invalid init_pos (ID: {command.command_id}")
                     continue
                 
@@ -608,12 +725,30 @@ class RenderingServiceImpl(RenderOutputPort):
                     if all(key in init_hpr_data for key in ["h", "p", "r"]):
                         init_hpr = (init_hpr_data["h"], init_hpr_data["p"], init_hpr_data["r"])
                     else:
+                        self._record_error(
+                            error_entry(
+                                "rendering.init_scene.init_hpr.keys_missing",
+                                "init_scene init_hpr is missing required keys",
+                                recoverable=True,
+                                hint="Provide init_hpr as a dict with h, p, r keys.",
+                                details={"command_id": command.command_id, "object_id": object_id, "init_hpr": init_hpr_data},
+                            )
+                        )
                         logger.warning(f"init_scene command format error: init_hpr dict missing required keys (ID: {command.command_id}")
                         continue
                 elif isinstance(init_hpr_data, (list, tuple)) and len(init_hpr_data) == 3:
                     # Handle list/tuple format: [h, p, r]
                     init_hpr = tuple(init_hpr_data)
                 else:
+                    self._record_error(
+                        error_entry(
+                            "rendering.init_scene.init_hpr.invalid",
+                            "init_scene object is missing a valid init_hpr",
+                            recoverable=True,
+                            hint="Provide init_hpr as either {h, p, r} or [h, p, r].",
+                            details={"command_id": command.command_id, "object_id": object_id, "init_hpr": init_hpr_data},
+                        )
+                    )
                     logger.warning(f"init_scene command format error: object {object_id} missing or invalid init_hpr (ID: {command.command_id}")
                     continue
                 
@@ -622,6 +757,15 @@ class RenderingServiceImpl(RenderOutputPort):
                     init_pos = tuple(float(v) for v in init_pos)
                     init_hpr = tuple(float(v) for v in init_hpr)
                 except (ValueError, TypeError):
+                    self._record_error(
+                        error_entry(
+                            "rendering.init_scene.numeric_values.invalid",
+                            "init_scene object contains invalid numeric values",
+                            recoverable=True,
+                            hint="Provide numeric init_pos and init_hpr values.",
+                            details={"command_id": command.command_id, "object_id": object_id},
+                        )
+                    )
                     logger.warning(f"init_scene command format error: object {object_id} has invalid numeric values (ID: {command.command_id}")
                     continue
                 
@@ -643,6 +787,15 @@ class RenderingServiceImpl(RenderOutputPort):
             
             # Log if no objects were created
             if not objects:
+                self._record_error(
+                    error_entry(
+                        "rendering.init_scene.objects.empty",
+                        "init_scene command received with an empty objects list",
+                        recoverable=True,
+                        hint="Provide at least one object descriptor when initializing the scene.",
+                        details={"command_id": command.command_id},
+                    )
+                )
                 logger.warning(f"init_scene command received with empty objects list (ID: {command.command_id}")
             
         except Exception as e:

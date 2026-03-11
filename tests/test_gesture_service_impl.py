@@ -3,19 +3,21 @@ from __future__ import annotations
 import pytest
 
 from src.contracts import Vec3
-from src.gesture.service_impl import (
-    GestureInputServiceImpl,
+from src.gesture.debug.live_preview import (
     GesturePreviewConfig,
     HAND_MODEL_ENV_VAR,
     build_preview_config,
     build_service,
+)
+from src.gesture.service import (
+    GestureServiceImpl,
 )
 from src.utils.contracts import EXPECTED_CONTRACT_VERSION
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING
 
 
 def test_health_uses_shared_runtime_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = GestureInputServiceImpl(hand_model="stub.task")
+    service = GestureServiceImpl(hand_model="stub.task")
     monkeypatch.setattr(service, "_setup_backend", lambda: None)
 
     service.start()
@@ -31,7 +33,7 @@ def test_health_uses_shared_runtime_shape(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_poll_emits_packet_with_expected_contract_version(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = GestureInputServiceImpl(hand_model="stub.task")
+    service = GestureServiceImpl(hand_model="stub.task")
     monkeypatch.setattr(service, "_setup_backend", lambda: None)
     monkeypatch.setattr(service, "_read_frame", lambda: {"timestamp_ms": 100, "tick": 1, "frame": object()})
     monkeypatch.setattr(
@@ -55,8 +57,8 @@ def test_poll_emits_packet_with_expected_contract_version(monkeypatch: pytest.Mo
     assert health["stats"]["packets_emitted"] == 1
 
 
-def test_poll_failure_records_structured_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = GestureInputServiceImpl(hand_model="stub.task")
+def test_poll_failure_records_structured_error_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = GestureServiceImpl(hand_model="stub.task")
     monkeypatch.setattr(service, "_setup_backend", lambda: None)
 
     def raise_read_failure() -> dict[str, object]:
@@ -66,15 +68,16 @@ def test_poll_failure_records_structured_error(monkeypatch: pytest.MonkeyPatch) 
 
     service.start()
 
-    with pytest.raises(RuntimeError, match="Gesture input backend failure"):
-        service.poll()
+    result = service.poll()
 
+    assert result is None
     health = service.health()
     assert health["lifecycle_state"] == LIFECYCLE_DEGRADED
     assert health["status"] == "degraded"
     assert health["stats"]["backend_failures"] == 1
     assert health["stats"]["last_error"] == "Gesture input backend failure"
     assert health["errors"][-1]["code"] == "gesture.backend.failure"
+    assert "timestamp" in health["errors"][-1]
 
 
 def test_build_service_uses_preview_config_fields() -> None:

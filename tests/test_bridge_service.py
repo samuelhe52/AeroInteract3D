@@ -95,3 +95,16 @@ def test_bridge_ignores_duplicate_frames_and_records_health_error() -> None:
     health = bridge.health()
     assert health["stats"]["duplicate_packets"] == 1
     assert health["errors"][-1]["code"] == "bridge.packet.duplicate"
+    assert "timestamp" in health["errors"][-1]
+
+
+def test_bridge_records_coordinate_transform_faults() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    transformed = bridge._camera_to_world_position(None)
+
+    assert transformed == Vec3(0.0, 0.0, 0.0)
+    health = bridge.health()
+    assert health["errors"][-1]["code"] == "bridge.coordinate.position.missing"
+    assert "timestamp" in health["errors"][-1]
