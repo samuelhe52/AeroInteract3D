@@ -14,7 +14,7 @@ from src.contracts import SceneCommand
 from src.ports import RenderOutputPort
 from src.utils.runtime import (
     LIFECYCLE_INITIALIZING, LIFECYCLE_RUNNING, LIFECYCLE_DEGRADED, LIFECYCLE_STOPPED,
-    build_health, classify_frame, error_entry
+    build_health, error_entry
 )
 
 # 日志记录器（配置应在应用入口完成）
@@ -258,11 +258,12 @@ class AeroRenderingService(RenderOutputPort):
             error["timestamp"] = int(time.time() * 1000)
             self._errors.append(error)
             # Non-fatal error → DEGRADED, do not terminate program
+            details_msg = error.get("details") or error.get("message") or str(e)
             if self._status == LIFECYCLE_RUNNING:
                 self._status = LIFECYCLE_DEGRADED
-                logger.error(f"Command processing failed, module switched to DEGRADED: {error['detail']}")
+                logger.error(f"Command processing failed, module switched to DEGRADED: {details_msg}")
             else:
-                logger.warning(f"Command processing failed: {error['detail']}")
+                logger.warning(f"Command processing failed: {details_msg}")
     
     def health(self) -> Dict[str, Any]:
         """返回结构化健康状态（含日志相关信息）"""
