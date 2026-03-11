@@ -4,6 +4,16 @@ from dataclasses import dataclass
 import logging
 import sys
 
+from src.constants import (
+    DEFAULT_CAMERA_INDEX,
+    DEFAULT_FRAME_HEIGHT,
+    DEFAULT_FRAME_WIDTH,
+    DEFAULT_MAX_FRAMES,
+    DEFAULT_MIN_DETECTION_CONFIDENCE,
+    DEFAULT_MIN_TRACKING_CONFIDENCE,
+    DEFAULT_MODEL_COMPLEXITY,
+    DEFAULT_TARGET_FPS,
+)
 
 if __package__ in {None, ""}:
     from pathlib import Path
@@ -24,15 +34,15 @@ from src.gesture.debug.live_preview_runtime import run_live_preview
 @dataclass(slots=True)
 class GesturePreviewConfig:
     log_level: str = "INFO"
-    camera_index: int = 0
-    target_fps: int = 60
-    frame_width: int = 640
-    frame_height: int = 480
-    max_frames: int = 0
+    camera_index: int = DEFAULT_CAMERA_INDEX
+    target_fps: int = DEFAULT_TARGET_FPS
+    frame_width: int = DEFAULT_FRAME_WIDTH
+    frame_height: int = DEFAULT_FRAME_HEIGHT
+    max_frames: int = DEFAULT_MAX_FRAMES
     hand_model: str | None = None
-    min_detection_confidence: float = 0.5
-    min_tracking_confidence: float = 0.5
-    model_complexity: int = 1
+    min_detection_confidence: float = DEFAULT_MIN_DETECTION_CONFIDENCE
+    min_tracking_confidence: float = DEFAULT_MIN_TRACKING_CONFIDENCE
+    model_complexity: int = DEFAULT_MODEL_COMPLEXITY
     window_name: str = "Gesture Live Preview"
     mirror: bool = True
     draw_coordinates: bool = True

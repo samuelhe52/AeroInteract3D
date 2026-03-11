@@ -7,6 +7,12 @@ import sys
 import time
 from dataclasses import dataclass
 
+from src.constants import (
+    DEFAULT_CAMERA_INDEX,
+    DEFAULT_FRAME_HEIGHT,
+    DEFAULT_FRAME_WIDTH,
+    DEFAULT_TARGET_FPS,
+)
 from src.bridge.service import BridgeServiceImpl
 from src.gesture.service import GestureServiceImpl
 from src.ports import BridgeService, GestureInputPort, RenderOutputPort
@@ -22,10 +28,10 @@ LIFECYCLE_STOPPED = "STOPPED"
 class AppConfig:
     contract_version: str = "0.1.0"
     log_level: str = "INFO"
-    camera_index: int = 0
-    target_fps: int = 60
-    frame_width: int = 640
-    frame_height: int = 480
+    camera_index: int = DEFAULT_CAMERA_INDEX
+    target_fps: int = DEFAULT_TARGET_FPS
+    frame_width: int = DEFAULT_FRAME_WIDTH
+    frame_height: int = DEFAULT_FRAME_HEIGHT
 
 
 class App:
@@ -96,10 +102,10 @@ class App:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AeroInteract3D bootstrap entrypoint")
     parser.add_argument("--log-level", default="INFO")
-    parser.add_argument("--camera-index", type=int, default=0)
-    parser.add_argument("--target-fps", type=int, default=60)
-    parser.add_argument("--frame-width", type=int, default=640)
-    parser.add_argument("--frame-height", type=int, default=480)
+    parser.add_argument("--camera-index", type=int, default=DEFAULT_CAMERA_INDEX)
+    parser.add_argument("--target-fps", type=int, default=DEFAULT_TARGET_FPS)
+    parser.add_argument("--frame-width", type=int, default=DEFAULT_FRAME_WIDTH)
+    parser.add_argument("--frame-height", type=int, default=DEFAULT_FRAME_HEIGHT)
     return parser.parse_args(argv)
 
 

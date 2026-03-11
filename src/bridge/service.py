@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import time
 from typing import Any, Optional
 
+from src.constants import BRIDGE_HEARTBEAT_INTERVAL_FRAMES, BRIDGE_MIN_TRACKING_CONFIDENCE, MAX_ERROR_HISTORY
 from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.ports import BridgeService
 from src.utils.contracts import EXPECTED_CONTRACT_VERSION, validate_gesture_packet, vec3_payload
@@ -34,7 +35,6 @@ BRIDGE_STATE_GRABBING = "grabbing"
 OBJECT_ID = "primary_cube"
 INTERACTION_IDLE = "idle"
 INTERACTION_GRABBED = "grabbed"
-MIN_TRACKING_CONFIDENCE = 0.6
 
 
 @dataclass(slots=True)
@@ -138,7 +138,7 @@ class BridgeServiceImpl(BridgeService):
             self._pending_init = False
 
         commands.extend(self._step_state_machine(packet))
-        if packet.frame_id % 30 == 0:
+        if packet.frame_id % BRIDGE_HEARTBEAT_INTERVAL_FRAMES == 0:
             commands.append(self._make_heartbeat(packet))
 
         self._metrics.commands_emitted += len(commands)
@@ -173,7 +173,7 @@ class BridgeServiceImpl(BridgeService):
     def _step_state_machine(self, packet: GesturePacket) -> list[SceneCommand]:
         commands: list[SceneCommand] = []
 
-        if packet.tracking_state != "tracked" or packet.confidence < MIN_TRACKING_CONFIDENCE:
+        if packet.tracking_state != "tracked" or packet.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
             if self._interaction_state == BRIDGE_STATE_GRABBING:
                 return self._reset_interaction(packet, reason="tracking_lost")
             self._interaction_state = BRIDGE_STATE_IDLE
@@ -350,4 +350,4 @@ class BridgeServiceImpl(BridgeService):
         payload = dict(error)
         payload.setdefault("timestamp", int(time.time() * 1000))
         self._errors.append(payload)
-        self._errors = self._errors[-10:]
+        self._errors = self._errors[-MAX_ERROR_HISTORY:]

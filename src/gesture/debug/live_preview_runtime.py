@@ -5,6 +5,7 @@ from typing import Any
 
 import cv2
 
+from src.constants import DEBUG_FPS_SAMPLE_WINDOW
 from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import (
     GestureRuntimeConfig,
@@ -21,7 +22,6 @@ LIFECYCLE_DEGRADED = "DEGRADED"
 LIFECYCLE_STOPPED = "STOPPED"
 
 DebugVideoConfig = GestureRuntimeConfig
-FPS_SAMPLE_WINDOW = 10
 
 
 class GestureDebugAnalyzer:
@@ -159,7 +159,7 @@ def run_live_preview(config: DebugVideoConfig) -> None:
                 if smoothed_fps == 0.0:
                     smoothed_fps = instantaneous_fps
                 else:
-                    smoothed_fps += (instantaneous_fps - smoothed_fps) / FPS_SAMPLE_WINDOW
+                    smoothed_fps += (instantaneous_fps - smoothed_fps) / DEBUG_FPS_SAMPLE_WINDOW
                 previous_frame_started_at = frame_started_at
 
                 ok, frame = capture.read()

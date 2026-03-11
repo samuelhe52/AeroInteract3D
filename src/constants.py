@@ -1,0 +1,29 @@
+DEFAULT_CAMERA_INDEX = 0
+DEFAULT_TARGET_FPS = 60
+DEFAULT_FRAME_WIDTH = 640
+DEFAULT_FRAME_HEIGHT = 480
+# Zero means run without an automatic frame-count stop condition.
+DEFAULT_MAX_FRAMES = 0
+DEFAULT_MIN_DETECTION_CONFIDENCE = 0.5
+DEFAULT_MIN_TRACKING_CONFIDENCE = 0.5
+DEFAULT_MODEL_COMPLEXITY = 1
+
+# Emit one summary log for every N processed gesture packets.
+GESTURE_FRAME_SUMMARY_INTERVAL = 30
+BRIDGE_HEARTBEAT_INTERVAL_FRAMES = 30
+BRIDGE_MIN_TRACKING_CONFIDENCE = 0.6
+
+MAX_ERROR_HISTORY = 10
+RENDER_POSE_LOG_DEBOUNCE_MS = 500
+DEBUG_FPS_SAMPLE_WINDOW = 10
+
+# Keep tracking in a temporary-loss state for this many consecutive missing frames.
+TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES = 2
+TEMPORAL_PINCH_ENTER_THRESHOLD = 0.10
+TEMPORAL_PINCH_HOLD_THRESHOLD = 0.06
+TEMPORAL_PINCH_RELEASE_THRESHOLD = 0.12
+# Require this many consecutive frames before promoting a pinch candidate to confirmed pinched.
+TEMPORAL_PINCH_CONFIRM_FRAMES = 2
+# Require this many consecutive frames before promoting a release candidate to confirmed open.
+TEMPORAL_RELEASE_CONFIRM_FRAMES = 2
+TEMPORAL_SMOOTHING_ALPHA = 0.65

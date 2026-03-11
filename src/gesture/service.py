@@ -9,6 +9,17 @@ from typing import Any
 
 import cv2
 
+from src.constants import (
+    DEFAULT_CAMERA_INDEX,
+    DEFAULT_FRAME_HEIGHT,
+    DEFAULT_FRAME_WIDTH,
+    DEFAULT_MIN_DETECTION_CONFIDENCE,
+    DEFAULT_MIN_TRACKING_CONFIDENCE,
+    DEFAULT_MODEL_COMPLEXITY,
+    DEFAULT_TARGET_FPS,
+    GESTURE_FRAME_SUMMARY_INTERVAL,
+    MAX_ERROR_HISTORY,
+)
 from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import (
     GestureRuntimeConfig,
@@ -20,10 +31,6 @@ from src.gesture.runtime import (
 from src.gesture.temporal import (
     GestureFrameAnalysis,
     GestureTemporalReducer,
-    PINCH_CONFIRM_FRAMES,
-    RELEASE_CONFIRM_FRAMES,
-    SMOOTHING_ALPHA,
-    TRACKING_TEMPORARY_LOSS_FRAMES,
 )
 from src.ports import GestureInputPort
 from src.utils.contracts import EXPECTED_CONTRACT_VERSION
@@ -35,7 +42,6 @@ from src.utils.runtime import (
     build_health,
     error_entry,
 )
-FRAME_SUMMARY_INTERVAL = 30
 
 
 logger = logging.getLogger("gesture.service")
@@ -74,14 +80,14 @@ class GestureServiceImpl(GestureInputPort):
 
     def __init__(
         self,
-        camera_index: int = 0,
-        target_fps: float | None = 60.0,
-        frame_width: int | None = 640,
-        frame_height: int | None = 480,
+        camera_index: int = DEFAULT_CAMERA_INDEX,
+        target_fps: float | None = float(DEFAULT_TARGET_FPS),
+        frame_width: int | None = DEFAULT_FRAME_WIDTH,
+        frame_height: int | None = DEFAULT_FRAME_HEIGHT,
         hand_model: str | None = None,
-        min_detection_confidence: float = 0.5,
-        min_tracking_confidence: float = 0.5,
-        model_complexity: int = 1,
+        min_detection_confidence: float = DEFAULT_MIN_DETECTION_CONFIDENCE,
+        min_tracking_confidence: float = DEFAULT_MIN_TRACKING_CONFIDENCE,
+        model_complexity: int = DEFAULT_MODEL_COMPLEXITY,
     ) -> None:
         self._repo_root = Path(__file__).resolve().parents[2]
         self._camera_index = camera_index
@@ -543,7 +549,7 @@ class GestureServiceImpl(GestureInputPort):
         payload = dict(error)
         payload.setdefault("timestamp", int(time.time() * 1000))
         self._errors.append(payload)
-        self._errors = self._errors[-10:]
+        self._errors = self._errors[-MAX_ERROR_HISTORY:]
 
     def _log_state_changes(
         self,
@@ -570,7 +576,7 @@ class GestureServiceImpl(GestureInputPort):
             )
 
     def _log_frame_summary(self, packet: GesturePacket, hand_detected: bool) -> None:
-        if packet.frame_id % FRAME_SUMMARY_INTERVAL != 0:
+        if packet.frame_id % GESTURE_FRAME_SUMMARY_INTERVAL != 0:
             return
 
         logger.debug(

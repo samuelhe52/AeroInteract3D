@@ -9,6 +9,15 @@ from typing import Any
 import cv2
 import mediapipe as mp
 
+from src.constants import (
+    DEFAULT_MAX_FRAMES,
+    DEFAULT_MIN_DETECTION_CONFIDENCE,
+    DEFAULT_MIN_TRACKING_CONFIDENCE,
+    DEFAULT_MODEL_COMPLEXITY,
+    TEMPORAL_PINCH_ENTER_THRESHOLD as DEFAULT_PINCH_ENTER_THRESHOLD,
+    TEMPORAL_PINCH_HOLD_THRESHOLD as DEFAULT_PINCH_HOLD_THRESHOLD,
+    TEMPORAL_PINCH_RELEASE_THRESHOLD as DEFAULT_PINCH_RELEASE_THRESHOLD,
+)
 from src.contracts import Vec3
 
 try:
@@ -31,10 +40,6 @@ except ImportError:
 
 HAND_MODEL_ENV_VAR = "AEROINTERACT3D_HAND_MODEL"
 DEFAULT_HAND_MODEL_PATH = Path(__file__).resolve().parents[2] / "models" / "hand_landmarker.task"
-
-DEFAULT_PINCH_ENTER_THRESHOLD = 0.10
-DEFAULT_PINCH_HOLD_THRESHOLD = 0.06
-DEFAULT_PINCH_RELEASE_THRESHOLD = 0.12
 
 LANDMARK_NAMES = [
     "wrist",
@@ -70,10 +75,10 @@ class GestureRuntimeConfig:
     target_fps: float | None
     frame_width: int | None
     frame_height: int | None
-    max_frames: int
-    min_detection_confidence: float
-    min_tracking_confidence: float
-    model_complexity: int
+    max_frames: int = DEFAULT_MAX_FRAMES
+    min_detection_confidence: float = DEFAULT_MIN_DETECTION_CONFIDENCE
+    min_tracking_confidence: float = DEFAULT_MIN_TRACKING_CONFIDENCE
+    model_complexity: int = DEFAULT_MODEL_COMPLEXITY
     window_name: str = "Gesture Live Preview"
     mirror: bool = True
     draw_coordinates: bool = True

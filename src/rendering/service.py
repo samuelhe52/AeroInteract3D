@@ -11,6 +11,7 @@ from panda3d.core import (
 )
 from direct.showbase.ShowBase import ShowBase
 
+from src.constants import MAX_ERROR_HISTORY, RENDER_POSE_LOG_DEBOUNCE_MS
 from src.contracts import SceneCommand
 from src.ports import RenderOutputPort
 from src.utils.contracts import EXPECTED_CONTRACT_VERSION, validate_scene_command
@@ -21,9 +22,6 @@ from src.utils.runtime import (
 
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
-
-MAX_ERROR_HISTORY = 10
-POSE_LOG_DEBOUNCE_MS = 500
 VALID_PAYLOAD_KEYS = {
     "init_scene": {"objects"},
     "set_object_pose": {"coordinate_space", "position", "hpr"},
@@ -900,7 +898,7 @@ class RenderingServiceImpl(RenderOutputPort):
             return
 
         elapsed_ms = command.timestamp_ms - self._last_pose_log_ts
-        if elapsed_ms < POSE_LOG_DEBOUNCE_MS:
+        if elapsed_ms < RENDER_POSE_LOG_DEBOUNCE_MS:
             self._suppressed_pose_logs += 1
             return
 
