@@ -19,6 +19,8 @@ dependencies = [
     { name = "mediapipe" },
     { name = "numpy" },
     { name = "opencv-python" },
+    { name = "panda3d" },
+    { name = "types-panda3d" },
 ]
 
 [package.dev-dependencies]
@@ -26,15 +28,14 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
-rendering = [
-    { name = "panda3d" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "mediapipe", specifier = ">=0.10.32" },
     { name = "numpy", specifier = ">=2.2.0" },
     { name = "opencv-python", specifier = ">=4.13.0.92" },
+    { name = "panda3d", specifier = ">=1.10.15" },
+    { name = "types-panda3d", specifier = ">=0.4.1" },
 ]
 
 [package.metadata.requires-dev]
@@ -42,7 +43,6 @@ dev = [
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "ruff", specifier = ">=0.13.0" },
 ]
-rendering = [{ name = "panda3d", specifier = ">=1.10.15" }]
 
 [[package]]
 name = "cffi"
@@ -723,4 +723,13 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/88/a1/d19dd9889cd4bce2e233c4fac007cd8daaf5b9fe6e6a5d432cf17be0b807/sounddevice-0.5.5-py3-none-win32.whl", hash = "sha256:1234cc9b4c9df97b6cbe748146ae0ec64dd7d6e44739e8e42eaa5b595313a103", size = 317765, upload-time = "2026-01-23T18:36:39.047Z" },
     { url = "https://files.pythonhosted.org/packages/c3/0e/002ed7c4c1c2ab69031f78989d3b789fee3a7fba9e586eb2b81688bf4961/sounddevice-0.5.5-py3-none-win_amd64.whl", hash = "sha256:cfc6b2c49fb7f555591c78cb8ecf48d6a637fd5b6e1db5fec6ed9365d64b3519", size = 365324, upload-time = "2026-01-23T18:36:40.496Z" },
     { url = "https://files.pythonhosted.org/packages/4e/39/a61d4b83a7746b70d23d9173be688c0c6bfc7173772344b7442c2c155497/sounddevice-0.5.5-py3-none-win_arm64.whl", hash = "sha256:3861901ddd8230d2e0e8ae62ac320cdd4c688d81df89da036dcb812f757bb3e6", size = 317115, upload-time = "2026-01-23T18:36:42.235Z" },
+]
+
+[[package]]
+name = "types-panda3d"
+version = "0.4.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6e/9e/6de7fd5857020478a68e2129894f39d5d935b9544cdf2d4a8ca15939369e/types_panda3d-0.4.1.tar.gz", hash = "sha256:21ae77958816a92ab89acfe2b5c18d45644958653d664290d94b6846169f770e", size = 870561, upload-time = "2024-07-03T19:24:38.571Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/9c/7c1358bebcada54e70f38a1bf46df30743cae2691983ca2b88b97ebb671a/types_panda3d-0.4.1-py3-none-any.whl", hash = "sha256:febb1cd2fa851682d30d6931a6b3138dc25acaea73aedabe3fd9dd8fa423a9cc", size = 1012715, upload-time = "2024-07-03T19:24:36.586Z" },
 ]

@@ -2,11 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.contracts import GesturePacket, Vec3
+from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.utils.runtime import error_entry
 
 
 EXPECTED_CONTRACT_VERSION = "0.1.0"
+
+SCENE_COMMAND_TYPES = {
+    "init_scene",
+    "set_object_pose",
+    "set_object_state",
+    "heartbeat",
+    "reset_interaction",
+}
 
 
 def validate_contract_version(
@@ -95,6 +103,82 @@ def validate_gesture_packet(
         ("palm_center", packet.palm_center),
     ):
         errors.extend(validate_vec3(name, vec))
+
+    return errors
+
+
+def validate_scene_command(
+    command: SceneCommand,
+    *,
+    expected_version: str = EXPECTED_CONTRACT_VERSION,
+) -> list[dict[str, Any]]:
+    errors = validate_contract_version(command.contract_version, expected_version=expected_version)
+
+    if not isinstance(command.command_id, str) or not command.command_id:
+        errors.append(
+            error_entry(
+                "scene.command_id.invalid",
+                "command_id must be a non-empty string",
+                recoverable=True,
+                hint="Emit a unique non-empty command identifier for every scene command.",
+                details={"command_id": command.command_id},
+            )
+        )
+
+    if not isinstance(command.frame_id, int) or command.frame_id < 0:
+        errors.append(
+            error_entry(
+                "scene.frame_id.invalid",
+                "frame_id must be a non-negative integer",
+                recoverable=True,
+                hint="Emit monotonically increasing non-negative frame identifiers.",
+                details={"frame_id": command.frame_id},
+            )
+        )
+
+    if not isinstance(command.timestamp_ms, int) or command.timestamp_ms < 0:
+        errors.append(
+            error_entry(
+                "scene.timestamp.invalid",
+                "timestamp_ms must be a non-negative integer",
+                recoverable=True,
+                hint="Emit a monotonic timestamp in milliseconds for every scene command.",
+                details={"timestamp_ms": command.timestamp_ms},
+            )
+        )
+
+    if not isinstance(command.command_type, str) or command.command_type not in SCENE_COMMAND_TYPES:
+        errors.append(
+            error_entry(
+                "scene.command_type.invalid",
+                "command_type is not supported",
+                recoverable=True,
+                hint="Use one of the defined SceneCommandType values.",
+                details={"command_type": command.command_type},
+            )
+        )
+
+    if not isinstance(command.object_id, str) or not command.object_id:
+        errors.append(
+            error_entry(
+                "scene.object_id.invalid",
+                "object_id must be a non-empty string",
+                recoverable=True,
+                hint="Provide a target object identifier for every scene command.",
+                details={"object_id": command.object_id},
+            )
+        )
+
+    if not isinstance(command.payload, dict):
+        errors.append(
+            error_entry(
+                "scene.payload.invalid",
+                "payload must be a dictionary",
+                recoverable=True,
+                hint="Encode scene command payloads as JSON-style dictionaries.",
+                details={"payload_type": type(command.payload).__name__},
+            )
+        )
 
     return errors
 

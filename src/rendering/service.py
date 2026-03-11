@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import time
 import logging
-from typing import List, Dict, Optional, Set, Any
+from typing import List, Dict, Optional, Set, Any, Callable
 
 from panda3d.core import (
     WindowProperties, Material, AmbientLight, DirectionalLight,
@@ -12,33 +13,56 @@ from direct.showbase.ShowBase import ShowBase
 
 from src.contracts import SceneCommand
 from src.ports import RenderOutputPort
+from src.utils.contracts import EXPECTED_CONTRACT_VERSION, validate_scene_command
 from src.utils.runtime import (
     LIFECYCLE_INITIALIZING, LIFECYCLE_RUNNING, LIFECYCLE_DEGRADED, LIFECYCLE_STOPPED,
-    build_health, error_entry
+    build_health, classify_frame, error_entry
 )
 
-# 日志记录器（配置应在应用入口完成）
+# Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
 
+MAX_ERROR_HISTORY = 10
+VALID_PAYLOAD_KEYS = {
+    "init_scene": {"objects"},
+    "set_object_pose": {"coordinate_space", "position", "hpr"},
+    "set_object_state": {"interaction_state"},
+    "reset_interaction": set(),
+    "heartbeat": {"interaction_state"},
+}
 
 
-# 物体初始状态
+# Initial object state.
+@dataclass(slots=True)
 class ObjectInitialState:
-    def __init__(self, pos: tuple, hpr: tuple):
-        self.pos = pos
-        self.hpr = hpr
-        self.state = "idle"
+    pos: tuple[float, float, float]
+    hpr: tuple[float, float, float]
+    state: str = "idle"
+
+
+@dataclass(slots=True)
+class RenderingMetrics:
+    commands_seen: int = 0
+    commands_applied: int = 0
+    duplicate_commands: int = 0
+    stale_commands: int = 0
+    rejected_commands: int = 0
+    resets_processed: int = 0
+    pose_updates: int = 0
+    state_updates: int = 0
+    init_scene_commands: int = 0
+    heartbeats_received: int = 0
 
 
 class Panda3DWindowAdapter:
-    """Panda3D窗口适配器，处理窗口、相机、灯光的初始化和管理"""
+    """Panda3D window adapter for window, camera, and light lifecycle management."""
     
     def __init__(self):
         self._base: Optional[ShowBase] = None
         self._is_initialized: bool = False
     
     def init_window(self, window_size: tuple = (800, 600), window_title: str = "AeroInteract3D Rendering") -> None:
-        """初始化窗口"""
+        """Initialize the rendering window."""
         if self._is_initialized:
             logger.info(f"Window already initialized ({window_size}), skipping duplicate creation")
             return
@@ -56,35 +80,35 @@ class Panda3DWindowAdapter:
             raise RuntimeError(f"Window initialization failed: {str(e)}") from e
     
     def config_camera_for_world_norm(self) -> None:
-        """配置相机适配world_norm坐标系"""
+        """Configure the camera for the world_norm coordinate space."""
         if not self._is_initialized:
-            raise RuntimeError("窗口未初始化，无法配置相机")
+            raise RuntimeError("Window is not initialized; cannot configure the camera")
         try:
-            # 使用透视相机而不是正交相机，这样更容易看到3D物体
+            # A perspective camera gives a clearer 3D view than an orthographic one.
             lens = PerspectiveLens()
-            lens.setFov(60)  # 设置视场角
-            lens.setNearFar(0.1, 100.0)  # 更合理的近远裁剪面
+            lens.setFov(60)  # Set the field of view.
+            lens.setNearFar(0.1, 100.0)  # Use a more practical near/far clip range.
             self._base.cam.node().setLens(lens)
             
-            # 调整相机位置，从合适的角度看向物体
-            self._base.cam.setPos(0.0, 3.0, 2.0)  # 从斜上方看
-            self._base.cam.lookAt(0.0, 0.0, 0.0)  # 看向原点
+            # Position the camera for a useful angled view of the objects.
+            self._base.cam.setPos(0.0, 3.0, 2.0)  # View from above and at an angle.
+            self._base.cam.lookAt(0.0, 0.0, 0.0)  # Look at the origin.
             logger.info("Camera configured, using perspective camera for 3D scene")
         except Exception as e:
             logger.error(f"Camera configuration failed: {str(e)}")
             raise RuntimeError(f"Camera configuration failed: {str(e)}") from e
     
     def create_base_lights(self) -> None:
-        """创建基础灯光"""
+        """Create the base lighting setup."""
         if not self._is_initialized:
-            raise RuntimeError("窗口未初始化，无法创建灯光")
+            raise RuntimeError("Window is not initialized; cannot create lights")
         try:
-            # 环境光
+            # Ambient light.
             amb_light = AmbientLight("ambient_light")
             amb_light.setColor((0.2, 0.2, 0.2, 1.0))
             amb_light_np = self._base.render.attachNewNode(amb_light)
             self._base.render.setLight(amb_light_np)
-            # 方向光
+            # Directional light.
             dir_light = DirectionalLight("directional_light")
             dir_light.setColor((0.8, 0.8, 0.8, 1.0))
             dir_light_np = self._base.render.attachNewNode(dir_light)
@@ -102,77 +126,75 @@ class Panda3DWindowAdapter:
         return self._is_initialized
     
     def reset_scene(self, scene_root: NodePath) -> None:
-        """重置场景"""
+        """Reset the scene graph."""
         if not self._is_initialized:
-            raise RuntimeError("窗口未初始化，无法重置场景")
+            raise RuntimeError("Window is not initialized; cannot reset the scene")
         scene_root.removeChildren()
         logger.info("Scene reset safely (window/camera/lights preserved)")
 
 
-class AeroRenderingService(RenderOutputPort):
-    """RenderOutputPort核心实现，处理SceneCommand流并渲染3D场景"""
+class RenderingServiceImpl(RenderOutputPort):
+    """Core RenderOutputPort implementation for rendering SceneCommand streams."""
     
-    def __init__(self):
+    def __init__(self, window_adapter_factory: Callable[[], Panda3DWindowAdapter] | None = None):
         super().__init__()
-        # 生命周期状态
-        self._status: str = LIFECYCLE_INITIALIZING
-        # 错误列表
-        self._errors: List[Dict[str, Any]] = []
-        # 最后命令时间戳
-        self._last_command_ts: int = 0
-        # 窗口适配器
-        self._window_adapter = Panda3DWindowAdapter()
-        # 场景根节点
-        self._scene_root: Optional[NodePath] = None
-        # 物体缓存：object_id → NodePath
-        self._object_cache: Dict[str, NodePath] = {}
-        # 物体初始状态缓存（用于reset_interaction）
-        self._object_initial_states: Dict[str, ObjectInitialState] = {}
-        # 命令去重/过时帧控制
-        self._executed_command_ids: Set[str] = set()  # 已执行的command_id（去重）
-        self._latest_frame_id: Optional[int] = None   # 最新frame_id（防过时）
-        # 材质缓存（状态映射）
+        self._expected_contract_version = EXPECTED_CONTRACT_VERSION
+        self._window_adapter_factory = window_adapter_factory or Panda3DWindowAdapter
+        self._window_adapter = self._window_adapter_factory()
+        # Material cache keyed by interaction state.
         self._material_cache: Dict[str, Material] = self._init_materials()
-        # 重置过程中的命令暂存（reset_interaction时使用）
+        self._status: str = LIFECYCLE_STOPPED
+        self._errors: List[Dict[str, Any]] = []
+        self._last_command_ts: Optional[int] = None
+        self._scene_root: Optional[NodePath] = None
+        self._object_cache: Dict[str, NodePath] = {}
+        self._object_initial_states: Dict[str, ObjectInitialState] = {}
+        self._executed_command_ids: Set[str] = set()
+        self._latest_frame_id: Optional[int] = None
         self._pending_commands: List[SceneCommand] = []
-        # 重置标记
         self._is_resetting: bool = False
+        self._metrics = RenderingMetrics()
     
     def _init_materials(self) -> Dict[str, Material]:
-        """初始化状态对应的材质"""
+        """Initialize materials for each interaction state."""
         material_cache = {}
         
-        # 1. idle材质（灰色，不透明）
+        # 1. idle material: gray and opaque.
         idle_mat = Material()
-        idle_mat.setAmbient(Vec4(0.5, 0.5, 0.5, 1.0))  # 环境光反射（alpha=1 不透明）
-        idle_mat.setDiffuse(Vec4(0.5, 0.5, 0.5, 1.0))  # 漫反射（alpha=1 不透明）
-        idle_mat.setSpecular(Vec4(0.1, 0.1, 0.1, 1.0)) # 高光（alpha=1 不透明）
-        idle_mat.setShininess(5.0)                     # 高光强度
+        idle_mat.setAmbient(Vec4(0.5, 0.5, 0.5, 1.0))  # Ambient reflection, alpha=1 for full opacity.
+        idle_mat.setDiffuse(Vec4(0.5, 0.5, 0.5, 1.0))  # Diffuse reflection, alpha=1 for full opacity.
+        idle_mat.setSpecular(Vec4(0.1, 0.1, 0.1, 1.0)) # Specular highlight, alpha=1 for full opacity.
+        idle_mat.setShininess(5.0)                     # Highlight intensity.
         material_cache["idle"] = idle_mat
         
-        # 2. hover材质（蓝色，半透明）
+        # 2. hover material: blue and semi-transparent.
         hover_mat = Material()
-        hover_mat.setAmbient(Vec4(0.0, 0.0, 0.8, 0.7))  # 环境光反射（alpha=0.7 半透明）
-        hover_mat.setDiffuse(Vec4(0.0, 0.0, 0.8, 0.7))  # 漫反射（alpha=0.7 半透明）
-        hover_mat.setSpecular(Vec4(0.2, 0.2, 0.8, 0.7)) # 高光（alpha=0.7 半透明）
+        hover_mat.setAmbient(Vec4(0.0, 0.0, 0.8, 0.7))  # Ambient reflection, alpha=0.7 for semi-transparency.
+        hover_mat.setDiffuse(Vec4(0.0, 0.0, 0.8, 0.7))  # Diffuse reflection, alpha=0.7 for semi-transparency.
+        hover_mat.setSpecular(Vec4(0.2, 0.2, 0.8, 0.7)) # Specular highlight, alpha=0.7 for semi-transparency.
         hover_mat.setShininess(10.0)
         material_cache["hover"] = hover_mat
         
-        # 3. grabbed材质（红色，高亮）
+        # 3. grabbed material: red and emphasized.
         grabbed_mat = Material()
-        grabbed_mat.setAmbient(Vec4(0.8, 0.0, 0.0, 0.9))  # 环境光反射（alpha=0.9 略微透明）
-        grabbed_mat.setDiffuse(Vec4(0.8, 0.0, 0.0, 0.9))  # 漫反射（alpha=0.9 略微透明）
-        grabbed_mat.setSpecular(Vec4(0.8, 0.2, 0.2, 0.9)) # 高光（alpha=0.9 略微透明）
+        grabbed_mat.setAmbient(Vec4(0.8, 0.0, 0.0, 0.9))  # Ambient reflection, alpha=0.9 for slight transparency.
+        grabbed_mat.setDiffuse(Vec4(0.8, 0.0, 0.0, 0.9))  # Diffuse reflection, alpha=0.9 for slight transparency.
+        grabbed_mat.setSpecular(Vec4(0.8, 0.2, 0.2, 0.9)) # Specular highlight, alpha=0.9 for slight transparency.
         grabbed_mat.setShininess(15.0)
         material_cache["grabbed"] = grabbed_mat
         
         return material_cache
     
     def start(self) -> None:
-        """启动模块：初始化基础环境，状态→RUNNING/DEGRADED"""
-        if self._status == LIFECYCLE_STOPPED:
-            logger.warning("Module already stopped, cannot restart")
-            return
+        """Start the module and initialize the environment into RUNNING or DEGRADED."""
+        if self._status == LIFECYCLE_RUNNING:
+            return None
+        
+        self._status = LIFECYCLE_INITIALIZING
+        self._reset_runtime_state()
+        self._errors = []
+        self._metrics = RenderingMetrics()
+        self._window_adapter = self._window_adapter_factory()
         
         try:
             # Initialize window/camera/lights
@@ -184,7 +206,6 @@ class AeroRenderingService(RenderOutputPort):
             self._scene_root.reparentTo(self._window_adapter.get_base().render)
             # Switch state to RUNNING
             self._status = LIFECYCLE_RUNNING
-            self._errors.clear()
             logger.info("Rendering module started successfully, state switched to RUNNING")
         except Exception as e:
             # Initialization failed → DEGRADED
@@ -196,42 +217,40 @@ class AeroRenderingService(RenderOutputPort):
                 hint="Check if Panda3D is properly installed and your system meets the requirements.",
                 details={"error": str(e)}
             )
-            error["timestamp"] = int(time.time() * 1000)
-            self._errors.append(error)
+            self._record_error(error)
             logger.error(f"Module startup failed: {error['message']} (code: {error['code']})")
             raise RuntimeError(f"Module startup failed: {error['message']} (code: {error['code']})") from e
     
     def push(self, command: SceneCommand) -> None:
-        """推送命令：核心入口，包含完整容错处理"""
-        # 0. 基础容错：捕获所有格式错误/类型错误
+        """Push a command through the main entry point with fault-tolerant handling."""
         try:
-            # 0.1 校验命令基本结构（字段存在性）
-            self._validate_command_structure(command)
-            
-            # 0.2 Status check
+            self._metrics.commands_seen += 1
+
+            if not self._validate_command(command):
+                self._metrics.rejected_commands += 1
+                if self._status == LIFECYCLE_RUNNING:
+                    self._status = LIFECYCLE_DEGRADED
+                return
+
             if self._status in [LIFECYCLE_INITIALIZING, LIFECYCLE_STOPPED]:
                 logger.warning(f"Module in {self._status} state, ignoring command (ID: {command.command_id}")
                 return
             
-            # 0.3 Record last command timestamp
             self._last_command_ts = command.timestamp_ms
             
-            # 0.4 DEGRADED state: record only, do not execute
             if self._status == LIFECYCLE_DEGRADED:
                 logger.info(f"Module DEGRADED, recording command but not executing (ID: {command.command_id}")
                 return
             
-            # 0.5 During reset: queue command
             if self._is_resetting:
                 self._pending_commands.append(command)
                 logger.info(f"During reset, queuing command (ID: {command.command_id}), will execute after reset completes")
                 return
             
-            # 1. 命令有效性校验（去重+过时帧）
             if not self._validate_command_effectiveness(command):
                 return
             
-            # 2. 按命令类型处理
+            # 2. Dispatch by command type.
             command_type = command.command_type
             if command_type == "init_scene":
                 self._handle_init_scene(command)
@@ -242,12 +261,13 @@ class AeroRenderingService(RenderOutputPort):
             elif command_type == "reset_interaction":
                 self._handle_reset_interaction(command)
             elif command_type == "heartbeat":
+                self._metrics.heartbeats_received += 1
+                self._metrics.commands_applied += 1
                 logger.info(f"Received heartbeat command, module state: {self._status}")
             else:
                 logger.warning(f"Unknown command type: {command_type} (ID: {command.command_id}), ignoring")
             
         except Exception as e:
-            # 容错核心：仅记录错误，不崩溃
             error = error_entry(
                 "rendering.command.validate.failed",
                 "Command validation failed",
@@ -255,9 +275,7 @@ class AeroRenderingService(RenderOutputPort):
                 hint="Ensure the command has all required fields and correct types.",
                 details={"error": str(e), "command_id": getattr(command, "command_id", "unknown")}
             )
-            error["timestamp"] = int(time.time() * 1000)
-            self._errors.append(error)
-            # Non-fatal error → DEGRADED, do not terminate program
+            self._record_error(error)
             details_msg = error.get("details") or error.get("message") or str(e)
             if self._status == LIFECYCLE_RUNNING:
                 self._status = LIFECYCLE_DEGRADED
@@ -266,12 +284,22 @@ class AeroRenderingService(RenderOutputPort):
                 logger.warning(f"Command processing failed: {details_msg}")
     
     def health(self) -> Dict[str, Any]:
-        """返回结构化健康状态（含日志相关信息）"""
+        """Return structured health information, including logging-related state."""
         return build_health(
             component="rendering",
             lifecycle_state=self._status,
             errors=self._errors,
             stats={
+                "commands_seen": self._metrics.commands_seen,
+                "commands_applied": self._metrics.commands_applied,
+                "duplicate_commands": self._metrics.duplicate_commands,
+                "stale_commands": self._metrics.stale_commands,
+                "rejected_commands": self._metrics.rejected_commands,
+                "resets_processed": self._metrics.resets_processed,
+                "pose_updates": self._metrics.pose_updates,
+                "state_updates": self._metrics.state_updates,
+                "init_scene_commands": self._metrics.init_scene_commands,
+                "heartbeats_received": self._metrics.heartbeats_received,
                 "last_command_ts": self._last_command_ts,
                 "window_initialized": self._window_adapter.is_initialized(),
                 "executed_command_count": len(self._executed_command_ids),
@@ -281,10 +309,10 @@ class AeroRenderingService(RenderOutputPort):
         )
     
     def stop(self) -> None:
-        """停止模块：释放所有资源，状态→STOPPED"""
+        """Stop the module, release resources, and switch to STOPPED."""
         if self._status == LIFECYCLE_STOPPED:
             logger.info("Module already stopped, no need for repeated operation")
-            return
+            return None
         
         # Stop task loop, release window
         if self._window_adapter.is_initialized():
@@ -293,19 +321,16 @@ class AeroRenderingService(RenderOutputPort):
             base.win.close()
             base.destroy()
         
-        # Clear caches
-        self._object_cache.clear()
-        self._object_initial_states.clear()
-        self._executed_command_ids.clear()
-        self._pending_commands.clear()
-        # Switch state
+        self._window_adapter = self._window_adapter_factory()
+        self._reset_runtime_state()
         self._status = LIFECYCLE_STOPPED
         logger.info("Rendering module stopped, all resources released")
+        return None
     
     def _handle_set_object_pose(self, command: SceneCommand) -> None:
-        """处理set_object_pose命令"""
+        """Handle a set_object_pose command."""
         try:
-            # 1. 解析命令参数
+            # 1. Parse command parameters.
             object_id = command.object_id
             payload = command.payload
             
@@ -362,7 +387,7 @@ class AeroRenderingService(RenderOutputPort):
                 logger.warning(f"set_object_pose command format error: hpr must be 3-dimensional with numeric values (ID: {command.command_id}")
                 return
             
-            # 5. Invalid object_id handling
+            # 5. Handle invalid object_id values.
             if object_id not in self._object_cache:
                 error = error_entry(
                     "rendering.object.not_found",
@@ -371,19 +396,20 @@ class AeroRenderingService(RenderOutputPort):
                     hint="Ensure the object ID exists in the scene.",
                     details={"object_id": object_id, "command_id": command.command_id}
                 )
-                error["timestamp"] = int(time.time() * 1000)
-                self._errors.append(error)
+                self._record_error(error)
                 logger.warning(f"{error['message']}: {error['details']}")
                 return
             
-            # 6. 坐标范围校验+自动裁剪（world_norm [-1.0,1.0]）
+            # 6. Validate coordinate ranges and clip to world_norm [-1.0, 1.0].
             clipped_pos = self._clip_coordinate(pos_float)
-            clipped_hpr = self._clip_coordinate(hpr_float, rotation=True)  # 旋转无范围限制，仅校验类型
+            clipped_hpr = self._clip_coordinate(hpr_float, rotation=True)  # Rotation is type-checked only and not range-limited.
             
-            # 7. 更新物体姿态（仅RUNNING状态执行）
+            # 7. Update the object transform.
             obj_np = self._object_cache[object_id]
             obj_np.setPos(*clipped_pos)
             obj_np.setHpr(*clipped_hpr)
+            self._metrics.pose_updates += 1
+            self._metrics.commands_applied += 1
             
             # 8. Logging
             if tuple(clipped_pos) != tuple(pos_float):
@@ -395,18 +421,25 @@ class AeroRenderingService(RenderOutputPort):
                     hint="Ensure coordinates are within the world_norm range [-1.0, 1.0].",
                     details={"object_id": object_id, "original_coordinate": pos_float, "clipped_coordinate": clipped_pos}
                 )
-                error["timestamp"] = int(time.time() * 1000)
-                self._errors.append(error)
+                self._record_error(error)
             logger.info(f"Successfully updated object pose: ID={object_id}, position={clipped_pos}, rotation={clipped_hpr} (ID: {command.command_id}")
             
         except Exception as e:
             logger.error(f"set_object_pose processing failed (ID: {command.command_id}): {str(e)}")
-            # 仅记录错误，不重新抛出异常，确保模块继续运行
+            self._record_error(
+                error_entry(
+                    "rendering.set_object_pose.failed",
+                    "Failed to update object pose",
+                    recoverable=True,
+                    hint="Check object existence and pose payload structure.",
+                    details={"command_id": command.command_id, "error": str(e)},
+                )
+            )
     
     def _handle_set_object_state(self, command: SceneCommand) -> None:
-        """处理set_object_state命令"""
+        """Handle a set_object_state command."""
         try:
-            # 1. 解析命令参数
+            # 1. Parse command parameters.
             object_id = command.object_id
             payload = command.payload
             state = payload.get("interaction_state", "idle")
@@ -426,8 +459,7 @@ class AeroRenderingService(RenderOutputPort):
                     hint="Ensure the object ID exists in the scene.",
                     details={"object_id": object_id, "command_id": command.command_id}
                 )
-                error["timestamp"] = int(time.time() * 1000)
-                self._errors.append(error)
+                self._record_error(error)
                 logger.warning(f"{error['message']}: {error['details']}")
                 return
             
@@ -435,19 +467,31 @@ class AeroRenderingService(RenderOutputPort):
             obj_np = self._object_cache[object_id]
             mat = self._material_cache[state]
             obj_np.setMaterial(mat, 1)  # 1=force replace material
+            self._metrics.state_updates += 1
+            self._metrics.commands_applied += 1
             
             # 5. Logging
             logger.info(f"Successfully updated object state: ID={object_id}, interaction_state={state} (command ID: {command.command_id}")
             
         except Exception as e:
             logger.error(f"set_object_state processing failed (command ID: {command.command_id}): {str(e)}")
-            # 仅记录错误，不重新抛出异常，确保模块继续运行
+            self._record_error(
+                error_entry(
+                    "rendering.set_object_state.failed",
+                    "Failed to update object state",
+                    recoverable=True,
+                    hint="Check object existence and interaction_state payload structure.",
+                    details={"command_id": command.command_id, "error": str(e)},
+                )
+            )
     
     def _handle_reset_interaction(self, command: SceneCommand) -> None:
-        """处理reset_interaction命令"""
+        """Handle a reset_interaction command."""
         try:
             # 1. Mark as resetting to prevent concurrency issues
             self._is_resetting = True
+            self._metrics.resets_processed += 1
+            self._metrics.commands_applied += 1
             logger.info(f"Starting interaction state reset (command ID: {command.command_id}")
             
             # 2. No initialized scene handling
@@ -490,11 +534,21 @@ class AeroRenderingService(RenderOutputPort):
         except Exception as e:
             logger.error(f"reset_interaction processing failed (command ID: {command.command_id}): {str(e)}")
             self._is_resetting = False
-            # 仅记录错误，不重新抛出异常，确保模块继续运行
+            self._record_error(
+                error_entry(
+                    "rendering.reset_interaction.failed",
+                    "Failed to reset interaction state",
+                    recoverable=True,
+                    hint="Check object cache integrity before resetting scene state.",
+                    details={"command_id": command.command_id, "error": str(e)},
+                )
+            )
     
     def _handle_init_scene(self, command: SceneCommand) -> None:
-        """处理init_scene命令"""
+        """Handle an init_scene command."""
         try:
+            self._metrics.init_scene_commands += 1
+            self._metrics.commands_applied += 1
             # Reset scene
             if self._scene_root is not None and not self._scene_root.isEmpty():
                 self._window_adapter.reset_scene(self._scene_root)
@@ -575,13 +629,13 @@ class AeroRenderingService(RenderOutputPort):
                 cube_np = self._scene_root.attachNewNode(object_id)
                 cube_model.reparentTo(cube_np)
                 
-                # Set initial state: pos, hpr, state=idle
+                # Set the initial pose and interaction state.
                 cube_np.setPos(*init_pos)
                 cube_np.setHpr(*init_hpr)
                 cube_np.setMaterial(self._material_cache["idle"], 1)
-                cube_np.setScale(0.2)  # fit world_norm
+                cube_np.setScale(0.2)  # Fit within world_norm.
                 
-                # Cache object and initial state
+                # Cache the object and its initial state.
                 self._object_cache[object_id] = cube_np
                 self._object_initial_states[object_id] = ObjectInitialState(pos=init_pos, hpr=init_hpr)
                 
@@ -593,84 +647,88 @@ class AeroRenderingService(RenderOutputPort):
             
         except Exception as e:
             logger.error(f"init_scene processing failed (command ID: {command.command_id}): {str(e)}")
-            # 仅记录错误，不重新抛出异常，确保模块继续运行
+            self._record_error(
+                error_entry(
+                    "rendering.init_scene.failed",
+                    "Failed to initialize scene objects",
+                    recoverable=True,
+                    hint="Check model loading and init_scene payload structure.",
+                    details={"command_id": command.command_id, "error": str(e)},
+                )
+            )
     
     def _validate_command_effectiveness(self, command: SceneCommand) -> bool:
-        """命令有效性校验：去重+过时帧处理"""
-        command_id = command.command_id
-        frame_id = command.frame_id
-        
-        # 1. Deduplication check: ignore duplicate command_id
-        if command_id in self._executed_command_ids:
-            logger.warning(f"Command ID {command_id} already executed, ignoring (deduplication logic)")
+        """Validate command effectiveness with deduplication and stale-frame checks."""
+        frame_status = classify_frame(self._latest_frame_id, command.frame_id)
+        if command.command_id in self._executed_command_ids or frame_status == "duplicate":
+            self._metrics.duplicate_commands += 1
+            self._record_error(
+                error_entry(
+                    "rendering.command.duplicate",
+                    "Ignoring duplicate scene command",
+                    recoverable=True,
+                    hint="Emit each scene command once per frame.",
+                    details={"command_id": command.command_id, "frame_id": command.frame_id},
+                )
+            )
+            logger.warning(f"Command ID {command.command_id} already executed, ignoring (deduplication logic)")
             return False
-        
-        # 2. Outdated frame check
-        if self._latest_frame_id is not None and frame_id < self._latest_frame_id:
-            logger.warning(f"Command ID {command_id} frame_id={frame_id} outdated (latest={self._latest_frame_id}), ignoring")
+
+        if frame_status == "stale":
+            self._metrics.stale_commands += 1
+            self._record_error(
+                error_entry(
+                    "rendering.command.stale",
+                    "Ignoring stale scene command",
+                    recoverable=True,
+                    hint="Do not replay older scene command frames into the live renderer.",
+                    details={"command_id": command.command_id, "frame_id": command.frame_id, "last_frame_id": self._latest_frame_id},
+                )
+            )
+            logger.warning(f"Command ID {command.command_id} frame_id={command.frame_id} outdated (latest={self._latest_frame_id}), ignoring")
             return False
-        
-        # 3. Mark as executed, update latest frame_id
-        self._executed_command_ids.add(command_id)
-        if self._latest_frame_id is None or frame_id > self._latest_frame_id:
-            self._latest_frame_id = frame_id
-            logger.debug(f"Updated latest frame_id: {self._latest_frame_id} (command ID: {command_id})")
+
+        self._executed_command_ids.add(command.command_id)
+        self._latest_frame_id = command.frame_id
+        logger.debug(f"Updated latest frame_id: {self._latest_frame_id} (command ID: {command.command_id})")
         
         return True
-    
-    def _validate_command_structure(self, command: SceneCommand) -> None:
-        """命令结构校验（容错核心）"""
-        # 1. Check required fields
-        required_fields = ["command_id", "frame_id", "timestamp_ms", "command_type", "object_id", "payload"]
-        for field in required_fields:
-            if not hasattr(command, field):
-                raise ValueError(f"Command missing required field: {field}")
-        
-        # 2. Validate field types (fault tolerance: type error conversion)
-        try:
-            # command_id must be string
-            if not isinstance(command.command_id, str):
-                command.command_id = str(command.command_id)
-            # frame_id must be integer
-            if not isinstance(command.frame_id, int):
-                command.frame_id = int(command.frame_id)
-            # timestamp_ms must be integer
-            if not isinstance(command.timestamp_ms, int):
-                command.timestamp_ms = int(command.timestamp_ms)
-            # command_type must be string
-            if not isinstance(command.command_type, str):
-                command.command_type = str(command.command_type)
-            # object_id must be string
-            if not isinstance(command.object_id, str):
-                command.object_id = str(command.object_id)
-            # payload must be dictionary
-            if not isinstance(command.payload, dict):
-                command.payload = {}
-        except Exception as e:
-            raise ValueError(f"Command field type error: {str(e)}")
-        
-        # 3. Ignore unknown payload fields (forward compatibility)
-        payload_keys = command.payload.keys()
-        valid_payload_keys = {
-            "init_scene": ["objects"],
-            "set_object_pose": ["coordinate_space", "position", "hpr"],
-            "set_object_state": ["interaction_state"],
-            "reset_interaction": [],
-            "heartbeat": ["interaction_state"]
-        }
-        current_cmd_type = command.command_type
-        if current_cmd_type in valid_payload_keys:
-            valid_keys = valid_payload_keys[current_cmd_type]
-            unknown_keys = [k for k in payload_keys if k not in valid_keys]
-            if unknown_keys:
-                logger.info(f"Command ID {command.command_id} contains unknown payload fields: {unknown_keys}, ignored (forward compatibility)")
+
+    def _validate_command(self, command: SceneCommand) -> bool:
+        errors = validate_scene_command(command, expected_version=self._expected_contract_version)
+        if errors:
+            for error in errors:
+                self._record_error(error)
+            return False
+
+        unknown_keys = [key for key in command.payload if key not in VALID_PAYLOAD_KEYS.get(command.command_type, set())]
+        if unknown_keys:
+            logger.info(f"Command ID {command.command_id} contains unknown payload fields: {unknown_keys}, ignored (forward compatibility)")
+
+        return True
+
+    def _reset_runtime_state(self) -> None:
+        self._last_command_ts = None
+        self._scene_root = None
+        self._object_cache.clear()
+        self._object_initial_states.clear()
+        self._executed_command_ids.clear()
+        self._latest_frame_id = None
+        self._pending_commands.clear()
+        self._is_resetting = False
+
+    def _record_error(self, error: Dict[str, Any]) -> None:
+        payload = dict(error)
+        payload.setdefault("timestamp", int(time.time() * 1000))
+        self._errors.append(payload)
+        self._errors = self._errors[-MAX_ERROR_HISTORY:]
     
     def _clip_coordinate(self, coord: list, rotation: bool = False) -> list:
-        """坐标裁剪：超出world_norm[-1.0,1.0]自动裁剪"""
+        """Clip coordinates automatically when they exceed world_norm [-1.0, 1.0]."""
         if rotation:
-            # 旋转参数仅转换为float，不裁剪
+            # Rotation values are converted to float but not clipped.
             return [float(v) for v in coord]
-        # 位置参数裁剪到[-1.0,1.0]
+        # Position values are clipped to [-1.0, 1.0].
         clipped = []
         for v in coord:
             val = float(v)
