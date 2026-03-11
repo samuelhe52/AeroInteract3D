@@ -20,7 +20,6 @@ This creates/updates `.venv` and installs:
 
 - runtime dependencies from `[project.dependencies]`
 - development tooling from `dev`
-- rendering stack dependencies from `rendering`
 
 ## Daily workflow
 
