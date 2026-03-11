@@ -2,6 +2,8 @@
 
 Purpose: detect hand landmarks and emit an ordered stream of contract-compliant `GesturePacket` messages for the bridge.
 
+Implementation workflow notes live in [workflow.md](workflow.md). The dedicated live preview debug entrypoint lives in src/gesture/debug/live_preview.py.
+
 ## Deliverable Contract
 
 Gesture module MUST produce `GesturePacket` exactly as defined in `src/contract_stub.md`.
@@ -11,8 +13,7 @@ Gesture module MUST NOT define a local `GesturePacket` dataclass copy.
 ## Implementation Ownership
 
 - Gesture maintainers MUST implement a concrete service class inheriting `GestureInputPort` from `src/ports.py`.
-- Use `GestureInputServiceStub` in `src/gesture/service_stub.py` as the initial scaffold and replace no-op behavior incrementally.
-- Application wiring in `main.py` imports this stub today so integration can proceed before full implementation.
+- Use `GestureInputServiceImpl` in `src/gesture/service_impl.py` as the concrete gesture implementation.
 
 ## Functional Requirements
 
