@@ -12,10 +12,18 @@ import cv2
 from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import (
     GestureRuntimeConfig,
+    create_capture,
     create_hand_detector,
     default_hand_model_path,
-    distance,
     resolve_hand_model_path,
+)
+from src.gesture.temporal import (
+    GestureFrameAnalysis,
+    GestureTemporalReducer,
+    PINCH_CONFIRM_FRAMES,
+    RELEASE_CONFIRM_FRAMES,
+    SMOOTHING_ALPHA,
+    TRACKING_TEMPORARY_LOSS_FRAMES,
 )
 from src.ports import GestureInputPort
 from src.utils.contracts import EXPECTED_CONTRACT_VERSION
@@ -27,14 +35,6 @@ from src.utils.runtime import (
     build_health,
     error_entry,
 )
-
-TRACKING_TEMPORARY_LOSS_FRAMES = 2
-PINCH_ENTER_THRESHOLD = 0.10
-PINCH_HOLD_THRESHOLD = 0.06
-PINCH_RELEASE_THRESHOLD = 0.12
-PINCH_CONFIRM_FRAMES = 2
-RELEASE_CONFIRM_FRAMES = 2
-SMOOTHING_ALPHA = 0.65
 FRAME_SUMMARY_INTERVAL = 30
 
 
@@ -75,6 +75,9 @@ class GestureServiceImpl(GestureInputPort):
     def __init__(
         self,
         camera_index: int = 0,
+        target_fps: float | None = 60.0,
+        frame_width: int | None = 640,
+        frame_height: int | None = 480,
         hand_model: str | None = None,
         min_detection_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5,
@@ -82,6 +85,9 @@ class GestureServiceImpl(GestureInputPort):
     ) -> None:
         self._repo_root = Path(__file__).resolve().parents[2]
         self._camera_index = camera_index
+        self._target_fps = target_fps
+        self._frame_width = frame_width
+        self._frame_height = frame_height
         self._hand_model = self._resolve_hand_model(hand_model)
         self._min_detection_confidence = min_detection_confidence
         self._min_tracking_confidence = min_tracking_confidence
@@ -94,6 +100,7 @@ class GestureServiceImpl(GestureInputPort):
         self._hand_id = "hand-0"
         self._errors: list[dict[str, Any]] = []
         self._metrics = GestureMetrics()
+        self._analyzer = GestureTemporalReducer()
 
         self._frame_id = 0
         self._last_timestamp_ms = 0
@@ -118,6 +125,8 @@ class GestureServiceImpl(GestureInputPort):
 
         logger.info(
             f"Starting gesture module: camera_index={self._camera_index}, "
+            f"target_fps={self._target_fps}, "
+            f"frame_width={self._frame_width}, frame_height={self._frame_height}, "
             f"hand_model={self._hand_model}, "
             f"min_detection_confidence={self._min_detection_confidence:.2f}, "
             f"min_tracking_confidence={self._min_tracking_confidence:.2f}, "
@@ -171,33 +180,33 @@ class GestureServiceImpl(GestureInputPort):
             hand_data = self._detect_hand(raw_frame)
             previous_tracking_state = self._tracking_state
             previous_pinch_state = self._pinch_state
+            raw_confidence = 0.0 if hand_data is None else float(hand_data.get("raw_confidence", 0.0))
+
+            analysis = self._analyzer.process(
+                timestamp_ms=timestamp_ms,
+                index_tip=None if hand_data is None else hand_data["index_tip"],
+                thumb_tip=None if hand_data is None else hand_data["thumb_tip"],
+                palm_center=None if hand_data is None else hand_data["palm_center"],
+                raw_confidence=raw_confidence,
+            )
+            self._sync_analysis_state(analysis)
 
             if hand_data is None:
-                self._tracking_loss_streak += 1
-                tracking_state = self._compute_tracking_state(None)
-                pinch_state = self._compute_pinch_state(None, None)
-                confidence = self._compute_confidence(None, tracking_state, pinch_state)
-                velocity = Vec3(0.0, 0.0, 0.0)
-
-                self._tracking_state = tracking_state
-                self._pinch_state = pinch_state
-                self._confidence = confidence
-                self._last_velocity = velocity
-
                 packet = self._build_packet(
-                    timestamp_ms=timestamp_ms,
-                    tracking_state=tracking_state,
-                    pinch_state=pinch_state,
-                    confidence=confidence,
-                    index_tip=self._last_index_tip,
-                    thumb_tip=self._last_thumb_tip,
-                    palm_center=self._last_palm_center,
-                    velocity=velocity,
+                    timestamp_ms=analysis.timestamp_ms,
+                    tracking_state=analysis.tracking_state,
+                    pinch_state=analysis.pinch_state,
+                    confidence=analysis.confidence,
+                    index_tip=analysis.index_tip,
+                    thumb_tip=analysis.thumb_tip,
+                    palm_center=analysis.palm_center,
+                    velocity=analysis.velocity,
+                    smoothing_hint=analysis.smoothing_hint,
                     debug={
                         "backend": self._detector_backend,
                         "tick": raw_frame.get("tick"),
                         "has_hand": False,
-                        "tracking_loss_streak": self._tracking_loss_streak,
+                        "tracking_loss_streak": analysis.tracking_loss_streak,
                     },
                 )
                 self.lifecycle_state = LIFECYCLE_RUNNING
@@ -205,48 +214,26 @@ class GestureServiceImpl(GestureInputPort):
                 self._metrics.empty_packets += 1
                 self._log_state_changes(
                     previous_tracking_state=previous_tracking_state,
-                    tracking_state=tracking_state,
+                    tracking_state=analysis.tracking_state,
                     previous_pinch_state=previous_pinch_state,
-                    pinch_state=pinch_state,
-                    confidence=confidence,
-                    timestamp_ms=timestamp_ms,
+                    pinch_state=analysis.pinch_state,
+                    confidence=analysis.confidence,
+                    timestamp_ms=analysis.timestamp_ms,
                     hand_detected=False,
                 )
                 self._log_frame_summary(packet, hand_detected=False)
                 return packet
 
-            self._tracking_loss_streak = 0
-
-            index_tip = self._normalize_vec3(hand_data["index_tip"])
-            thumb_tip = self._normalize_vec3(hand_data["thumb_tip"])
-            palm_center = self._normalize_vec3(hand_data["palm_center"])
-
-            tracking_state = self._compute_tracking_state(hand_data)
-            pinch_state = self._compute_pinch_state(index_tip, thumb_tip)
-            confidence = self._compute_confidence(hand_data, tracking_state, pinch_state)
-
-            smoothed_index_tip = self._smooth_vec3(index_tip, self._last_index_tip)
-            smoothed_thumb_tip = self._smooth_vec3(thumb_tip, self._last_thumb_tip)
-            smoothed_palm_center = self._smooth_vec3(palm_center, self._last_palm_center)
-            velocity = self._compute_velocity(smoothed_palm_center, self._last_palm_center)
-
-            self._last_index_tip = smoothed_index_tip
-            self._last_thumb_tip = smoothed_thumb_tip
-            self._last_palm_center = smoothed_palm_center
-            self._last_velocity = velocity
-            self._tracking_state = tracking_state
-            self._pinch_state = pinch_state
-            self._confidence = confidence
-
             packet = self._build_packet(
-                timestamp_ms=timestamp_ms,
-                tracking_state=tracking_state,
-                pinch_state=pinch_state,
-                confidence=confidence,
-                index_tip=smoothed_index_tip,
-                thumb_tip=smoothed_thumb_tip,
-                palm_center=smoothed_palm_center,
-                velocity=velocity,
+                timestamp_ms=analysis.timestamp_ms,
+                tracking_state=analysis.tracking_state,
+                pinch_state=analysis.pinch_state,
+                confidence=analysis.confidence,
+                index_tip=analysis.index_tip,
+                thumb_tip=analysis.thumb_tip,
+                palm_center=analysis.palm_center,
+                velocity=analysis.velocity,
+                smoothing_hint=analysis.smoothing_hint,
                 debug={
                     "backend": self._detector_backend,
                     "tick": raw_frame.get("tick"),
@@ -259,11 +246,11 @@ class GestureServiceImpl(GestureInputPort):
             self._metrics.tracked_packets += 1
             self._log_state_changes(
                 previous_tracking_state=previous_tracking_state,
-                tracking_state=tracking_state,
+                tracking_state=analysis.tracking_state,
                 previous_pinch_state=previous_pinch_state,
-                pinch_state=pinch_state,
-                confidence=confidence,
-                timestamp_ms=timestamp_ms,
+                pinch_state=analysis.pinch_state,
+                confidence=analysis.confidence,
+                timestamp_ms=analysis.timestamp_ms,
                 hand_detected=True,
             )
             self._log_frame_summary(packet, hand_detected=True)
@@ -301,6 +288,9 @@ class GestureServiceImpl(GestureInputPort):
                 "started": self._started,
                 "frame_id": self._frame_id,
                 "hand_id": self._hand_id,
+                "target_fps": self._target_fps,
+                "frame_width": self._frame_width,
+                "frame_height": self._frame_height,
                 "tracking_state": self._tracking_state,
                 "pinch_state": self._pinch_state,
                 "confidence": self._confidence,
@@ -367,6 +357,7 @@ class GestureServiceImpl(GestureInputPort):
         self._last_thumb_tip = Vec3(0.0, 0.0, 0.0)
         self._last_palm_center = Vec3(0.0, 0.0, 0.0)
         self._last_velocity = Vec3(0.0, 0.0, 0.0)
+        self._analyzer.reset()
 
     def _setup_backend(self) -> None:
         if self._hand_model is None:
@@ -378,9 +369,16 @@ class GestureServiceImpl(GestureInputPort):
 
         logger.info(
             f"Opening gesture backend resources: camera_index={self._camera_index}, "
+            f"target_fps={self._target_fps}, "
+            f"frame_width={self._frame_width}, frame_height={self._frame_height}, "
             f"hand_model={self._hand_model}"
         )
-        capture = cv2.VideoCapture(self._camera_index)
+        capture = create_capture(
+            camera_index=self._camera_index,
+            target_fps=self._target_fps,
+            frame_width=self._frame_width,
+            frame_height=self._frame_height,
+        )
         if not capture.isOpened():
             capture.release()
             logger.error(f"Unable to open camera source: {self._camera_index}")
@@ -391,7 +389,9 @@ class GestureServiceImpl(GestureInputPort):
             camera_index=self._camera_index,
             hand_model=self._hand_model,
             output_dir=self._repo_root / "report" / "live",
-            target_fps=None,
+            target_fps=self._target_fps,
+            frame_width=self._frame_width,
+            frame_height=self._frame_height,
             max_frames=0,
             min_detection_confidence=self._min_detection_confidence,
             min_tracking_confidence=self._min_tracking_confidence,
@@ -478,96 +478,16 @@ class GestureServiceImpl(GestureInputPort):
             "source": self._detector_backend,
         }
 
-    def _normalize_vec3(self, value: Vec3) -> Vec3:
-        return Vec3(
-            x=max(-1.0, min(1.0, float(value.x))),
-            y=max(-1.0, min(1.0, float(value.y))),
-            z=max(-1.0, min(1.0, float(value.z))),
-        )
-
-    def _compute_tracking_state(self, hand_data: dict[str, Any] | None) -> str:
-        if hand_data is not None:
-            return "tracked"
-        if self._tracking_loss_streak <= TRACKING_TEMPORARY_LOSS_FRAMES:
-            return "temporarily_lost"
-        return "not_detected"
-
-    def _compute_pinch_state(self, index_tip: Vec3 | None, thumb_tip: Vec3 | None) -> str:
-        if index_tip is None or thumb_tip is None:
-            self._pinch_candidate_streak = 0
-            if self._pinch_state in {"pinched", "pinch_candidate", "release_candidate"}:
-                self._release_candidate_streak += 1
-                if self._release_candidate_streak <= RELEASE_CONFIRM_FRAMES:
-                    return "release_candidate"
-            self._release_candidate_streak = 0
-            self._last_pinch_distance = 0.0
-            return "open"
-
-        pinch_distance = distance(index_tip, thumb_tip)
-        self._last_pinch_distance = pinch_distance
-
-        if pinch_distance <= PINCH_HOLD_THRESHOLD:
-            self._pinch_candidate_streak += 1
-            self._release_candidate_streak = 0
-            if self._pinch_candidate_streak >= PINCH_CONFIRM_FRAMES:
-                return "pinched"
-            return "pinch_candidate"
-
-        if pinch_distance <= PINCH_ENTER_THRESHOLD:
-            self._pinch_candidate_streak += 1
-            self._release_candidate_streak = 0
-            if self._pinch_state == "pinched":
-                return "pinched"
-            return "pinch_candidate"
-
-        self._pinch_candidate_streak = 0
-        if self._pinch_state in {"pinched", "pinch_candidate", "release_candidate"} and pinch_distance >= PINCH_RELEASE_THRESHOLD:
-            self._release_candidate_streak += 1
-            if self._release_candidate_streak <= RELEASE_CONFIRM_FRAMES:
-                return "release_candidate"
-            self._release_candidate_streak = 0
-            return "open"
-
-        self._release_candidate_streak = 0
-        return "open"
-
-    def _compute_confidence(
-        self,
-        hand_data: dict[str, Any] | None,
-        tracking_state: str,
-        pinch_state: str,
-    ) -> float:
-        if tracking_state == "temporarily_lost":
-            return max(0.05, 0.3 - 0.05 * max(self._tracking_loss_streak - 1, 0))
-        if tracking_state == "not_detected":
-            return 0.0
-
-        assert hand_data is not None
-        raw_confidence = float(hand_data.get("raw_confidence", 0.8))
-        if pinch_state == "pinched":
-            raw_confidence += 0.05
-        elif pinch_state in {"pinch_candidate", "release_candidate"}:
-            raw_confidence -= 0.05
-        return max(0.0, min(1.0, raw_confidence))
-
-    def _smooth_vec3(self, current: Vec3, previous: Vec3) -> Vec3:
-        if self._frame_id == 0:
-            return current
-        alpha = SMOOTHING_ALPHA
-        return Vec3(
-            x=current.x * alpha + previous.x * (1.0 - alpha),
-            y=current.y * alpha + previous.y * (1.0 - alpha),
-            z=current.z * alpha + previous.z * (1.0 - alpha),
-        )
-
-    def _compute_velocity(self, current: Vec3, previous: Vec3) -> Vec3:
-        return self._normalize_vec3(
-            Vec3(
-                x=current.x - previous.x,
-                y=current.y - previous.y,
-                z=current.z - previous.z,
-            )
-        )
+    def _sync_analysis_state(self, analysis: GestureFrameAnalysis) -> None:
+        self._tracking_state = analysis.tracking_state
+        self._pinch_state = analysis.pinch_state
+        self._confidence = analysis.confidence
+        self._tracking_loss_streak = analysis.tracking_loss_streak
+        self._last_pinch_distance = analysis.pinch_distance
+        self._last_index_tip = analysis.index_tip
+        self._last_thumb_tip = analysis.thumb_tip
+        self._last_palm_center = analysis.palm_center
+        self._last_velocity = analysis.velocity
 
     def _build_packet(
         self,
@@ -579,6 +499,7 @@ class GestureServiceImpl(GestureInputPort):
         thumb_tip: Vec3,
         palm_center: Vec3,
         velocity: Vec3,
+        smoothing_hint: dict[str, Any],
         debug: dict[str, Any] | None,
     ) -> GesturePacket:
         self._frame_id += 1
@@ -597,15 +518,13 @@ class GestureServiceImpl(GestureInputPort):
             coordinate_space="camera_norm",
             pinch_distance=self._last_pinch_distance,
             velocity=velocity,
-            smoothing_hint={"method": "linear", "alpha": SMOOTHING_ALPHA},
+            smoothing_hint=smoothing_hint,
             debug=debug,
         )
 
     def _resolve_timestamp_ms(self, raw_frame: dict[str, Any]) -> int:
         raw_timestamp = raw_frame.get("timestamp_ms")
         timestamp_ms = int(raw_timestamp) if raw_timestamp is not None else self._next_timestamp_ms()
-        if timestamp_ms <= self._last_timestamp_ms:
-            timestamp_ms = self._last_timestamp_ms + 1
         if timestamp_ms > self._clock_timestamp_ms:
             self._clock_timestamp_ms = timestamp_ms
         return timestamp_ms

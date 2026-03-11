@@ -51,18 +51,16 @@ Bridge MUST NOT define local dataclass copies of these contract types.
 Required states:
 
 - `idle`
-- `pinch_candidate`
 - `grabbing`
-- `release_candidate`
 
 State transitions MUST be driven only by `pinch_state`, `tracking_state`, and confidence gating from `GesturePacket`.
 
+Bridge SHOULD treat `pinch_state` from gesture as already stabilized interaction intent, rather than reimplementing gesture-side hysteresis.
+
 Required behavior:
 
-- `idle -> pinch_candidate` when pinch intent appears.
-- `pinch_candidate -> grabbing` only after stability criteria is met.
-- `grabbing -> release_candidate` when release intent appears.
-- `release_candidate -> idle` when release is confirmed.
+- `idle -> grabbing` when stable `pinched` input arrives from gesture.
+- `grabbing -> idle` when stable `open` input arrives from gesture.
 - Any state -> `idle` on prolonged `not_detected` or explicit reset signal.
 
 ## Command Emission Rules

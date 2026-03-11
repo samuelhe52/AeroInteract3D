@@ -7,14 +7,11 @@ import cv2
 
 from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import (
-    DEFAULT_PINCH_ENTER_THRESHOLD,
-    DEFAULT_PINCH_HOLD_THRESHOLD,
-    DEFAULT_PINCH_RELEASE_THRESHOLD,
     GestureRuntimeConfig,
     create_hand_detector,
-    distance,
     open_capture,
 )
+from src.gesture.temporal import GestureFrameAnalysis, GestureTemporalReducer
 from src.utils.contracts import EXPECTED_CONTRACT_VERSION
 
 
@@ -24,26 +21,20 @@ LIFECYCLE_DEGRADED = "DEGRADED"
 LIFECYCLE_STOPPED = "STOPPED"
 
 DebugVideoConfig = GestureRuntimeConfig
+FPS_SAMPLE_WINDOW = 10
 
 
 class GestureDebugAnalyzer:
     def __init__(self, config: DebugVideoConfig) -> None:
         self.config = config
         self.lifecycle_state = LIFECYCLE_INITIALIZING
+        self._reducer = GestureTemporalReducer()
         self._frame_id = 0
         self._hand_id = "hand-0"
-        self._tracking_loss_streak = 0
-        self._pinch_candidate_streak = 0
-        self._release_candidate_streak = 0
-        self._tracking_state = "not_detected"
-        self._pinch_state = "open"
-        self._last_timestamp_ms = 0
-        self._last_palm_center = Vec3(0.0, 0.0, 0.0)
-        self._last_index_tip = Vec3(0.0, 0.0, 0.0)
-        self._last_thumb_tip = Vec3(0.0, 0.0, 0.0)
 
     def start(self) -> None:
         self.lifecycle_state = LIFECYCLE_RUNNING
+        self._reducer.reset()
 
     def stop(self) -> None:
         self.lifecycle_state = LIFECYCLE_STOPPED
@@ -54,157 +45,41 @@ class GestureDebugAnalyzer:
         timestamp_ms: int,
         raw_confidence: float,
     ) -> GesturePacket:
-        timestamp_ms = self._normalize_timestamp(timestamp_ms)
-
-        if landmarks is None:
-            self._tracking_loss_streak += 1
-            tracking_state = self._compute_tracking_state(None)
-            pinch_state = self._compute_pinch_state(None, None)
-            confidence = self._compute_confidence(None, tracking_state, pinch_state, raw_confidence)
-            velocity = Vec3(0.0, 0.0, 0.0)
-            packet = self._build_packet(
-                timestamp_ms=timestamp_ms,
-                tracking_state=tracking_state,
-                pinch_state=pinch_state,
-                confidence=confidence,
-                index_tip=self._last_index_tip,
-                thumb_tip=self._last_thumb_tip,
-                palm_center=self._last_palm_center,
-                velocity=velocity,
-                debug={"reason": "no_hand_detected", "tracking_loss_streak": self._tracking_loss_streak},
-            )
-            self._tracking_state = tracking_state
-            self._pinch_state = pinch_state
-            return packet
-
-        self._tracking_loss_streak = 0
-
-        index_tip = landmarks["index_finger_tip"]
-        thumb_tip = landmarks["thumb_tip"]
-        palm_center = landmarks["wrist"]
-
-        tracking_state = self._compute_tracking_state(landmarks)
-        pinch_state = self._compute_pinch_state(index_tip, thumb_tip)
-        confidence = self._compute_confidence(landmarks, tracking_state, pinch_state, raw_confidence)
-        velocity = self._compute_velocity(palm_center, self._last_palm_center)
-
-        self._last_index_tip = index_tip
-        self._last_thumb_tip = thumb_tip
-        self._last_palm_center = palm_center
-        self._tracking_state = tracking_state
-        self._pinch_state = pinch_state
-
-        return self._build_packet(
+        analysis = self._reducer.process(
             timestamp_ms=timestamp_ms,
-            tracking_state=tracking_state,
-            pinch_state=pinch_state,
-            confidence=confidence,
-            index_tip=index_tip,
-            thumb_tip=thumb_tip,
-            palm_center=palm_center,
-            velocity=velocity,
-            debug={"source": "mediapipe", "tracking_loss_streak": self._tracking_loss_streak},
+            index_tip=None if landmarks is None else landmarks["index_finger_tip"],
+            thumb_tip=None if landmarks is None else landmarks["thumb_tip"],
+            palm_center=None if landmarks is None else landmarks["wrist"],
+            raw_confidence=raw_confidence,
         )
 
-    def _normalize_timestamp(self, timestamp_ms: int) -> int:
-        if timestamp_ms <= self._last_timestamp_ms:
-            timestamp_ms = self._last_timestamp_ms + 1
-        self._last_timestamp_ms = timestamp_ms
-        return timestamp_ms
-
-    def _compute_tracking_state(self, landmarks: dict[str, Vec3] | None) -> str:
+        debug = {"source": "mediapipe", "tracking_loss_streak": analysis.tracking_loss_streak}
         if landmarks is None:
-            if self._tracking_loss_streak <= 2:
-                return "temporarily_lost"
-            return "not_detected"
-        return "tracked"
+            debug = {"reason": "no_hand_detected", "tracking_loss_streak": analysis.tracking_loss_streak}
 
-    def _compute_pinch_state(self, index_tip: Vec3 | None, thumb_tip: Vec3 | None) -> str:
-        if index_tip is None or thumb_tip is None:
-            if self._pinch_state in {"pinched", "pinch_candidate", "release_candidate"}:
-                self._release_candidate_streak += 1
-                if self._release_candidate_streak <= 2:
-                    return "release_candidate"
-            self._pinch_candidate_streak = 0
-            self._release_candidate_streak = 0
-            return "open"
-
-        pinch_distance = distance(index_tip, thumb_tip)
-        if pinch_distance <= self.config.pinch_hold_threshold:
-            self._pinch_candidate_streak += 1
-            self._release_candidate_streak = 0
-            if self._pinch_candidate_streak >= 2:
-                return "pinched"
-            return "pinch_candidate"
-
-        if pinch_distance <= self.config.pinch_enter_threshold:
-            self._pinch_candidate_streak += 1
-            self._release_candidate_streak = 0
-            if self._pinch_state == "pinched":
-                return "pinched"
-            return "pinch_candidate"
-
-        self._pinch_candidate_streak = 0
-        if self._pinch_state in {"pinched", "pinch_candidate", "release_candidate"} and pinch_distance >= self.config.release_threshold:
-            self._release_candidate_streak += 1
-            if self._release_candidate_streak <= 2:
-                return "release_candidate"
-            self._release_candidate_streak = 0
-            return "open"
-
-        self._release_candidate_streak = 0
-        return "open"
-
-    def _compute_confidence(
-        self,
-        landmarks: dict[str, Vec3] | None,
-        tracking_state: str,
-        pinch_state: str,
-        raw_confidence: float,
-    ) -> float:
-        if tracking_state != "tracked":
-            if tracking_state == "temporarily_lost":
-                return 0.25
-            return 0.0
-
-        confidence_bonus = 0.05 if pinch_state == "pinched" else 0.0
-        return max(0.0, min(1.0, raw_confidence + confidence_bonus))
-
-    def _compute_velocity(self, current: Vec3, previous: Vec3) -> Vec3:
-        return Vec3(
-            x=current.x - previous.x,
-            y=current.y - previous.y,
-            z=current.z - previous.z,
-        )
+        return self._build_packet(analysis=analysis, debug=debug)
 
     def _build_packet(
         self,
-        timestamp_ms: int,
-        tracking_state: str,
-        pinch_state: str,
-        confidence: float,
-        index_tip: Vec3,
-        thumb_tip: Vec3,
-        palm_center: Vec3,
-        velocity: Vec3,
+        analysis: GestureFrameAnalysis,
         debug: dict[str, Any],
     ) -> GesturePacket:
         self._frame_id += 1
         return GesturePacket(
             contract_version=EXPECTED_CONTRACT_VERSION,
             frame_id=self._frame_id,
-            timestamp_ms=timestamp_ms,
+            timestamp_ms=analysis.timestamp_ms,
             hand_id=self._hand_id,
-            tracking_state=tracking_state,
-            confidence=confidence,
-            pinch_state=pinch_state,
-            index_tip=index_tip,
-            thumb_tip=thumb_tip,
-            palm_center=palm_center,
+            tracking_state=analysis.tracking_state,
+            confidence=analysis.confidence,
+            pinch_state=analysis.pinch_state,
+            index_tip=analysis.index_tip,
+            thumb_tip=analysis.thumb_tip,
+            palm_center=analysis.palm_center,
             coordinate_space="camera_norm",
-            pinch_distance=distance(index_tip, thumb_tip),
-            velocity=velocity,
-            smoothing_hint={"method": "none", "alpha": 1.0},
+            pinch_distance=analysis.pinch_distance,
+            velocity=analysis.velocity,
+            smoothing_hint=analysis.smoothing_hint,
             debug=debug,
         )
 
@@ -222,6 +97,13 @@ def overlay_packet(frame: Any, packet: GesturePacket) -> Any:
     for line in lines:
         cv2.putText(frame, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, pinch_color, 2, cv2.LINE_AA)
         y += 28
+    return frame
+
+
+def overlay_fps(frame: Any, fps: float) -> Any:
+    label = f"fps={fps:.1f}"
+    cv2.putText(frame, label, (20, 178), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 3, cv2.LINE_AA)
+    cv2.putText(frame, label, (20, 178), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 1, cv2.LINE_AA)
     return frame
 
 
@@ -268,7 +150,18 @@ def run_live_preview(config: DebugVideoConfig) -> None:
     try:
         with create_hand_detector(config) as detector:
             frame_index = 0
+            previous_frame_started_at = time.perf_counter()
+            smoothed_fps = 0.0
             while True:
+                frame_started_at = time.perf_counter()
+                frame_elapsed = max(frame_started_at - previous_frame_started_at, 1e-6)
+                instantaneous_fps = 1.0 / frame_elapsed
+                if smoothed_fps == 0.0:
+                    smoothed_fps = instantaneous_fps
+                else:
+                    smoothed_fps += (instantaneous_fps - smoothed_fps) / FPS_SAMPLE_WINDOW
+                previous_frame_started_at = frame_started_at
+
                 ok, frame = capture.read()
                 if not ok:
                     break
@@ -288,6 +181,7 @@ def run_live_preview(config: DebugVideoConfig) -> None:
                     display_frame = cv2.flip(display_frame, 1)
 
                 overlay_packet(display_frame, packet)
+                overlay_fps(display_frame, smoothed_fps)
                 overlay_anchor_points(display_frame, packet, config.mirror, config.draw_coordinates)
 
                 cv2.imshow(config.window_name, display_frame)

@@ -68,6 +68,8 @@ class GestureRuntimeConfig:
     hand_model: str | None
     output_dir: Path | None
     target_fps: float | None
+    frame_width: int | None
+    frame_height: int | None
     max_frames: int
     min_detection_confidence: float
     min_tracking_confidence: float
@@ -78,6 +80,42 @@ class GestureRuntimeConfig:
     pinch_enter_threshold: float = DEFAULT_PINCH_ENTER_THRESHOLD
     pinch_hold_threshold: float = DEFAULT_PINCH_HOLD_THRESHOLD
     release_threshold: float = DEFAULT_PINCH_RELEASE_THRESHOLD
+
+
+def configure_capture(
+    capture: cv2.VideoCapture,
+    *,
+    target_fps: float | None = None,
+    frame_width: int | None = None,
+    frame_height: int | None = None,
+) -> cv2.VideoCapture:
+    if target_fps is not None and target_fps > 0:
+        capture.set(cv2.CAP_PROP_FPS, float(target_fps))
+    if frame_width is not None and frame_width > 0:
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(frame_width))
+    if frame_height is not None and frame_height > 0:
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(frame_height))
+    return capture
+
+
+def create_capture(
+    *,
+    input_video: str | None = None,
+    camera_index: int | None = None,
+    target_fps: float | None = None,
+    frame_width: int | None = None,
+    frame_height: int | None = None,
+) -> cv2.VideoCapture:
+    if input_video is not None:
+        return cv2.VideoCapture(input_video)
+
+    assert camera_index is not None
+    return configure_capture(
+        cv2.VideoCapture(camera_index),
+        target_fps=target_fps,
+        frame_width=frame_width,
+        frame_height=frame_height,
+    )
 
 
 def default_hand_model_path() -> Path:
@@ -245,10 +283,13 @@ def distance(a: Vec3, b: Vec3) -> float:
 
 
 def open_capture(config: GestureRuntimeConfig) -> cv2.VideoCapture:
-    if config.input_video is not None:
-        return cv2.VideoCapture(config.input_video)
-    assert config.camera_index is not None
-    return cv2.VideoCapture(config.camera_index)
+    return create_capture(
+        input_video=config.input_video,
+        camera_index=config.camera_index,
+        target_fps=config.target_fps,
+        frame_width=config.frame_width,
+        frame_height=config.frame_height,
+    )
 
 
 __all__ = [
@@ -258,7 +299,9 @@ __all__ = [
     "DEFAULT_PINCH_RELEASE_THRESHOLD",
     "GestureRuntimeConfig",
     "HAND_MODEL_ENV_VAR",
+    "configure_capture",
     "create_hand_detector",
+    "create_capture",
     "default_hand_model_path",
     "distance",
     "extract_landmarks",

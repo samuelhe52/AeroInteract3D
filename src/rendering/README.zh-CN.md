@@ -17,15 +17,15 @@
 
 ## 交付契约
 
-Rendering 模块必须严格按照 `src/contract_stub.md` 定义消费 `SceneCommand`。
+Rendering 模块必须严格按照 `src/contract.md` 与 `src/contracts.py` 定义消费 `SceneCommand`。
 Rendering 模块必须从 `src/contracts.py` 导入 `SceneCommand`。
 Rendering 模块不得在本地重复定义 `SceneCommand` 数据类。
 
 ## 实现归属
 
 - Rendering 模块维护者必须实现继承自 `src/ports.py` 中 `RenderOutputPort` 的具体服务类。
-- 请以 `src/rendering/service_stub.py` 中的 `RenderOutputServiceStub` 作为起始骨架，逐步替换 no-op 逻辑。
-- `main.py` 当前已接入该 stub，便于在完整实现前继续集成联调。
+- 当前正式实现为 `src/rendering/service.py` 中的 `RenderingServiceImpl`。
+- `main.py` 当前已直接接入该实现。
 - 当前协作说明：渲染模块维护者负责实现供 Bridge 调用的相机到世界坐标转换逻辑，然后由 Bridge 在发出 `world_norm` 位姿更新前调用该逻辑。
 
 ## 功能要求

@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 
 from src.bridge.service import BridgeServiceImpl
-from src.gesture.service_impl import GestureServiceImpl
+from src.gesture.service import GestureServiceImpl
 from src.ports import BridgeService, GestureInputPort, RenderOutputPort
 from src.rendering.service import RenderingServiceImpl
 
@@ -24,6 +24,8 @@ class AppConfig:
     log_level: str = "INFO"
     camera_index: int = 0
     target_fps: int = 60
+    frame_width: int = 640
+    frame_height: int = 480
 
 
 class App:
@@ -96,6 +98,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--target-fps", type=int, default=60)
+    parser.add_argument("--frame-width", type=int, default=640)
+    parser.add_argument("--frame-height", type=int, default=480)
     return parser.parse_args(argv)
 
 
@@ -112,11 +116,18 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         log_level=args.log_level.upper(),
         camera_index=args.camera_index,
         target_fps=args.target_fps,
+        frame_width=args.frame_width,
+        frame_height=args.frame_height,
     )
 
 
 def build_app(config: AppConfig) -> App:
-    gesture_input = GestureServiceImpl(camera_index=config.camera_index)
+    gesture_input = GestureServiceImpl(
+        camera_index=config.camera_index,
+        target_fps=float(config.target_fps),
+        frame_width=config.frame_width,
+        frame_height=config.frame_height,
+    )
     bridge = BridgeServiceImpl()
     render_output = RenderingServiceImpl()
     return App(config, gesture_input, bridge, render_output)

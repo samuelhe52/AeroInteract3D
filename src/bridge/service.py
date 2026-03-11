@@ -29,15 +29,11 @@ coordinate_logger = logging.getLogger("bridge.coordinate_transformation")
 
 
 BRIDGE_STATE_IDLE = "idle"
-BRIDGE_STATE_PINCH_CANDIDATE = "pinch_candidate"
 BRIDGE_STATE_GRABBING = "grabbing"
-BRIDGE_STATE_RELEASE_CANDIDATE = "release_candidate"
 
 OBJECT_ID = "primary_cube"
 INTERACTION_IDLE = "idle"
 INTERACTION_GRABBED = "grabbed"
-PINCH_STABILITY_FRAMES = 2
-RELEASE_STABILITY_FRAMES = 2
 MIN_TRACKING_CONFIDENCE = 0.6
 
 
@@ -62,8 +58,6 @@ class BridgeServiceImpl(BridgeService):
         self._errors: list[dict[str, Any]] = []
         self._metrics = BridgeMetrics()
         self._pending_init = False
-        self._pinch_streak = 0
-        self._release_streak = 0
 
     def start(self) -> None:
         if self.lifecycle_state == LIFECYCLE_RUNNING:
@@ -76,8 +70,6 @@ class BridgeServiceImpl(BridgeService):
         self._errors = []
         self._metrics = BridgeMetrics()
         self._pending_init = True
-        self._pinch_streak = 0
-        self._release_streak = 0
         self.lifecycle_state = LIFECYCLE_RUNNING
         return None
 
@@ -174,8 +166,6 @@ class BridgeServiceImpl(BridgeService):
 
     def stop(self) -> None:
         self._pending_init = False
-        self._pinch_streak = 0
-        self._release_streak = 0
         self._interaction_state = BRIDGE_STATE_IDLE
         self.lifecycle_state = LIFECYCLE_STOPPED
         return None
@@ -186,58 +176,22 @@ class BridgeServiceImpl(BridgeService):
         if packet.tracking_state != "tracked" or packet.confidence < MIN_TRACKING_CONFIDENCE:
             if self._interaction_state == BRIDGE_STATE_GRABBING:
                 return self._reset_interaction(packet, reason="tracking_lost")
-            if self._interaction_state == BRIDGE_STATE_RELEASE_CANDIDATE:
-                self._interaction_state = BRIDGE_STATE_IDLE
-                self._release_streak = 0
-            self._pinch_streak = 0
+            self._interaction_state = BRIDGE_STATE_IDLE
             return commands
 
         if self._interaction_state == BRIDGE_STATE_IDLE:
-            if packet.pinch_state in {"pinch_candidate", "pinched"}:
-                self._pinch_streak = 1
-                self._interaction_state = BRIDGE_STATE_PINCH_CANDIDATE
-            else:
-                self._pinch_streak = 0
-            return commands
-
-        if self._interaction_state == BRIDGE_STATE_PINCH_CANDIDATE:
             if packet.pinch_state == "pinched":
-                self._pinch_streak += 1
-                if self._pinch_streak >= PINCH_STABILITY_FRAMES:
-                    self._interaction_state = BRIDGE_STATE_GRABBING
-                    self._release_streak = 0
-                    commands.append(self._make_object_state(packet, INTERACTION_GRABBED))
-                    commands.append(self._make_object_pose(packet))
-                return commands
-
-            if packet.pinch_state == "pinch_candidate":
-                return commands
-
-            self._interaction_state = BRIDGE_STATE_IDLE
-            self._pinch_streak = 0
+                self._interaction_state = BRIDGE_STATE_GRABBING
+                commands.append(self._make_object_state(packet, INTERACTION_GRABBED))
+                commands.append(self._make_object_pose(packet))
             return commands
 
         if self._interaction_state == BRIDGE_STATE_GRABBING:
-            if packet.pinch_state in {"release_candidate", "open"}:
-                self._interaction_state = BRIDGE_STATE_RELEASE_CANDIDATE
-                self._release_streak = 1
+            if packet.pinch_state == "open":
+                self._interaction_state = BRIDGE_STATE_IDLE
+                commands.append(self._make_object_state(packet, INTERACTION_IDLE))
                 return commands
 
-            commands.append(self._make_object_pose(packet))
-            return commands
-
-        if self._interaction_state == BRIDGE_STATE_RELEASE_CANDIDATE:
-            if packet.pinch_state in {"release_candidate", "open"}:
-                self._release_streak += 1
-                if self._release_streak >= RELEASE_STABILITY_FRAMES:
-                    self._interaction_state = BRIDGE_STATE_IDLE
-                    self._pinch_streak = 0
-                    self._release_streak = 0
-                    commands.append(self._make_object_state(packet, INTERACTION_IDLE))
-                return commands
-
-            self._interaction_state = BRIDGE_STATE_GRABBING
-            self._release_streak = 0
             commands.append(self._make_object_pose(packet))
             return commands
 
@@ -245,8 +199,6 @@ class BridgeServiceImpl(BridgeService):
 
     def _reset_interaction(self, packet: GesturePacket, *, reason: str) -> list[SceneCommand]:
         self._interaction_state = BRIDGE_STATE_IDLE
-        self._pinch_streak = 0
-        self._release_streak = 0
         self._metrics.resets_emitted += 1
         return [
             self._make_reset_interaction(packet, reason=reason),

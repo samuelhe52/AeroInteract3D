@@ -35,6 +35,12 @@ make sync
 make run
 ```
 
+- Run the live gesture preview:
+
+```bash
+uv run python -m src.gesture.debug
+```
+
 - Run tests:
 
 ```bash
@@ -60,6 +66,19 @@ make help
 ```
 
 Equivalent direct uv commands remain valid if needed.
+
+## Runtime configuration
+
+The main app entrypoint in `main.py` currently supports:
+
+- `--camera-index`
+- `--target-fps`
+- `--frame-width`
+- `--frame-height`
+
+Current defaults are `60 FPS` and `640x480` requested capture resolution.
+
+The gesture live preview uses the same capture configuration shape through `GesturePreviewConfig` in `src/gesture/debug/live_preview.py`.
 
 ## Dependency management rules
 

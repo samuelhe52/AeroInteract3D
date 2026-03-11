@@ -17,15 +17,15 @@ Contract behavior remains fixed regardless of implementation details.
 
 ## Deliverable Contract
 
-Rendering module MUST consume `SceneCommand` exactly as defined in `src/contract_stub.md`.
+Rendering module MUST consume `SceneCommand` exactly as defined in `src/contract.md` and implemented in `src/contracts.py`.
 Rendering module MUST import `SceneCommand` from `src/contracts.py`.
 Rendering module MUST NOT define a local `SceneCommand` dataclass copy.
 
 ## Implementation Ownership
 
 - Rendering maintainers MUST implement a concrete service class inheriting `RenderOutputPort` from `src/ports.py`.
-- Use `RenderOutputServiceStub` in `src/rendering/service_stub.py` as the initial scaffold and replace no-op behavior incrementally.
-- Application wiring in `main.py` imports this stub today so integration can proceed before full implementation.
+- Use `RenderingServiceImpl` in `src/rendering/service.py` as the current concrete implementation.
+- Application wiring in `main.py` imports this implementation today.
 - Current coordination note: the rendering maintainer is expected to implement the camera-to-world conversion logic that the bridge will call before emitting `world_norm` pose updates.
 
 ## Functional Requirements

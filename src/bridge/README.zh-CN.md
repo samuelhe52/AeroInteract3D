@@ -51,18 +51,16 @@ Bridge 不得在本地重复定义这两个契约数据类。
 必需状态：
 
 - `idle`
-- `pinch_candidate`
 - `grabbing`
-- `release_candidate`
 
 状态迁移只能由 `GesturePacket` 中的 `pinch_state`、`tracking_state` 和置信度门限驱动。
 
+Bridge 应将 gesture 输出的 `pinch_state` 视为已经稳定化后的交互意图，而不是在 Bridge 内再次实现一遍 gesture 级别滞回。
+
 必需行为：
 
-- `idle -> pinch_candidate`：出现捏合意图。
-- `pinch_candidate -> grabbing`：满足稳定条件后进入抓取。
-- `grabbing -> release_candidate`：出现释放意图。
-- `release_candidate -> idle`：释放确认后回到空闲。
+- `idle -> grabbing`：gesture 输出稳定 `pinched` 时进入抓取。
+- `grabbing -> idle`：gesture 输出稳定 `open` 时释放。
 - 任意状态 -> `idle`：持续 `not_detected` 或显式重置信号时。
 
 ## 命令发射规则

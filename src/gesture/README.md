@@ -2,18 +2,26 @@
 
 Purpose: detect hand landmarks and emit an ordered stream of contract-compliant `GesturePacket` messages for the bridge.
 
-Implementation workflow notes live in [workflow.md](workflow.md). The dedicated live preview debug entrypoint lives in src/gesture/debug/live_preview.py.
+Implementation workflow notes live in [WORKFLOW.md](WORKFLOW.md). The dedicated live preview debug entrypoint lives in `src/gesture/debug/live_preview.py`.
 
 ## Deliverable Contract
 
-Gesture module MUST produce `GesturePacket` exactly as defined in `src/contract_stub.md`.
+Gesture module MUST produce `GesturePacket` exactly as defined in `src/contract.md` and implemented in `src/contracts.py`.
 Gesture module MUST import `GesturePacket` from `src/contracts.py`.
 Gesture module MUST NOT define a local `GesturePacket` dataclass copy.
 
 ## Implementation Ownership
 
 - Gesture maintainers MUST implement a concrete service class inheriting `GestureInputPort` from `src/ports.py`.
-- Use `GestureInputServiceImpl` in `src/gesture/service.py` as the concrete gesture implementation.
+- Use `GestureServiceImpl` in `src/gesture/service.py` as the concrete gesture implementation.
+
+## Current Structure
+
+- `src/gesture/service.py`: runtime gesture service
+- `src/gesture/temporal.py`: shared temporal reducer for gesture state and smoothing
+- `src/gesture/runtime.py`: detector and capture runtime helpers
+- `src/gesture/debug/live_preview.py`: debug preview configuration entrypoint
+- `src/gesture/debug/live_preview_runtime.py`: preview window, overlays, and measured FPS display
 
 ## Functional Requirements
 
@@ -29,6 +37,7 @@ Gesture module MUST NOT define a local `GesturePacket` dataclass copy.
 - SHOULD smooth noisy coordinate updates while preserving responsiveness.
 - SHOULD expose `confidence` with a meaningful 0.0-1.0 scale.
 - SHOULD keep `hand_id` stable while a hand remains continuously tracked.
+- SHOULD keep live preview and runtime service on the same temporal state logic.
 
 ## Error and Lifecycle
 
@@ -41,6 +50,12 @@ Gesture module MUST NOT define a local `GesturePacket` dataclass copy.
 - MUST not import bridge internals.
 - MUST not import rendering internals.
 - MUST keep output schema backward-compatible unless `contract_version` is upgraded.
+
+## Current Runtime Defaults
+
+- target FPS request: `60`
+- requested capture resolution: `640x480`
+- measured preview FPS is shown on screen from actual loop timing
 
 ## Out of Scope (Gesture)
 

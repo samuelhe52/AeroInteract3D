@@ -45,7 +45,11 @@ def test_bridge_enters_grab_and_emits_pose_updates() -> None:
 
     bridge.process(make_packet(frame_id=1, timestamp_ms=100, pinch_state="open"))
     commands = bridge.process(make_packet(frame_id=2, timestamp_ms=120, pinch_state="pinched"))
-    assert commands == []
+
+    assert [command.command_type for command in commands] == ["set_object_state", "set_object_pose"]
+    assert commands[0].payload["interaction_state"] == "grabbed"
+    assert commands[1].payload["position"] == {"x": 0.0, "y": 0.0, "z": 0.0}
+    assert commands[1].payload["coordinate_space"] == "world_norm"
 
     commands = bridge.process(
         make_packet(
@@ -56,10 +60,9 @@ def test_bridge_enters_grab_and_emits_pose_updates() -> None:
         )
     )
 
-    assert [command.command_type for command in commands] == ["set_object_state", "set_object_pose"]
-    assert commands[0].payload["interaction_state"] == "grabbed"
-    assert commands[1].payload["position"] == {"x": 0.4, "y": 0.2, "z": -0.1}
-    assert commands[1].payload["coordinate_space"] == "world_norm"
+    assert [command.command_type for command in commands] == ["set_object_pose"]
+    assert commands[0].payload["position"] == {"x": 0.4, "y": 0.2, "z": -0.1}
+    assert commands[0].payload["coordinate_space"] == "world_norm"
 
 
 def test_bridge_resets_when_tracking_is_lost_during_grab() -> None:
@@ -67,7 +70,6 @@ def test_bridge_resets_when_tracking_is_lost_during_grab() -> None:
     bridge.start()
 
     bridge.process(make_packet(frame_id=1, timestamp_ms=100, pinch_state="open"))
-    bridge.process(make_packet(frame_id=2, timestamp_ms=120, pinch_state="pinched"))
     bridge.process(make_packet(frame_id=3, timestamp_ms=140, pinch_state="pinched"))
 
     commands = bridge.process(

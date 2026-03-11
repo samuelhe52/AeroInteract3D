@@ -23,6 +23,7 @@ from src.utils.runtime import (
 logger = logging.getLogger("rendering_service")
 
 MAX_ERROR_HISTORY = 10
+POSE_LOG_DEBOUNCE_MS = 500
 VALID_PAYLOAD_KEYS = {
     "init_scene": {"objects"},
     "set_object_pose": {"coordinate_space", "position", "hpr"},
@@ -153,6 +154,8 @@ class RenderingServiceImpl(RenderOutputPort):
         self._latest_frame_id: Optional[int] = None
         self._pending_commands: List[SceneCommand] = []
         self._is_resetting: bool = False
+        self._last_pose_log_ts: Optional[int] = None
+        self._suppressed_pose_logs: int = 0
         self._metrics = RenderingMetrics()
     
     def _init_materials(self) -> Dict[str, Material]:
@@ -322,6 +325,8 @@ class RenderingServiceImpl(RenderOutputPort):
         if self._status == LIFECYCLE_STOPPED:
             logger.info("Module already stopped, no need for repeated operation")
             return None
+
+        self._flush_pose_log_summary()
         
         # Stop task loop, release window
         if self._window_adapter.is_initialized():
@@ -485,7 +490,7 @@ class RenderingServiceImpl(RenderOutputPort):
                     details={"object_id": object_id, "original_coordinate": pos_float, "clipped_coordinate": clipped_pos}
                 )
                 self._record_error(error)
-            logger.info(f"Successfully updated object pose: ID={object_id}, position={clipped_pos}, rotation={clipped_hpr} (ID: {command.command_id}")
+            self._log_pose_update(command, object_id=object_id, position=clipped_pos, rotation=clipped_hpr)
             
         except Exception as e:
             logger.error(f"set_object_pose processing failed (ID: {command.command_id}): {str(e)}")
@@ -869,12 +874,50 @@ class RenderingServiceImpl(RenderOutputPort):
         self._latest_frame_id = None
         self._pending_commands.clear()
         self._is_resetting = False
+        self._last_pose_log_ts = None
+        self._suppressed_pose_logs = 0
 
     def _record_error(self, error: Dict[str, Any]) -> None:
         payload = dict(error)
         payload.setdefault("timestamp", int(time.time() * 1000))
         self._errors.append(payload)
         self._errors = self._errors[-MAX_ERROR_HISTORY:]
+
+    def _log_pose_update(
+        self,
+        command: SceneCommand,
+        *,
+        object_id: str,
+        position: list[float],
+        rotation: list[float],
+    ) -> None:
+        if self._last_pose_log_ts is None:
+            self._last_pose_log_ts = command.timestamp_ms
+            logger.info(
+                f"Updated object pose: ID={object_id}, position={position}, rotation={rotation} "
+                f"(ID: {command.command_id})"
+            )
+            return
+
+        elapsed_ms = command.timestamp_ms - self._last_pose_log_ts
+        if elapsed_ms < POSE_LOG_DEBOUNCE_MS:
+            self._suppressed_pose_logs += 1
+            return
+
+        suppressed_count = self._suppressed_pose_logs
+        self._suppressed_pose_logs = 0
+        self._last_pose_log_ts = command.timestamp_ms
+        logger.info(
+            f"Updated object pose: ID={object_id}, position={position}, rotation={rotation} "
+            f"(ID: {command.command_id}, suppressed_updates={suppressed_count})"
+        )
+
+    def _flush_pose_log_summary(self) -> None:
+        if self._suppressed_pose_logs <= 0:
+            return
+
+        logger.info(f"Suppressed {self._suppressed_pose_logs} repetitive pose update log entries")
+        self._suppressed_pose_logs = 0
     
     def _clip_coordinate(self, coord: list, rotation: bool = False) -> list:
         """Clip coordinates automatically when they exceed world_norm [-1.0, 1.0]."""

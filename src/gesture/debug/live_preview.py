@@ -25,7 +25,9 @@ from src.gesture.debug.live_preview_runtime import run_live_preview
 class GesturePreviewConfig:
     log_level: str = "INFO"
     camera_index: int = 0
-    target_fps: int = 30
+    target_fps: int = 60
+    frame_width: int = 640
+    frame_height: int = 480
     max_frames: int = 0
     hand_model: str | None = None
     min_detection_confidence: float = 0.5
@@ -41,6 +43,9 @@ def build_service(config: GesturePreviewConfig):
 
     return GestureServiceImpl(
         camera_index=config.camera_index,
+        target_fps=float(config.target_fps),
+        frame_width=config.frame_width,
+        frame_height=config.frame_height,
         hand_model=config.hand_model,
         min_detection_confidence=config.min_detection_confidence,
         min_tracking_confidence=config.min_tracking_confidence,
@@ -57,6 +62,8 @@ def build_preview_config(config: GesturePreviewConfig) -> GestureRuntimeConfig:
         hand_model=hand_model,
         output_dir=None,
         target_fps=float(config.target_fps),
+        frame_width=config.frame_width,
+        frame_height=config.frame_height,
         max_frames=config.max_frames,
         min_detection_confidence=config.min_detection_confidence,
         min_tracking_confidence=config.min_tracking_confidence,

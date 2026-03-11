@@ -94,6 +94,18 @@ class FakeNodePath:
         return False
 
 
+class FakeObjectNode:
+    def __init__(self) -> None:
+        self.pos = None
+        self.hpr = None
+
+    def setPos(self, *values: float) -> None:
+        self.pos = values
+
+    def setHpr(self, *values: float) -> None:
+        self.hpr = values
+
+
 def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
 
@@ -203,3 +215,77 @@ def test_rendering_records_structured_errors_for_recoverable_command_format_issu
 
     assert health["errors"][-1]["code"] == "rendering.set_object_pose.position.invalid_type"
     assert "timestamp" in health["errors"][-1]
+
+
+def test_rendering_pose_logging_is_debounced(caplog) -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    service._object_cache["primary_cube"] = FakeObjectNode()
+
+    with caplog.at_level("INFO", logger="rendering_service"):
+        service.push(
+            make_command(
+                command_id="pose-1",
+                frame_id=1,
+                timestamp_ms=1_000,
+                command_type="set_object_pose",
+                payload={"position": [0.1, 0.2, 0.3], "hpr": [0.0, 0.0, 0.0]},
+            )
+        )
+        service.push(
+            make_command(
+                command_id="pose-2",
+                frame_id=2,
+                timestamp_ms=1_100,
+                command_type="set_object_pose",
+                payload={"position": [0.2, 0.3, 0.4], "hpr": [0.0, 0.0, 0.0]},
+            )
+        )
+        service.push(
+            make_command(
+                command_id="pose-3",
+                frame_id=3,
+                timestamp_ms=2_100,
+                command_type="set_object_pose",
+                payload={"position": [0.3, 0.4, 0.5], "hpr": [0.0, 0.0, 0.0]},
+            )
+        )
+
+    pose_logs = [record.message for record in caplog.records if "Updated object pose" in record.message]
+
+    assert len(pose_logs) == 2
+    assert "suppressed_updates=1" not in pose_logs[0]
+    assert "suppressed_updates=1" in pose_logs[1]
+
+
+def test_rendering_flushes_suppressed_pose_logs_on_stop(caplog) -> None:
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service._status = LIFECYCLE_RUNNING
+    service._object_cache["primary_cube"] = FakeObjectNode()
+    service._window_adapter = FakeWindowAdapter()
+
+    with caplog.at_level("INFO", logger="rendering_service"):
+        service.push(
+            make_command(
+                command_id="pose-1",
+                frame_id=1,
+                timestamp_ms=1_000,
+                command_type="set_object_pose",
+                payload={"position": [0.1, 0.2, 0.3], "hpr": [0.0, 0.0, 0.0]},
+            )
+        )
+        service.push(
+            make_command(
+                command_id="pose-2",
+                frame_id=2,
+                timestamp_ms=1_050,
+                command_type="set_object_pose",
+                payload={"position": [0.2, 0.3, 0.4], "hpr": [0.0, 0.0, 0.0]},
+            )
+        )
+        service.stop()
+
+    assert any(
+        record.message == "Suppressed 1 repetitive pose update log entries"
+        for record in caplog.records
+    )

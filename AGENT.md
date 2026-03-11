@@ -46,7 +46,7 @@ Current minimal module skeleton:
 
 - `src/gesture/`
 - `src/bridge/`
-- `src/contract_stub.md`
+- `src/contract.md`
 - `src/rendering/`
 
 Rendering backend choice is fixed to Python + Panda3D for current milestones.
@@ -82,7 +82,8 @@ Use this checklist before integrating teammate modules into bridge.
 
 ### Shared Contract
 
-- `src/contract_stub.md` is treated as single source of truth.
+- `src/contract.md` is treated as the human-readable contract source of truth.
+- `src/contracts.py` is the executable contract model used by the codebase.
 - All payloads include `contract_version` and required fields.
 - Any incompatible contract change is agreed first and version-bumped.
 

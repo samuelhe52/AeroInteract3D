@@ -9,6 +9,7 @@ from src.gesture.debug.live_preview import (
     build_preview_config,
     build_service,
 )
+from src.gesture.debug.live_preview_runtime import GestureDebugAnalyzer
 from src.gesture.service import (
     GestureServiceImpl,
 )
@@ -83,6 +84,8 @@ def test_poll_failure_records_structured_error_without_raising(monkeypatch: pyte
 def test_build_service_uses_preview_config_fields() -> None:
     config = GesturePreviewConfig(
         camera_index=2,
+        frame_width=800,
+        frame_height=600,
         hand_model="custom.task",
         min_detection_confidence=0.7,
         min_tracking_confidence=0.8,
@@ -92,6 +95,9 @@ def test_build_service_uses_preview_config_fields() -> None:
     service = build_service(config)
 
     assert service._camera_index == 2
+    assert service._target_fps == 60.0
+    assert service._frame_width == 800
+    assert service._frame_height == 600
     assert service._hand_model == "custom.task"
     assert service._min_detection_confidence == 0.7
     assert service._min_tracking_confidence == 0.8
@@ -110,4 +116,83 @@ def test_build_preview_config_uses_default_model_fallback(
 
     assert preview_config.hand_model == str(model_path)
     assert preview_config.camera_index == 0
-    assert preview_config.target_fps == 30.0
+    assert preview_config.target_fps == 60.0
+    assert preview_config.frame_width == 640
+    assert preview_config.frame_height == 480
+
+
+def test_live_preview_and_service_share_temporal_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = GestureServiceImpl(hand_model="stub.task")
+    preview = GestureDebugAnalyzer(build_preview_config(GesturePreviewConfig(hand_model="stub.task")))
+
+    frames = iter(
+        [
+            {
+                "timestamp_ms": 100,
+                "tick": 1,
+                "frame": object(),
+                "hand": {
+                    "index_tip": Vec3(0.2, 0.1, -0.1),
+                    "thumb_tip": Vec3(0.21, 0.11, -0.12),
+                    "palm_center": Vec3(0.0, 0.0, 0.0),
+                    "raw_confidence": 0.9,
+                },
+            },
+            {
+                "timestamp_ms": 101,
+                "tick": 2,
+                "frame": object(),
+                "hand": {
+                    "index_tip": Vec3(0.25, 0.15, -0.15),
+                    "thumb_tip": Vec3(0.26, 0.16, -0.16),
+                    "palm_center": Vec3(0.3, 0.2, -0.1),
+                    "raw_confidence": 0.9,
+                },
+            },
+        ]
+    )
+
+    current_frame: dict[str, object] = {}
+
+    def read_frame() -> dict[str, object]:
+        nonlocal current_frame
+        current_frame = next(frames)
+        return {k: v for k, v in current_frame.items() if k != "hand"}
+
+    def detect_hand(_raw_frame: dict[str, object]) -> dict[str, object]:
+        return current_frame["hand"]  # type: ignore[return-value]
+
+    monkeypatch.setattr(service, "_setup_backend", lambda: None)
+    monkeypatch.setattr(service, "_read_frame", read_frame)
+    monkeypatch.setattr(service, "_detect_hand", detect_hand)
+
+    service.start()
+    preview.start()
+
+    packet_one = service.poll()
+    preview_packet_one = preview.process_landmarks(
+        {
+            "index_finger_tip": Vec3(0.2, 0.1, -0.1),
+            "thumb_tip": Vec3(0.21, 0.11, -0.12),
+            "wrist": Vec3(0.0, 0.0, 0.0),
+        },
+        100,
+        0.9,
+    )
+    packet_two = service.poll()
+    preview_packet_two = preview.process_landmarks(
+        {
+            "index_finger_tip": Vec3(0.25, 0.15, -0.15),
+            "thumb_tip": Vec3(0.26, 0.16, -0.16),
+            "wrist": Vec3(0.3, 0.2, -0.1),
+        },
+        101,
+        0.9,
+    )
+
+    assert packet_one is not None
+    assert packet_two is not None
+    assert packet_one.pinch_state == preview_packet_one.pinch_state
+    assert packet_two.pinch_state == preview_packet_two.pinch_state
+    assert packet_two.palm_center == preview_packet_two.palm_center
+    assert packet_two.smoothing_hint == preview_packet_two.smoothing_hint

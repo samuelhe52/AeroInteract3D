@@ -4,14 +4,14 @@
 
 这个文件描述 gesture 模块当前的最小可用工作流，覆盖三条主线：
 
-1. 实时 GestureInputServiceImpl 如何产出可供 bridge 消费的 GesturePacket。
+1. 实时 GestureServiceImpl 如何产出可供 bridge 消费的 GesturePacket。
 2. debug 入口如何驱动实时预览窗口与健康检查。
 3. 实时窗口如何叠加骨架、锚点、坐标和 GesturePacket 信号。
 
 实现文件：
 
 - service 实现入口：src/gesture/service.py
-- 兼容导出层：src/gesture/service.py
+- 共享时序逻辑：src/gesture/temporal.py
 - gesture debug 入口：src/gesture/debug/live_preview.py
 - 实时预览与调试管线：src/gesture/debug/live_preview_runtime.py
 
@@ -32,21 +32,18 @@ flowchart TD
     C --> D[RUNNING]
     D --> E[poll()]
     E --> F[_read_frame]
-    F --> G[_detect_hand]
-    G --> H[_compute_tracking_state]
-    G --> I[_compute_pinch_state]
-    H --> J[_compute_confidence]
-    I --> J
-    J --> K[_smooth_vec3 / _compute_velocity]
-    K --> L[_build_packet]
-    L --> M[GesturePacket -> bridge]
+  F --> G[_detect_hand]
+  G --> H[GestureTemporalReducer.process]
+  H --> I[_sync_analysis_state]
+  I --> J[_build_packet]
+  J --> L[GesturePacket -> bridge]
     D --> N[health()]
     D --> O[stop()]
     O --> P[_teardown_backend]
     P --> Q[STOPPED]
 ```
 
-## GestureInputServiceImpl 工作流
+## GestureServiceImpl 工作流
 
 ### 1. start()
 
@@ -63,9 +60,10 @@ start() 的目标是把服务从 STOPPED 拉到 RUNNING。
 
 当前后端初始化逻辑在 _setup_backend() 中：
 
-- 用 OpenCV 打开 camera_index 对应摄像头。
+- 用共享 capture helper 打开并配置 camera_index 对应摄像头。
 - 构造 GestureRuntimeConfig。
 - 通过 src/gesture/runtime.py 中的 create_hand_detector() 获取 MediaPipe 检测器。
+- 通过 src/gesture/runtime.py 中的 create_capture()/open_capture() 请求 target_fps、frame_width、frame_height。
 - 如果当前环境没有可用 detector，直接失败，并明确提示默认模型路径，而不是回退成假数据流。
 
 这保证了服务对主程序是诚实的：能跑就 RUNNING，不能跑就 DEGRADED。
@@ -83,15 +81,11 @@ poll() 是主处理路径，每调用一次处理一帧。
 处理顺序如下：
 
 1. _read_frame() 从摄像头读取 BGR 帧，并给出 timestamp_ms。
-2. _resolve_timestamp_ms() 保证时间戳单调递增。
+2. _resolve_timestamp_ms() 与 GestureTemporalReducer 共同保证时间戳单调递增。
 3. _detect_hand() 用 MediaPipe 检测关键点。
-4. _normalize_vec3() 把坐标限制到 [-1.0, 1.0]。
-5. _compute_tracking_state() 生成 tracked。
-6. _compute_pinch_state() 用距离阈值和滞回生成 pinch 状态。
-7. _compute_confidence() 生成 0 到 1 的置信度。
-8. _smooth_vec3() 对 index_tip、thumb_tip、palm_center 做线性平滑。
-9. _compute_velocity() 用当前 palm_center 和上一帧 palm_center 求速度。
-10. _build_packet() 构造完整 GesturePacket。
+4. GestureTemporalReducer.process() 统一完成 tracking_state、pinch_state、confidence、坐标平滑与 velocity。
+5. _sync_analysis_state() 更新服务内部缓存。
+6. _build_packet() 构造完整 GesturePacket。
 
 #### 路径 C：成功读取一帧，但这一帧没检测到手
 
@@ -110,9 +104,19 @@ poll() 是主处理路径，每调用一次处理一帧。
 
 - errors 追加一条结构化 backend failure 记录。
 - lifecycle_state 切到 DEGRADED。
-- 抛出 RuntimeError，错误文本是 Gesture input backend failure。
+- poll() 返回 None，不再把后端故障向上抛成新的 RuntimeError。
 
-### 3. pinch_state 状态机
+### 3. 共享时序归约器
+
+当前 gesture 模块把 tracking、pinch、confidence、坐标平滑统一收口到 `src/gesture/temporal.py` 中的 `GestureTemporalReducer`。
+
+这样做的目的：
+
+- 让实时服务与 live preview 使用同一套状态逻辑。
+- 避免调试窗口与正式服务出现状态漂移。
+- 把 gesture 级别的稳定性策略留在 gesture 模块，而不是在 bridge 里重复确认。
+
+### 4. pinch_state 状态机
 
 pinch_state 使用距离阈值和短窗口确认帧数来抑制抖动。
 
@@ -132,7 +136,7 @@ open
 
 这种滞回设计避免了在边界距离附近出现 open/pinched 来回抖动。
 
-### 4. tracking_state 状态机
+### 5. tracking_state 状态机
 
 tracking_state 使用 tracking_loss_streak 表示连续丢失帧数：
 
@@ -142,7 +146,7 @@ tracking_state 使用 tracking_loss_streak 表示连续丢失帧数：
 
 它的作用是把短暂遮挡和真正丢失手部分开处理。
 
-### 5. health()
+### 6. health()
 
 health() 是无副作用快照，只返回状态，不做任何 I/O：
 
@@ -153,6 +157,8 @@ health() 是无副作用快照，只返回状态，不做任何 I/O：
 - stats.started
 - stats.frame_id
 - stats.hand_id
+- stats.target_fps
+- stats.frame_width / frame_height
 - stats.tracking_state
 - stats.pinch_state
 - stats.confidence
@@ -161,7 +167,7 @@ health() 是无副作用快照，只返回状态，不做任何 I/O：
 - stats.detector_backend
 - stats.polls_attempted / packets_emitted / tracked_packets / empty_packets / backend_failures
 
-### 6. stop()
+### 7. stop()
 
 stop() 负责资源释放和状态回收：
 
@@ -179,12 +185,13 @@ src/gesture/debug/live_preview.py 提供 gesture 模块的专用 debug 入口。
 
 这个入口面向实时观察摄像头画面、手部骨架和 GesturePacket 流：
 
-1. live_preview.py 使用 GesturePreviewConfig 提供 camera_index、target_fps、window_name 等调试配置。
+1. live_preview.py 使用 GesturePreviewConfig 提供 camera_index、target_fps、frame_width、frame_height、window_name 等调试配置。
 2. build_preview_config() 组装实时预览配置。
 3. live_preview_runtime.py 中的 run_live_preview() 打开摄像头和窗口。
 4. create_hand_detector() 执行 MediaPipe 检测。
-5. overlay_packet() 与 overlay_anchor_points() 在画面上叠加状态、锚点。
-6. 按 q 或 Esc 退出窗口。
+5. GestureDebugAnalyzer 复用 GestureTemporalReducer 生成与正式服务一致的 GesturePacket。
+6. overlay_packet()、overlay_anchor_points()、overlay_fps() 在画面上叠加状态、锚点与实际 FPS。
+7. 按 q 或 Esc 退出窗口。
 
 适合场景：
 
@@ -217,8 +224,7 @@ flowchart TD
 - index_tip、thumb_tip、palm_center 三个锚点。
 - camera_norm 坐标。
 - tracking_state、pinch_state、confidence、pinch_distance。
-- report.md
-  人类可读摘要。
+- 实际测得的预览 FPS。
 
 ## 手指锚点与信号操作思路
 
@@ -269,8 +275,8 @@ build_event_anchors() 会把状态跃迁固化成事件锚点：
 
 1. src/gesture/service.py
    先看 start() / poll() / health() / stop() 四个公开函数。
-2. src/gesture/service.py
-   再看 _setup_backend()、_detect_hand()、_compute_pinch_state()。
+2. src/gesture/temporal.py
+  再看 GestureTemporalReducer.process() 如何统一 tracking、pinch、confidence、平滑与 velocity。
 3. src/gesture/debug/live_preview.py
   看 debug 入口如何组装实时预览配置。
 4. src/gesture/debug/live_preview_runtime.py
@@ -281,6 +287,7 @@ build_event_anchors() 会把状态跃迁固化成事件锚点：
 当前 gesture 模块的设计思路是：
 
 - 用 service.py 作为正式的 GestureInputPort 实现。
+- 用 temporal.py 作为共享手势时序逻辑。
 - 用 debug/live_preview.py 作为专用调试入口。
 - 用 debug/live_preview_runtime.py 作为实时预览与检测辅助工具。
 - 用统一的 GesturePacket 契约把服务输出和窗口叠加信息对齐。
