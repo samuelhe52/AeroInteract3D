@@ -13,7 +13,7 @@
 - service 实现入口：src/gesture/service_impl.py
 - 兼容导出层：src/gesture/service.py
 - gesture debug 入口：src/gesture/debug/live_preview.py
-- 实时预览与调试管线：tests/debug_video.py
+- 实时预览与调试管线实现：src/gesture/debug/runtime.py
 
 ## 模块职责边界
 
