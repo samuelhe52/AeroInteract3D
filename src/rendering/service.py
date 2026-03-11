@@ -17,11 +17,7 @@ from src.utils.runtime import (
     build_health, classify_frame, error_entry
 )
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-)
+# 日志记录器（配置应在应用入口完成）
 logger = logging.getLogger("rendering_service")
 
 # Error codes
