@@ -138,7 +138,7 @@ class GestureServiceImpl(GestureInputPort):
         self._last_pinch_distance = 0.0
         self._last_index_tip = Vec3(0.0, 0.0, 0.0)
         self._last_thumb_tip = Vec3(0.0, 0.0, 0.0)
-        self._last_palm_center = Vec3(0.0, 0.0, 0.0)
+        self._last_wrist = Vec3(0.0, 0.0, 0.0)
         self._last_velocity = Vec3(0.0, 0.0, 0.0)
         self._preview_window_open = False
         self._preview_closed_by_user = False
@@ -215,7 +215,7 @@ class GestureServiceImpl(GestureInputPort):
                 timestamp_ms=timestamp_ms,
                 index_tip=None if hand_data is None else hand_data["index_tip"],
                 thumb_tip=None if hand_data is None else hand_data["thumb_tip"],
-                palm_center=None if hand_data is None else hand_data["palm_center"],
+                wrist=None if hand_data is None else hand_data["wrist"],
                 raw_confidence=raw_confidence,
             )
             self._sync_analysis_state(analysis)
@@ -228,7 +228,7 @@ class GestureServiceImpl(GestureInputPort):
                     confidence=analysis.confidence,
                     index_tip=analysis.index_tip,
                     thumb_tip=analysis.thumb_tip,
-                    palm_center=analysis.palm_center,
+                    wrist=analysis.wrist,
                     velocity=analysis.velocity,
                     smoothing_hint=analysis.smoothing_hint,
                     debug={
@@ -261,7 +261,7 @@ class GestureServiceImpl(GestureInputPort):
                 confidence=analysis.confidence,
                 index_tip=analysis.index_tip,
                 thumb_tip=analysis.thumb_tip,
-                palm_center=analysis.palm_center,
+                wrist=analysis.wrist,
                 velocity=analysis.velocity,
                 smoothing_hint=analysis.smoothing_hint,
                 debug={
@@ -392,7 +392,7 @@ class GestureServiceImpl(GestureInputPort):
         self._last_pinch_distance = 0.0
         self._last_index_tip = Vec3(0.0, 0.0, 0.0)
         self._last_thumb_tip = Vec3(0.0, 0.0, 0.0)
-        self._last_palm_center = Vec3(0.0, 0.0, 0.0)
+        self._last_wrist = Vec3(0.0, 0.0, 0.0)
         self._last_velocity = Vec3(0.0, 0.0, 0.0)
         self._preview_active = self._preview_requested
         self._preview_window_open = False
@@ -638,7 +638,7 @@ class GestureServiceImpl(GestureInputPort):
         return {
             "index_tip": landmarks["index_finger_tip"],
             "thumb_tip": landmarks["thumb_tip"],
-            "palm_center": landmarks["wrist"],
+            "wrist": landmarks["wrist"],
             "raw_confidence": raw_confidence,
             "raw_landmarks": raw_landmarks,
             "source": self._detector_backend,
@@ -652,7 +652,7 @@ class GestureServiceImpl(GestureInputPort):
         self._last_pinch_distance = analysis.pinch_distance
         self._last_index_tip = analysis.index_tip
         self._last_thumb_tip = analysis.thumb_tip
-        self._last_palm_center = analysis.palm_center
+        self._last_wrist = analysis.wrist
         self._last_velocity = analysis.velocity
 
     def _build_packet(
@@ -663,7 +663,7 @@ class GestureServiceImpl(GestureInputPort):
         confidence: float,
         index_tip: Vec3,
         thumb_tip: Vec3,
-        palm_center: Vec3,
+        wrist: Vec3,
         velocity: Vec3,
         smoothing_hint: dict[str, Any],
         debug: dict[str, Any] | None,
@@ -680,7 +680,7 @@ class GestureServiceImpl(GestureInputPort):
             pinch_state=pinch_state,
             index_tip=index_tip,
             thumb_tip=thumb_tip,
-            palm_center=palm_center,
+            wrist=wrist,
             coordinate_space="camera_norm",
             pinch_distance=self._last_pinch_distance,
             velocity=velocity,

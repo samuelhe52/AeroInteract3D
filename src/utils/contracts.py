@@ -6,7 +6,7 @@ from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.utils.runtime import error_entry
 
 
-EXPECTED_CONTRACT_VERSION = "0.1.0"
+EXPECTED_CONTRACT_VERSION = "1.0.0"
 
 SCENE_COMMAND_TYPES = {
     "init_scene",
@@ -100,7 +100,7 @@ def validate_gesture_packet(
     for name, vec in (
         ("index_tip", packet.index_tip),
         ("thumb_tip", packet.thumb_tip),
-        ("palm_center", packet.palm_center),
+        ("wrist", packet.wrist),
     ):
         errors.extend(validate_vec3(name, vec))
 

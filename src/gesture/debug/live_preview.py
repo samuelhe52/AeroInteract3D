@@ -4,6 +4,13 @@ from dataclasses import dataclass
 import logging
 import sys
 
+if __package__ in {None, ""}:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
 from src.constants import (
     DEFAULT_CAMERA_INDEX,
     DEFAULT_FRAME_HEIGHT,
@@ -14,13 +21,6 @@ from src.constants import (
     DEFAULT_MODEL_COMPLEXITY,
     DEFAULT_TARGET_FPS,
 )
-
-if __package__ in {None, ""}:
-    from pathlib import Path
-
-    repo_root = Path(__file__).resolve().parents[3]
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
 
 from src.gesture.runtime import (
     GestureRuntimeConfig,

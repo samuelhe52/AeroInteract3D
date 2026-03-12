@@ -228,7 +228,7 @@ class BridgeServiceImpl(BridgeService):
 
     def _make_object_pose(self, packet: GesturePacket) -> SceneCommand:
         self._metrics.pose_updates += 1
-        world_position = self._camera_to_world_position(packet.palm_center)
+        world_position = self._camera_to_world_position(packet.wrist)
         return SceneCommand(
             contract_version=self._expected_contract_version,
             command_id=make_command_id("set-pose", packet.frame_id),
@@ -267,7 +267,7 @@ class BridgeServiceImpl(BridgeService):
                     "bridge.coordinate.position.missing",
                     "Coordinate transformation failed because input position is missing",
                     recoverable=True,
-                    hint="Ensure palm_center is present before emitting pose updates.",
+                    hint="Ensure wrist is present before emitting pose updates.",
                     details={"position": None},
                 )
             )

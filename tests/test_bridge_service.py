@@ -11,10 +11,10 @@ def make_packet(
     pinch_state: str = "open",
     tracking_state: str = "tracked",
     confidence: float = 0.95,
-    palm: Vec3 | None = None,
+    wrist: Vec3 | None = None,
 ) -> GesturePacket:
     return GesturePacket(
-        contract_version="0.1.0",
+        contract_version="1.0.0",
         frame_id=frame_id,
         timestamp_ms=timestamp_ms,
         hand_id="hand-1",
@@ -23,7 +23,7 @@ def make_packet(
         pinch_state=pinch_state,
         index_tip=Vec3(0.1, 0.2, 0.3),
         thumb_tip=Vec3(0.11, 0.19, 0.28),
-        palm_center=palm or Vec3(0.0, 0.0, 0.0),
+        wrist=wrist or Vec3(0.0, 0.0, 0.0),
         coordinate_space="camera_norm",
         pinch_distance=0.02,
     )
@@ -56,7 +56,7 @@ def test_bridge_enters_grab_and_emits_pose_updates() -> None:
             frame_id=3,
             timestamp_ms=140,
             pinch_state="pinched",
-            palm=Vec3(0.4, 0.2, -0.1),
+            wrist=Vec3(0.4, 0.2, -0.1),
         )
     )
 

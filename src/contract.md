@@ -12,7 +12,7 @@ Canonical Python dataclass definitions live in `src/contracts.py`.
 ## 1) Contract Versioning
 
 - `contract_version`: string, semantic version format (`MAJOR.MINOR.PATCH`).
-- Current baseline: `0.1.0`.
+- Current baseline: `1.0.0`.
 - Compatibility rule:
   - `PATCH`: docs clarifications only, no schema change.
   - `MINOR`: backward-compatible field additions (new optional fields only).
@@ -46,7 +46,9 @@ MUST be emitted as an ordered stream.
 - `pinch_state: str` in `{ "open", "pinch_candidate", "pinched", "release_candidate" }`
 - `index_tip: {"x": float, "y": float, "z": float}`
 - `thumb_tip: {"x": float, "y": float, "z": float}`
-- `palm_center: {"x": float, "y": float, "z": float}`
+- `wrist: {"x": float, "y": float, "z": float}`
+  - MediaPipe note: the hand landmark models used in this project expose 21 landmarks, including `wrist`, and do not provide a dedicated palm-center landmark.
+  - Producer rule: MediaPipe-backed producers MUST emit the wrist landmark in this field.
 - `coordinate_space: str` (typically `camera_norm` from gesture module)
 
 ### Optional fields (recommended)

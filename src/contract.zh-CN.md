@@ -12,7 +12,7 @@ Python 数据类（dataclass）的唯一定义位于 `src/contracts.py`。
 ## 1）契约版本
 
 - `contract_version`：字符串，语义化版本格式（`MAJOR.MINOR.PATCH`）。
-- 当前基线：`0.1.0`。
+- 当前基线：`1.0.0`。
 - 兼容性规则：
   - `PATCH`：仅文档澄清，不改 schema。
   - `MINOR`：向后兼容的字段新增（仅新增可选字段）。
@@ -46,7 +46,9 @@ Python 数据类（dataclass）的唯一定义位于 `src/contracts.py`。
 - `pinch_state: str`，取值 `{ "open", "pinch_candidate", "pinched", "release_candidate" }`
 - `index_tip: {"x": float, "y": float, "z": float}`
 - `thumb_tip: {"x": float, "y": float, "z": float}`
-- `palm_center: {"x": float, "y": float, "z": float}`
+- `wrist: {"x": float, "y": float, "z": float}`
+  - MediaPipe 说明：本项目使用的手部模型输出 21 个关键点，其中包含 `wrist`，但不提供独立的掌心中心关键点。
+  - 生产者规则：基于 MediaPipe 的生产者必须在该字段中直接输出 wrist 关键点。
 - `coordinate_space: str`（Gesture 模块通常输出 `camera_norm`）
 
 ### 可选字段（推荐）

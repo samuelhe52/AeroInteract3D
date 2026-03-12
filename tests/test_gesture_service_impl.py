@@ -43,7 +43,7 @@ def test_poll_emits_packet_with_expected_contract_version(monkeypatch: pytest.Mo
         lambda _raw_frame: {
             "index_tip": Vec3(0.2, 0.1, -0.1),
             "thumb_tip": Vec3(0.21, 0.11, -0.12),
-            "palm_center": Vec3(0.0, 0.0, 0.0),
+            "wrist": Vec3(0.0, 0.0, 0.0),
             "raw_confidence": 0.9,
         },
     )
@@ -137,7 +137,7 @@ def test_poll_renders_live_preview_when_enabled(monkeypatch: pytest.MonkeyPatch)
         lambda _raw_frame: {
             "index_tip": Vec3(0.2, 0.1, -0.1),
             "thumb_tip": Vec3(0.21, 0.11, -0.12),
-            "palm_center": Vec3(0.0, 0.0, 0.0),
+            "wrist": Vec3(0.0, 0.0, 0.0),
             "raw_confidence": 0.9,
         },
     )
@@ -171,7 +171,7 @@ def test_preview_failure_disables_preview_without_failing_poll(monkeypatch: pyte
         lambda _raw_frame: {
             "index_tip": Vec3(0.2, 0.1, -0.1),
             "thumb_tip": Vec3(0.21, 0.11, -0.12),
-            "palm_center": Vec3(0.0, 0.0, 0.0),
+            "wrist": Vec3(0.0, 0.0, 0.0),
             "raw_confidence": 0.9,
         },
     )
@@ -197,6 +197,29 @@ def test_preview_failure_disables_preview_without_failing_poll(monkeypatch: pyte
     assert health["errors"][-1]["code"] == "gesture.preview.failure"
 
 
+def test_detect_hand_uses_wrist_landmark() -> None:
+    class StubDetector:
+        def detect(self, frame, timestamp_ms):
+            del frame, timestamp_ms
+            return (
+                {
+                    "index_finger_tip": Vec3(0.2, 0.1, -0.1),
+                    "thumb_tip": Vec3(0.21, 0.11, -0.12),
+                    "wrist": Vec3(0.3, 0.2, -0.2),
+                },
+                0.9,
+                object(),
+            )
+
+    service = GestureServiceImpl(hand_model="stub.task")
+    service._backend = {"detector": StubDetector()}
+
+    hand_data = service._detect_hand({"frame": object(), "timestamp_ms": 100})
+
+    assert hand_data is not None
+    assert hand_data["wrist"] == Vec3(0.3, 0.2, -0.2)
+
+
 def test_live_preview_and_service_share_temporal_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
     service = GestureServiceImpl(hand_model="stub.task")
     preview = GestureDebugAnalyzer(build_preview_config(GesturePreviewConfig(hand_model="stub.task")))
@@ -210,7 +233,7 @@ def test_live_preview_and_service_share_temporal_behavior(monkeypatch: pytest.Mo
                 "hand": {
                     "index_tip": Vec3(0.2, 0.1, -0.1),
                     "thumb_tip": Vec3(0.21, 0.11, -0.12),
-                    "palm_center": Vec3(0.0, 0.0, 0.0),
+                    "wrist": Vec3(0.0, 0.0, 0.0),
                     "raw_confidence": 0.9,
                 },
             },
@@ -221,7 +244,7 @@ def test_live_preview_and_service_share_temporal_behavior(monkeypatch: pytest.Mo
                 "hand": {
                     "index_tip": Vec3(0.25, 0.15, -0.15),
                     "thumb_tip": Vec3(0.26, 0.16, -0.16),
-                    "palm_center": Vec3(0.3, 0.2, -0.1),
+                    "wrist": Vec3(0.3, 0.2, -0.1),
                     "raw_confidence": 0.9,
                 },
             },
@@ -270,5 +293,5 @@ def test_live_preview_and_service_share_temporal_behavior(monkeypatch: pytest.Mo
     assert packet_two is not None
     assert packet_one.pinch_state == preview_packet_one.pinch_state
     assert packet_two.pinch_state == preview_packet_two.pinch_state
-    assert packet_two.palm_center == preview_packet_two.palm_center
+    assert packet_two.wrist == preview_packet_two.wrist
     assert packet_two.smoothing_hint == preview_packet_two.smoothing_hint

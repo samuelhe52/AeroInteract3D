@@ -49,7 +49,7 @@ class GestureDebugAnalyzer:
             timestamp_ms=timestamp_ms,
             index_tip=None if landmarks is None else landmarks["index_finger_tip"],
             thumb_tip=None if landmarks is None else landmarks["thumb_tip"],
-            palm_center=None if landmarks is None else landmarks["wrist"],
+            wrist=None if landmarks is None else landmarks["wrist"],
             raw_confidence=raw_confidence,
         )
 
@@ -75,7 +75,7 @@ class GestureDebugAnalyzer:
             pinch_state=analysis.pinch_state,
             index_tip=analysis.index_tip,
             thumb_tip=analysis.thumb_tip,
-            palm_center=analysis.palm_center,
+            wrist=analysis.wrist,
             coordinate_space="camera_norm",
             pinch_distance=analysis.pinch_distance,
             velocity=analysis.velocity,
@@ -119,7 +119,7 @@ def overlay_anchor_points(frame: Any, packet: GesturePacket, mirror: bool, draw_
     anchor_specs = [
         ("index", packet.index_tip, (0, 255, 255)),
         ("thumb", packet.thumb_tip, (255, 200, 0)),
-        ("palm", packet.palm_center, (0, 255, 0)),
+        ("wrist", packet.wrist, (0, 255, 0)),
     ]
 
     for label, vec, color in anchor_specs:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from src.contracts import SceneCommand
 from src.rendering import service as rendering_service
-from src.rendering.service import RenderingServiceImpl
+from src.rendering.service import ObjectInitialState, RenderingServiceImpl
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
 
 
@@ -16,7 +16,7 @@ def make_command(
     payload: dict | None = None,
 ) -> SceneCommand:
     return SceneCommand(
-        contract_version="0.1.0",
+        contract_version="1.0.0",
         command_id=command_id,
         frame_id=frame_id,
         timestamp_ms=timestamp_ms,
@@ -105,12 +105,20 @@ class FakeObjectNode:
     def __init__(self) -> None:
         self.pos = None
         self.hpr = None
+        self.material = None
+        self.scale = None
 
     def setPos(self, *values: float) -> None:
         self.pos = values
 
     def setHpr(self, *values: float) -> None:
         self.hpr = values
+
+    def setMaterial(self, material: object, priority: int) -> None:
+        self.material = (material, priority)
+
+    def setScale(self, value: float) -> None:
+        self.scale = value
 
 
 def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
@@ -143,7 +151,7 @@ def test_rendering_validation_does_not_mutate_invalid_command() -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING
     command = SceneCommand(
-        contract_version="0.1.0",
+        contract_version="1.0.0",
         command_id="cmd-invalid",
         frame_id="7",  # type: ignore[arg-type]
         timestamp_ms=100,
@@ -169,7 +177,7 @@ def test_rendering_error_history_is_bounded() -> None:
 
     for index in range(12):
         command = SceneCommand(
-            contract_version="0.1.0",
+            contract_version="1.0.0",
             command_id=f"cmd-{index}",
             frame_id=index,
             timestamp_ms=100 + index,
@@ -263,6 +271,50 @@ def test_rendering_pose_logging_is_debounced(caplog) -> None:
     assert len(pose_logs) == 2
     assert "suppressed_updates=1" not in pose_logs[0]
     assert "suppressed_updates=1" in pose_logs[1]
+
+
+def test_rendering_maps_contract_world_norm_axes_to_panda_axes() -> None:
+    service = RenderingServiceImpl()
+
+    scene_pos = service._world_norm_to_scene_pos((0.25, 0.6, -0.4))
+
+    assert scene_pos == (0.25, -0.4, 0.6)
+
+
+def test_rendering_applies_pose_updates_with_axis_remap() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="pose-remap-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={"position": {"x": 0.2, "y": 0.7, "z": -0.3}, "hpr": [0.0, 0.0, 0.0]},
+        )
+    )
+
+    assert obj.pos == (0.2, -0.3, 0.7)
+    assert obj.hpr == (0.0, 0.0, 0.0)
+
+
+def test_rendering_reset_restores_cached_scene_pose() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["primary_cube"] = obj
+    service._object_initial_states["primary_cube"] = ObjectInitialState(
+        pos=(0.1, -0.2, 0.4),
+        hpr=(1.0, 2.0, 3.0),
+    )
+
+    service.push(make_command(command_id="reset-1", frame_id=1, command_type="reset_interaction"))
+
+    assert obj.pos == (0.1, -0.2, 0.4)
+    assert obj.hpr == (1.0, 2.0, 3.0)
 
 
 def test_rendering_step_advances_panda3d_task_manager(monkeypatch) -> None:

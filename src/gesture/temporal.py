@@ -35,7 +35,7 @@ class GestureFrameAnalysis:
     confidence: float
     index_tip: Vec3
     thumb_tip: Vec3
-    palm_center: Vec3
+    wrist: Vec3
     velocity: Vec3
     pinch_distance: float
     tracking_loss_streak: int
@@ -58,7 +58,7 @@ class GestureTemporalReducer:
         self._last_pinch_distance = 0.0
         self._last_index_tip = Vec3(0.0, 0.0, 0.0)
         self._last_thumb_tip = Vec3(0.0, 0.0, 0.0)
-        self._last_palm_center = Vec3(0.0, 0.0, 0.0)
+        self._last_wrist = Vec3(0.0, 0.0, 0.0)
         self._last_velocity = Vec3(0.0, 0.0, 0.0)
         self._processed_frames = 0
 
@@ -68,12 +68,12 @@ class GestureTemporalReducer:
         timestamp_ms: int,
         index_tip: Vec3 | None = None,
         thumb_tip: Vec3 | None = None,
-        palm_center: Vec3 | None = None,
+        wrist: Vec3 | None = None,
         raw_confidence: float = 0.0,
     ) -> GestureFrameAnalysis:
         timestamp_ms = self._normalize_timestamp(timestamp_ms)
 
-        if index_tip is None or thumb_tip is None or palm_center is None:
+        if index_tip is None or thumb_tip is None or wrist is None:
             self._tracking_loss_streak += 1
             tracking_state = self._compute_tracking_state(hand_detected=False)
             pinch_state = self._compute_pinch_state(None, None)
@@ -92,7 +92,7 @@ class GestureTemporalReducer:
                 confidence=confidence,
                 index_tip=self._last_index_tip,
                 thumb_tip=self._last_thumb_tip,
-                palm_center=self._last_palm_center,
+                wrist=self._last_wrist,
                 velocity=velocity,
                 pinch_distance=self._last_pinch_distance,
                 tracking_loss_streak=self._tracking_loss_streak,
@@ -103,7 +103,7 @@ class GestureTemporalReducer:
 
         normalized_index_tip = self._normalize_vec3(index_tip)
         normalized_thumb_tip = self._normalize_vec3(thumb_tip)
-        normalized_palm_center = self._normalize_vec3(palm_center)
+        normalized_wrist = self._normalize_vec3(wrist)
 
         tracking_state = self._compute_tracking_state(hand_detected=True)
         pinch_state = self._compute_pinch_state(normalized_index_tip, normalized_thumb_tip)
@@ -111,12 +111,12 @@ class GestureTemporalReducer:
 
         smoothed_index_tip = self._smooth_vec3(normalized_index_tip, self._last_index_tip)
         smoothed_thumb_tip = self._smooth_vec3(normalized_thumb_tip, self._last_thumb_tip)
-        smoothed_palm_center = self._smooth_vec3(normalized_palm_center, self._last_palm_center)
-        velocity = self._compute_velocity(smoothed_palm_center, self._last_palm_center)
+        smoothed_wrist = self._smooth_vec3(normalized_wrist, self._last_wrist)
+        velocity = self._compute_velocity(smoothed_wrist, self._last_wrist)
 
         self._last_index_tip = smoothed_index_tip
         self._last_thumb_tip = smoothed_thumb_tip
-        self._last_palm_center = smoothed_palm_center
+        self._last_wrist = smoothed_wrist
         self._last_velocity = velocity
         self._tracking_state = tracking_state
         self._pinch_state = pinch_state
@@ -130,7 +130,7 @@ class GestureTemporalReducer:
             confidence=confidence,
             index_tip=smoothed_index_tip,
             thumb_tip=smoothed_thumb_tip,
-            palm_center=smoothed_palm_center,
+            wrist=smoothed_wrist,
             velocity=velocity,
             pinch_distance=self._last_pinch_distance,
             tracking_loss_streak=self._tracking_loss_streak,

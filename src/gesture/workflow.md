@@ -93,7 +93,7 @@ poll() 是主处理路径，每调用一次处理一帧。
 
 - tracking_state 从 tracked 逐步进入 temporarily_lost，再进入 not_detected。
 - pinch_state 会在已有 pinch 相关状态下先进入 release_candidate，再回到 open。
-- index_tip、thumb_tip、palm_center 沿用上一帧缓存值。
+- index_tip、thumb_tip、wrist 沿用上一帧缓存值。
 - confidence 在 temporarily_lost 时给低但非零值，在 not_detected 时降到 0。
 
 这样 bridge 端收到的是连续但降级的信号流，而不是突然断流。
@@ -197,7 +197,7 @@ src/gesture/debug/live_preview.py 提供 gesture 模块的专用 debug 入口。
 
 - 看服务是否能实时产包。
 - 看 tracking_state / pinch_state 是否稳定。
-- 看窗口里 index_tip、thumb_tip、palm_center 的实时锚点和坐标。
+- 看窗口里 index_tip、thumb_tip、wrist 的实时锚点和坐标。
 
 ## 实时预览路径
 
@@ -221,7 +221,7 @@ flowchart TD
 实时预览窗口当前会展示：
 
 - 手部骨架。
-- index_tip、thumb_tip、palm_center 三个锚点。
+- index_tip、thumb_tip、wrist 三个锚点。
 - camera_norm 坐标。
 - tracking_state、pinch_state、confidence、pinch_distance。
 - 实际测得的预览 FPS。
@@ -236,12 +236,14 @@ flowchart TD
 
 - index_tip
 - thumb_tip
-- palm_center
+- wrist
+
+当前契约直接使用 `wrist` 作为第三个主锚点。
 
 其中：
 
 - pinch_distance = distance(index_tip, thumb_tip)
-- velocity = 当前 palm_center - 上一帧 palm_center
+- velocity = 当前 wrist - 上一帧 wrist
 
 这两类信号分别描述：
 

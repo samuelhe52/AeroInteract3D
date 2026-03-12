@@ -192,6 +192,23 @@ class RenderingServiceImpl(RenderOutputPort):
         material_cache["grabbed"] = grabbed_mat
         
         return material_cache
+
+    @staticmethod
+    def _world_norm_to_scene_pos(position: tuple[float, float, float] | list[float]) -> tuple[float, float, float]:
+        """Map contract world_norm axes into Panda3D scene axes.
+
+        Contract world_norm:
+        - x: right
+        - y: up
+        - z: toward user/camera
+
+        Panda3D scene axes:
+        - x: right
+        - y: forward/depth
+        - z: up
+        """
+        x, y, z = (float(value) for value in position)
+        return (x, z, y)
     
     def start(self) -> None:
         """Start the module and initialize the environment into RUNNING or DEGRADED."""
@@ -491,10 +508,11 @@ class RenderingServiceImpl(RenderOutputPort):
             # 6. Validate coordinate ranges and clip to world_norm [-1.0, 1.0].
             clipped_pos = self._clip_coordinate(pos_float)
             clipped_hpr = self._clip_coordinate(hpr_float, rotation=True)  # Rotation is type-checked only and not range-limited.
+            scene_pos = self._world_norm_to_scene_pos(clipped_pos)
             
             # 7. Update the object transform.
             obj_np = self._object_cache[object_id]
-            obj_np.setPos(*clipped_pos)
+            obj_np.setPos(*scene_pos)
             obj_np.setHpr(*clipped_hpr)
             self._metrics.pose_updates += 1
             self._metrics.commands_applied += 1
@@ -799,14 +817,15 @@ class RenderingServiceImpl(RenderOutputPort):
                 cube_model.reparentTo(cube_np)
                 
                 # Set the initial pose and interaction state.
-                cube_np.setPos(*init_pos)
+                scene_init_pos = self._world_norm_to_scene_pos(init_pos)
+                cube_np.setPos(*scene_init_pos)
                 cube_np.setHpr(*init_hpr)
                 cube_np.setMaterial(self._material_cache["idle"], 1)
                 cube_np.setScale(0.2)  # Fit within world_norm.
                 
                 # Cache the object and its initial state.
                 self._object_cache[object_id] = cube_np
-                self._object_initial_states[object_id] = ObjectInitialState(pos=init_pos, hpr=init_hpr)
+                self._object_initial_states[object_id] = ObjectInitialState(pos=scene_init_pos, hpr=init_hpr)
                 
                 logger.info(f"init_scene executed: created object {object_id}, initial state pos={init_pos}, hpr={init_hpr}, state=idle")
             

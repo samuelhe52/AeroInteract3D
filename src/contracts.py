@@ -34,7 +34,7 @@ class GesturePacket:
     pinch_state: PinchState
     index_tip: Vec3
     thumb_tip: Vec3
-    palm_center: Vec3
+    wrist: Vec3
     coordinate_space: CoordinateSpace
     pinch_distance: float | None = None
     velocity: Vec3 | None = None

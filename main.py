@@ -32,7 +32,7 @@ class AppConfig:
     target_fps: int = DEFAULT_TARGET_FPS
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
-    live_preview: bool = False
+    live_preview: bool = True
 
 
 class App:
@@ -112,6 +112,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--live-preview",
         action="store_true",
+        default=True,
         help="Show the current camera stream in an OpenCV preview window alongside Panda3D.",
     )
     return parser.parse_args(argv)
