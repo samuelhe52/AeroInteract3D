@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from main import App, AppConfig, LIFECYCLE_RUNNING
+import main
+
+from main import App, AppConfig, LIFECYCLE_RUNNING, build_config, parse_args
 
 
 class FakeGestureInput:
@@ -69,3 +71,34 @@ def test_app_run_steps_render_output_every_loop_iteration() -> None:
     app.run()
 
     assert render_output.step_calls == 1
+
+
+def test_parse_args_enables_live_preview_flag() -> None:
+    args = parse_args(["--live-preview"])
+
+    config = build_config(args)
+
+    assert config.live_preview is True
+
+
+def test_build_app_passes_live_preview_to_gesture_service(monkeypatch) -> None:
+    captured_kwargs: dict[str, object] = {}
+    fake_gesture = object()
+    fake_bridge = object()
+    fake_render = object()
+
+    class FakeGestureService:
+        def __init__(self, **kwargs) -> None:
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr(main, "GestureServiceImpl", FakeGestureService)
+    monkeypatch.setattr(main, "BridgeServiceImpl", lambda: fake_bridge)
+    monkeypatch.setattr(main, "RenderingServiceImpl", lambda: fake_render)
+
+    app = main.build_app(AppConfig(live_preview=True))
+
+    assert captured_kwargs["preview_enabled"] is True
+    assert isinstance(app, App)
+    assert app.gesture_input is not None
+    assert app.bridge is fake_bridge
+    assert app.render_output is fake_render

@@ -121,6 +121,82 @@ def test_build_preview_config_uses_default_model_fallback(
     assert preview_config.frame_height == 480
 
 
+def test_poll_renders_live_preview_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = GestureServiceImpl(hand_model="stub.task", preview_enabled=True)
+    preview_calls: list[tuple[dict[str, object], dict[str, object] | None, object]] = []
+
+    monkeypatch.setattr(service, "_setup_backend", lambda: None)
+    monkeypatch.setattr(
+        service,
+        "_read_frame",
+        lambda: {"timestamp_ms": 100, "tick": 1, "frame": object()},
+    )
+    monkeypatch.setattr(
+        service,
+        "_detect_hand",
+        lambda _raw_frame: {
+            "index_tip": Vec3(0.2, 0.1, -0.1),
+            "thumb_tip": Vec3(0.21, 0.11, -0.12),
+            "palm_center": Vec3(0.0, 0.0, 0.0),
+            "raw_confidence": 0.9,
+        },
+    )
+    monkeypatch.setattr(service, "_ensure_preview_window", lambda: None)
+    monkeypatch.setattr(
+        service,
+        "_render_live_preview",
+        lambda raw_frame, hand_data, packet: preview_calls.append((raw_frame, hand_data, packet)),
+    )
+
+    service.start()
+    packet = service.poll()
+
+    assert packet is not None
+    assert len(preview_calls) == 1
+    assert preview_calls[0][0]["tick"] == 1
+
+
+def test_preview_failure_disables_preview_without_failing_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = GestureServiceImpl(hand_model="stub.task", preview_enabled=True)
+
+    monkeypatch.setattr(service, "_setup_backend", lambda: None)
+    monkeypatch.setattr(
+        service,
+        "_read_frame",
+        lambda: {"timestamp_ms": 100, "tick": 1, "frame": object()},
+    )
+    monkeypatch.setattr(
+        service,
+        "_detect_hand",
+        lambda _raw_frame: {
+            "index_tip": Vec3(0.2, 0.1, -0.1),
+            "thumb_tip": Vec3(0.21, 0.11, -0.12),
+            "palm_center": Vec3(0.0, 0.0, 0.0),
+            "raw_confidence": 0.9,
+        },
+    )
+    monkeypatch.setattr(service, "_ensure_preview_window", lambda: None)
+
+    def raise_preview_failure(
+        _raw_frame: dict[str, object],
+        _hand_data: dict[str, object] | None,
+        _packet,
+    ) -> None:
+        raise RuntimeError("preview backend failed")
+
+    monkeypatch.setattr(service, "_render_live_preview", raise_preview_failure)
+
+    service.start()
+    packet = service.poll()
+
+    assert packet is not None
+    health = service.health()
+    assert health["lifecycle_state"] == LIFECYCLE_RUNNING
+    assert health["stats"]["preview_active"] is False
+    assert health["stats"]["preview_failures"] == 1
+    assert health["errors"][-1]["code"] == "gesture.preview.failure"
+
+
 def test_live_preview_and_service_share_temporal_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
     service = GestureServiceImpl(hand_model="stub.task")
     preview = GestureDebugAnalyzer(build_preview_config(GesturePreviewConfig(hand_model="stub.task")))

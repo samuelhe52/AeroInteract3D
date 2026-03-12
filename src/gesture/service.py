@@ -10,6 +10,7 @@ from typing import Any
 import cv2
 
 from src.constants import (
+    DEBUG_FPS_SAMPLE_WINDOW,
     DEFAULT_CAMERA_INDEX,
     DEFAULT_FRAME_HEIGHT,
     DEFAULT_FRAME_WIDTH,
@@ -27,6 +28,11 @@ from src.gesture.runtime import (
     create_hand_detector,
     default_hand_model_path,
     resolve_hand_model_path,
+)
+from src.gesture.debug.live_preview_runtime import (
+    overlay_anchor_points,
+    overlay_fps,
+    overlay_packet,
 )
 from src.gesture.temporal import (
     GestureFrameAnalysis,
@@ -60,6 +66,8 @@ class GestureMetrics:
     tracked_packets: int = 0
     empty_packets: int = 0
     backend_failures: int = 0
+    preview_frames_rendered: int = 0
+    preview_failures: int = 0
 
 
 def _close_detector_resource(detector_owner: Any | None, detector: Any | None = None) -> None:
@@ -88,6 +96,10 @@ class GestureServiceImpl(GestureInputPort):
         min_detection_confidence: float = DEFAULT_MIN_DETECTION_CONFIDENCE,
         min_tracking_confidence: float = DEFAULT_MIN_TRACKING_CONFIDENCE,
         model_complexity: int = DEFAULT_MODEL_COMPLEXITY,
+        preview_enabled: bool = False,
+        preview_window_name: str = "Gesture Live Preview",
+        preview_mirror: bool = True,
+        preview_draw_coordinates: bool = True,
     ) -> None:
         self._repo_root = Path(__file__).resolve().parents[2]
         self._camera_index = camera_index
@@ -98,6 +110,11 @@ class GestureServiceImpl(GestureInputPort):
         self._min_detection_confidence = min_detection_confidence
         self._min_tracking_confidence = min_tracking_confidence
         self._model_complexity = model_complexity
+        self._preview_requested = preview_enabled
+        self._preview_active = preview_enabled
+        self._preview_window_name = preview_window_name
+        self._preview_mirror = preview_mirror
+        self._preview_draw_coordinates = preview_draw_coordinates
         self._backend: dict[str, Any] | None = None
         self._detector_backend = "uninitialized"
 
@@ -123,6 +140,10 @@ class GestureServiceImpl(GestureInputPort):
         self._last_thumb_tip = Vec3(0.0, 0.0, 0.0)
         self._last_palm_center = Vec3(0.0, 0.0, 0.0)
         self._last_velocity = Vec3(0.0, 0.0, 0.0)
+        self._preview_window_open = False
+        self._preview_closed_by_user = False
+        self._preview_smoothed_fps = 0.0
+        self._preview_last_frame_started_at: float | None = None
 
     def start(self) -> None:
         if self._started:
@@ -165,6 +186,8 @@ class GestureServiceImpl(GestureInputPort):
                 )
             )
             raise
+
+        self._ensure_preview_window()
 
         self._started = True
         self.lifecycle_state = LIFECYCLE_RUNNING
@@ -227,6 +250,7 @@ class GestureServiceImpl(GestureInputPort):
                     timestamp_ms=analysis.timestamp_ms,
                     hand_detected=False,
                 )
+                self._maybe_render_live_preview(raw_frame, hand_data, packet)
                 self._log_frame_summary(packet, hand_detected=False)
                 return packet
 
@@ -259,6 +283,7 @@ class GestureServiceImpl(GestureInputPort):
                 timestamp_ms=analysis.timestamp_ms,
                 hand_detected=True,
             )
+            self._maybe_render_live_preview(raw_frame, hand_data, packet)
             self._log_frame_summary(packet, hand_detected=True)
             return packet
         except Exception as exc:
@@ -302,12 +327,17 @@ class GestureServiceImpl(GestureInputPort):
                 "confidence": self._confidence,
                 "tracking_loss_streak": self._tracking_loss_streak,
                 "detector_backend": self._detector_backend,
+                "preview_requested": self._preview_requested,
+                "preview_active": self._preview_active,
+                "preview_window_open": self._preview_window_open,
                 "last_error": last_error,
                 "polls_attempted": self._metrics.polls_attempted,
                 "packets_emitted": self._metrics.packets_emitted,
                 "tracked_packets": self._metrics.tracked_packets,
                 "empty_packets": self._metrics.empty_packets,
                 "backend_failures": self._metrics.backend_failures,
+                "preview_frames_rendered": self._metrics.preview_frames_rendered,
+                "preview_failures": self._metrics.preview_failures,
             },
         )
 
@@ -341,6 +371,7 @@ class GestureServiceImpl(GestureInputPort):
                 )
             )
         finally:
+            self._close_preview_window()
             self._backend = None
             self._started = False
             self.lifecycle_state = LIFECYCLE_STOPPED
@@ -363,6 +394,11 @@ class GestureServiceImpl(GestureInputPort):
         self._last_thumb_tip = Vec3(0.0, 0.0, 0.0)
         self._last_palm_center = Vec3(0.0, 0.0, 0.0)
         self._last_velocity = Vec3(0.0, 0.0, 0.0)
+        self._preview_active = self._preview_requested
+        self._preview_window_open = False
+        self._preview_closed_by_user = False
+        self._preview_smoothed_fps = 0.0
+        self._preview_last_frame_started_at = None
         self._analyzer.reset()
 
     def _setup_backend(self) -> None:
@@ -448,6 +484,129 @@ class GestureServiceImpl(GestureInputPort):
         self._backend = None
         self._detector_backend = "uninitialized"
 
+    def _ensure_preview_window(self) -> None:
+        if not self._preview_active or self._preview_closed_by_user or self._preview_window_open:
+            return
+
+        try:
+            cv2.namedWindow(self._preview_window_name, cv2.WINDOW_NORMAL)
+            self._preview_window_open = True
+        except Exception as exc:
+            self._metrics.preview_failures += 1
+            self._preview_active = False
+            logger.warning("Live preview unavailable, disabling preview window: %s", exc)
+            self._record_error(
+                error_entry(
+                    "gesture.preview.unavailable",
+                    "Unable to open the live preview window",
+                    recoverable=True,
+                    hint="Disable --live-preview or verify that OpenCV GUI support is available.",
+                    details={
+                        "window_name": self._preview_window_name,
+                        "error": str(exc),
+                    },
+                )
+            )
+
+    def _close_preview_window(self) -> None:
+        if not self._preview_window_open:
+            return
+
+        try:
+            cv2.destroyWindow(self._preview_window_name)
+        except Exception:
+            logger.debug("Preview window destroy skipped after OpenCV close failure", exc_info=True)
+        finally:
+            self._preview_window_open = False
+
+    def _maybe_render_live_preview(
+        self,
+        raw_frame: dict[str, Any],
+        hand_data: dict[str, Any] | None,
+        packet: GesturePacket,
+    ) -> None:
+        if not self._preview_active:
+            return
+
+        try:
+            self._render_live_preview(raw_frame, hand_data, packet)
+        except Exception as exc:
+            self._metrics.preview_failures += 1
+            self._preview_active = False
+            self._close_preview_window()
+            logger.warning("Live preview disabled after render failure: %s", exc)
+            self._record_error(
+                error_entry(
+                    "gesture.preview.failure",
+                    "Live preview disabled after a rendering failure",
+                    recoverable=True,
+                    hint="Disable --live-preview or verify that OpenCV GUI support is working.",
+                    details={
+                        "window_name": self._preview_window_name,
+                        "error": str(exc),
+                    },
+                )
+            )
+
+    def _render_live_preview(
+        self,
+        raw_frame: dict[str, Any],
+        hand_data: dict[str, Any] | None,
+        packet: GesturePacket,
+    ) -> None:
+        self._ensure_preview_window()
+        if not self._preview_window_open or self._backend is None:
+            return
+
+        detector = self._backend.get("detector")
+        display_frame = raw_frame["frame"].copy()
+        raw_landmarks = None if hand_data is None else hand_data.get("raw_landmarks")
+
+        if detector is not None and hasattr(detector, "draw"):
+            detector.draw(display_frame, raw_landmarks)
+
+        if self._preview_mirror:
+            display_frame = cv2.flip(display_frame, 1)
+
+        overlay_packet(display_frame, packet)
+        overlay_fps(display_frame, self._compute_preview_fps())
+        overlay_anchor_points(display_frame, packet, self._preview_mirror, self._preview_draw_coordinates)
+        cv2.imshow(self._preview_window_name, display_frame)
+
+        if cv2.waitKey(1) & 0xFF in {27, ord("q")}:
+            logger.info("Live preview window closed by user request")
+            self._preview_active = False
+            self._preview_closed_by_user = True
+            self._close_preview_window()
+            return
+
+        try:
+            if cv2.getWindowProperty(self._preview_window_name, cv2.WND_PROP_VISIBLE) < 1:
+                logger.info("Live preview window was closed by the window manager")
+                self._preview_active = False
+                self._preview_closed_by_user = True
+                self._close_preview_window()
+                return
+        except Exception:
+            logger.debug("Preview visibility check skipped after OpenCV property lookup failure", exc_info=True)
+
+        self._metrics.preview_frames_rendered += 1
+
+    def _compute_preview_fps(self) -> float:
+        now = time.perf_counter()
+        if self._preview_last_frame_started_at is None:
+            self._preview_last_frame_started_at = now
+            return 0.0
+
+        frame_elapsed = max(now - self._preview_last_frame_started_at, 1e-6)
+        instantaneous_fps = 1.0 / frame_elapsed
+        if self._preview_smoothed_fps == 0.0:
+            self._preview_smoothed_fps = instantaneous_fps
+        else:
+            self._preview_smoothed_fps += (instantaneous_fps - self._preview_smoothed_fps) / DEBUG_FPS_SAMPLE_WINDOW
+        self._preview_last_frame_started_at = now
+        return self._preview_smoothed_fps
+
     def _read_frame(self) -> dict[str, Any]:
         if self._backend is None:
             raise RuntimeError("Gesture backend is not initialized")
@@ -472,7 +631,7 @@ class GestureServiceImpl(GestureInputPort):
         frame = raw_frame["frame"]
         detector = self._backend["detector"]
         timestamp_ms = int(raw_frame["timestamp_ms"])
-        landmarks, raw_confidence, _raw_landmarks = detector.detect(frame, timestamp_ms)
+        landmarks, raw_confidence, raw_landmarks = detector.detect(frame, timestamp_ms)
         if landmarks is None:
             return None
 
@@ -481,6 +640,7 @@ class GestureServiceImpl(GestureInputPort):
             "thumb_tip": landmarks["thumb_tip"],
             "palm_center": landmarks["wrist"],
             "raw_confidence": raw_confidence,
+            "raw_landmarks": raw_landmarks,
             "source": self._detector_backend,
         }
 

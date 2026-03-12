@@ -32,6 +32,7 @@ class AppConfig:
     target_fps: int = DEFAULT_TARGET_FPS
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
+    live_preview: bool = False
 
 
 class App:
@@ -108,6 +109,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--target-fps", type=int, default=DEFAULT_TARGET_FPS)
     parser.add_argument("--frame-width", type=int, default=DEFAULT_FRAME_WIDTH)
     parser.add_argument("--frame-height", type=int, default=DEFAULT_FRAME_HEIGHT)
+    parser.add_argument(
+        "--live-preview",
+        action="store_true",
+        help="Show the current camera stream in an OpenCV preview window alongside Panda3D.",
+    )
     return parser.parse_args(argv)
 
 
@@ -126,6 +132,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         target_fps=args.target_fps,
         frame_width=args.frame_width,
         frame_height=args.frame_height,
+        live_preview=args.live_preview,
     )
 
 
@@ -135,6 +142,7 @@ def build_app(config: AppConfig) -> App:
         target_fps=float(config.target_fps),
         frame_width=config.frame_width,
         frame_height=config.frame_height,
+        preview_enabled=config.live_preview,
     )
     bridge = BridgeServiceImpl()
     render_output = RenderingServiceImpl()
