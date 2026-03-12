@@ -51,6 +51,7 @@ class RenderingMetrics:
     state_updates: int = 0
     init_scene_commands: int = 0
     heartbeats_received: int = 0
+    render_steps: int = 0
 
 
 class Panda3DWindowAdapter:
@@ -130,6 +131,12 @@ class Panda3DWindowAdapter:
             raise RuntimeError("Window is not initialized; cannot reset the scene")
         scene_root.removeChildren()
         logger.info("Scene reset safely (window/camera/lights preserved)")
+
+    def step(self) -> None:
+        """Advance Panda3D by one frame to process window events and present the scene."""
+        if not self._is_initialized or self._base is None:
+            return
+        self._base.taskMgr.step()
 
 
 class RenderingServiceImpl(RenderOutputPort):
@@ -292,6 +299,20 @@ class RenderingServiceImpl(RenderOutputPort):
                 logger.error(f"Command processing failed, module switched to DEGRADED: {details_msg}")
             else:
                 logger.warning(f"Command processing failed: {details_msg}")
+
+    def step(self) -> None:
+        """Advance the Panda3D event/render loop without leaving the app's main loop."""
+        if not self._window_adapter.is_initialized():
+            return
+
+        if hasattr(self._window_adapter, "step"):
+            self._window_adapter.step()
+        else:
+            base = self._window_adapter.get_base()
+            if base is None:
+                return
+            base.taskMgr.step()
+        self._metrics.render_steps += 1
     
     def health(self) -> Dict[str, Any]:
         """Return structured health information, including logging-related state."""
@@ -310,6 +331,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 "state_updates": self._metrics.state_updates,
                 "init_scene_commands": self._metrics.init_scene_commands,
                 "heartbeats_received": self._metrics.heartbeats_received,
+                "render_steps": self._metrics.render_steps,
                 "last_command_ts": self._last_command_ts,
                 "window_initialized": self._window_adapter.is_initialized(),
                 "executed_command_count": len(self._executed_command_ids),
@@ -329,7 +351,7 @@ class RenderingServiceImpl(RenderOutputPort):
         # Stop task loop, release window
         if self._window_adapter.is_initialized():
             base = self._window_adapter.get_base()
-            base.task_mgr.stop()
+            base.taskMgr.stop()
             base.win.close()
             base.destroy()
         

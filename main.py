@@ -67,6 +67,8 @@ class App:
         while self._running:
             loop_start = time.perf_counter()
 
+            self.render_output.step()
+
             packet = self.gesture_input.poll()
             if packet is not None:
                 commands = self.bridge.process(packet)

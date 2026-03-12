@@ -29,9 +29,13 @@ def make_command(
 class FakeTaskManager:
     def __init__(self) -> None:
         self.stopped = False
+        self.steps = 0
 
     def stop(self) -> None:
         self.stopped = True
+
+    def step(self) -> None:
+        self.steps += 1
 
 
 class FakeWindow:
@@ -45,7 +49,7 @@ class FakeWindow:
 class FakeBase:
     def __init__(self) -> None:
         self.render = object()
-        self.task_mgr = FakeTaskManager()
+        self.taskMgr = FakeTaskManager()
         self.win = FakeWindow()
         self.destroyed = False
 
@@ -77,6 +81,9 @@ class FakeWindowAdapter:
 
     def reset_scene(self, scene_root: object) -> None:
         return None
+
+    def step(self) -> None:
+        self._base.taskMgr.step()
 
 
 class FakeNodePath:
@@ -256,6 +263,19 @@ def test_rendering_pose_logging_is_debounced(caplog) -> None:
     assert len(pose_logs) == 2
     assert "suppressed_updates=1" not in pose_logs[0]
     assert "suppressed_updates=1" in pose_logs[1]
+
+
+def test_rendering_step_advances_panda3d_task_manager(monkeypatch) -> None:
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+
+    service.step()
+
+    stats = service.health()["stats"]
+    assert service._window_adapter.get_base().taskMgr.steps == 1
+    assert stats["render_steps"] == 1
 
 
 def test_rendering_flushes_suppressed_pose_logs_on_stop(caplog) -> None:

@@ -27,6 +27,9 @@ class RenderOutputPort(ABC):
     def push(self, command: SceneCommand) -> None: ...
 
     @abstractmethod
+    def step(self) -> None: ...
+
+    @abstractmethod
     def health(self) -> dict: ...
 
     @abstractmethod
