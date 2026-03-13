@@ -10,6 +10,9 @@ import cv2
 import mediapipe as mp
 
 from src.constants import (
+    DEPTH_ESTIMATION_FAR_HAND_SCALE,
+    DEPTH_ESTIMATION_LOCAL_Z_WEIGHT,
+    DEPTH_ESTIMATION_NEAR_HAND_SCALE,
     DEFAULT_MAX_FRAMES,
     DEFAULT_MIN_DETECTION_CONFIDENCE,
     DEFAULT_MIN_TRACKING_CONFIDENCE,
@@ -271,13 +274,94 @@ def landmark_to_vec3(landmark: Any) -> Vec3:
     )
 
 
+def _clip_unit(value: float) -> float:
+    return max(-1.0, min(1.0, float(value)))
+
+
+def distance_2d(a: Vec3, b: Vec3) -> float:
+    dx = a.x - b.x
+    dy = a.y - b.y
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def estimate_hand_scale(landmarks: dict[str, Vec3]) -> float:
+    if not landmarks:
+        return 0.0
+
+    xs = [point.x for point in landmarks.values()]
+    ys = [point.y for point in landmarks.values()]
+    bbox_scale = max(max(xs) - min(xs), max(ys) - min(ys))
+
+    wrist = landmarks.get("wrist")
+    middle_mcp = landmarks.get("middle_finger_mcp")
+    index_mcp = landmarks.get("index_finger_mcp")
+    pinky_mcp = landmarks.get("pinky_mcp")
+
+    palm_length = 0.0 if wrist is None or middle_mcp is None else distance_2d(wrist, middle_mcp)
+    palm_width = 0.0 if index_mcp is None or pinky_mcp is None else distance_2d(index_mcp, pinky_mcp)
+    stable_scale = max(palm_length, palm_width)
+    if stable_scale > 0.0:
+        return stable_scale
+    return bbox_scale
+
+
+def estimate_camera_depth_from_hand_scale(landmarks: dict[str, Vec3]) -> float:
+    hand_scale = estimate_hand_scale(landmarks)
+    scale_span = max(DEPTH_ESTIMATION_NEAR_HAND_SCALE - DEPTH_ESTIMATION_FAR_HAND_SCALE, 1e-6)
+    normalized = (hand_scale - DEPTH_ESTIMATION_FAR_HAND_SCALE) / scale_span
+    return _clip_unit(normalized * 2.0 - 1.0)
+
+
+def estimate_palm_anchor(landmarks: dict[str, Vec3]) -> Vec3:
+    wrist = landmarks.get("wrist")
+    index_mcp = landmarks.get("index_finger_mcp")
+    middle_mcp = landmarks.get("middle_finger_mcp")
+    pinky_mcp = landmarks.get("pinky_mcp")
+
+    if wrist is None:
+        return Vec3(0.0, 0.0, 0.0)
+
+    anchor_points = [point for point in (index_mcp, middle_mcp, pinky_mcp) if point is not None]
+    if not anchor_points:
+        return wrist
+
+    averaged_mcp = Vec3(
+        x=sum(point.x for point in anchor_points) / len(anchor_points),
+        y=sum(point.y for point in anchor_points) / len(anchor_points),
+        z=sum(point.z for point in anchor_points) / len(anchor_points),
+    )
+    return Vec3(
+        x=_clip_unit(wrist.x * 0.35 + averaged_mcp.x * 0.65),
+        y=_clip_unit(wrist.y * 0.35 + averaged_mcp.y * 0.65),
+        z=_clip_unit(wrist.z * 0.60 + averaged_mcp.z * 0.40),
+    )
+
+
+def apply_camera_depth_heuristic(landmarks: dict[str, Vec3]) -> dict[str, Vec3]:
+    if not landmarks:
+        return landmarks
+
+    estimated_depth = estimate_camera_depth_from_hand_scale(landmarks)
+    wrist_z = landmarks.get("wrist", Vec3(0.0, 0.0, 0.0)).z
+    adjusted_landmarks: dict[str, Vec3] = {}
+    for name, point in landmarks.items():
+        local_z = (point.z - wrist_z) * DEPTH_ESTIMATION_LOCAL_Z_WEIGHT
+        adjusted_landmarks[name] = Vec3(
+            x=point.x,
+            y=point.y,
+            z=_clip_unit(estimated_depth + local_z),
+        )
+    return adjusted_landmarks
+
+
 def extract_landmarks(hand_landmarks: Any) -> dict[str, Vec3]:
     if hasattr(hand_landmarks, "landmark"):
         source = hand_landmarks.landmark
     else:
         source = hand_landmarks
     points = [landmark_to_vec3(landmark) for landmark in source]
-    return {name: points[index] for index, name in enumerate(LANDMARK_NAMES)}
+    named_points = {name: points[index] for index, name in enumerate(LANDMARK_NAMES)}
+    return apply_camera_depth_heuristic(named_points)
 
 
 def distance(a: Vec3, b: Vec3) -> float:
@@ -304,11 +388,16 @@ __all__ = [
     "DEFAULT_PINCH_RELEASE_THRESHOLD",
     "GestureRuntimeConfig",
     "HAND_MODEL_ENV_VAR",
+    "apply_camera_depth_heuristic",
     "configure_capture",
     "create_hand_detector",
     "create_capture",
     "default_hand_model_path",
     "distance",
+    "distance_2d",
+    "estimate_camera_depth_from_hand_scale",
+    "estimate_hand_scale",
+    "estimate_palm_anchor",
     "extract_landmarks",
     "open_capture",
     "resolve_hand_model_path",

@@ -6,10 +6,12 @@ from src.constants import (
     TEMPORAL_PINCH_CONFIRM_FRAMES as PINCH_CONFIRM_FRAMES,
     TEMPORAL_PINCH_ENTER_THRESHOLD as PINCH_ENTER_THRESHOLD,
     TEMPORAL_PINCH_HOLD_THRESHOLD as PINCH_HOLD_THRESHOLD,
+    TEMPORAL_POSITION_DEADZONE as POSITION_DEADZONE,
     TEMPORAL_PINCH_RELEASE_THRESHOLD as PINCH_RELEASE_THRESHOLD,
     TEMPORAL_RELEASE_CONFIRM_FRAMES as RELEASE_CONFIRM_FRAMES,
     TEMPORAL_SMOOTHING_ALPHA as SMOOTHING_ALPHA,
     TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES as TRACKING_TEMPORARY_LOSS_FRAMES,
+    TEMPORAL_XY_SMOOTHING_ALPHA as XY_SMOOTHING_ALPHA,
 )
 from src.contracts import Vec3
 from src.gesture.runtime import distance
@@ -24,6 +26,8 @@ class GestureTemporalConfig:
     pinch_confirm_frames: int = PINCH_CONFIRM_FRAMES
     release_confirm_frames: int = RELEASE_CONFIRM_FRAMES
     smoothing_alpha: float = SMOOTHING_ALPHA
+    xy_smoothing_alpha: float = XY_SMOOTHING_ALPHA
+    position_deadzone: float = POSITION_DEADZONE
     smooth_coordinates: bool = True
 
 
@@ -211,12 +215,49 @@ class GestureTemporalReducer:
     def _smooth_vec3(self, current: Vec3, previous: Vec3) -> Vec3:
         if not self._config.smooth_coordinates or self._processed_frames == 0:
             return current
-        alpha = self._config.smoothing_alpha
-        return Vec3(
-            x=current.x * alpha + previous.x * (1.0 - alpha),
-            y=current.y * alpha + previous.y * (1.0 - alpha),
-            z=current.z * alpha + previous.z * (1.0 - alpha),
+
+        smoothed_x = self._smooth_coordinate(
+            current=current.x,
+            previous=previous.x,
+            base_alpha=self._config.xy_smoothing_alpha,
         )
+        smoothed_y = self._smooth_coordinate(
+            current=current.y,
+            previous=previous.y,
+            base_alpha=self._config.xy_smoothing_alpha,
+        )
+        smoothed_z = self._smooth_coordinate(
+            current=current.z,
+            previous=previous.z,
+            base_alpha=self._config.smoothing_alpha,
+            deadzone=0.0,
+        )
+        return Vec3(
+            x=smoothed_x,
+            y=smoothed_y,
+            z=smoothed_z,
+        )
+
+    def _smooth_coordinate(
+        self,
+        *,
+        current: float,
+        previous: float,
+        base_alpha: float,
+        deadzone: float | None = None,
+    ) -> float:
+        if deadzone is None:
+            deadzone = self._config.position_deadzone
+
+        delta = current - previous
+        magnitude = abs(delta)
+        if magnitude <= deadzone:
+            return previous
+
+        # Small moves get stronger smoothing; larger intentional moves get more alpha
+        # so the cursor/object does not feel sticky when the user actually translates.
+        adaptive_alpha = min(0.9, base_alpha + magnitude * 3.0)
+        return current * adaptive_alpha + previous * (1.0 - adaptive_alpha)
 
     def _compute_velocity(self, current: Vec3, previous: Vec3) -> Vec3:
         return self._normalize_vec3(
@@ -229,5 +270,10 @@ class GestureTemporalReducer:
 
     def _smoothing_hint(self) -> dict[str, float | str]:
         if self._config.smooth_coordinates:
-            return {"method": "linear", "alpha": self._config.smoothing_alpha}
+            return {
+                "method": "adaptive_linear",
+                "alpha": self._config.smoothing_alpha,
+                "xy_alpha": self._config.xy_smoothing_alpha,
+                "deadzone": self._config.position_deadzone,
+            }
         return {"method": "none", "alpha": 1.0}

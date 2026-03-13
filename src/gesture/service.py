@@ -27,6 +27,9 @@ from src.gesture.runtime import (
     create_capture,
     create_hand_detector,
     default_hand_model_path,
+    estimate_camera_depth_from_hand_scale,
+    estimate_hand_scale,
+    estimate_palm_anchor,
     resolve_hand_model_path,
 )
 from src.gesture.debug.live_preview_runtime import (
@@ -269,6 +272,8 @@ class GestureServiceImpl(GestureInputPort):
                     "tick": raw_frame.get("tick"),
                     "has_hand": True,
                     "raw_confidence": hand_data.get("raw_confidence"),
+                    "camera_depth": hand_data.get("camera_depth"),
+                    "hand_scale": hand_data.get("hand_scale"),
                 },
             )
             self.lifecycle_state = LIFECYCLE_RUNNING
@@ -638,8 +643,10 @@ class GestureServiceImpl(GestureInputPort):
         return {
             "index_tip": landmarks["index_finger_tip"],
             "thumb_tip": landmarks["thumb_tip"],
-            "wrist": landmarks["wrist"],
+            "wrist": estimate_palm_anchor(landmarks),
             "raw_confidence": raw_confidence,
+            "camera_depth": estimate_camera_depth_from_hand_scale(landmarks),
+            "hand_scale": estimate_hand_scale(landmarks),
             "raw_landmarks": raw_landmarks,
             "source": self._detector_backend,
         }

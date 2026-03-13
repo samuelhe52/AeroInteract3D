@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from src.contracts import Vec3
@@ -10,9 +12,11 @@ from src.gesture.debug.live_preview import (
     build_service,
 )
 from src.gesture.debug.live_preview_runtime import GestureDebugAnalyzer
+from src.gesture.runtime import estimate_palm_anchor, extract_landmarks
 from src.gesture.service import (
     GestureServiceImpl,
 )
+from src.gesture.temporal import GestureTemporalConfig, GestureTemporalReducer
 from src.utils.contracts import EXPECTED_CONTRACT_VERSION
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING
 
@@ -117,8 +121,8 @@ def test_build_preview_config_uses_default_model_fallback(
     assert preview_config.hand_model == str(model_path)
     assert preview_config.camera_index == 0
     assert preview_config.target_fps == 60.0
-    assert preview_config.frame_width == 640
-    assert preview_config.frame_height == 480
+    assert preview_config.frame_width == 1280
+    assert preview_config.frame_height == 960
 
 
 def test_poll_renders_live_preview_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -197,13 +201,16 @@ def test_preview_failure_disables_preview_without_failing_poll(monkeypatch: pyte
     assert health["errors"][-1]["code"] == "gesture.preview.failure"
 
 
-def test_detect_hand_uses_wrist_landmark() -> None:
+def test_detect_hand_uses_palm_anchor() -> None:
     class StubDetector:
         def detect(self, frame, timestamp_ms):
             del frame, timestamp_ms
             return (
                 {
+                    "index_finger_mcp": Vec3(0.1, 0.2, -0.1),
                     "index_finger_tip": Vec3(0.2, 0.1, -0.1),
+                    "middle_finger_mcp": Vec3(0.2, 0.25, -0.15),
+                    "pinky_mcp": Vec3(0.3, 0.2, -0.1),
                     "thumb_tip": Vec3(0.21, 0.11, -0.12),
                     "wrist": Vec3(0.3, 0.2, -0.2),
                 },
@@ -217,7 +224,90 @@ def test_detect_hand_uses_wrist_landmark() -> None:
     hand_data = service._detect_hand({"frame": object(), "timestamp_ms": 100})
 
     assert hand_data is not None
-    assert hand_data["wrist"] == Vec3(0.3, 0.2, -0.2)
+    assert hand_data["wrist"] == estimate_palm_anchor(
+        {
+            "index_finger_mcp": Vec3(0.1, 0.2, -0.1),
+            "middle_finger_mcp": Vec3(0.2, 0.25, -0.15),
+            "pinky_mcp": Vec3(0.3, 0.2, -0.1),
+            "wrist": Vec3(0.3, 0.2, -0.2),
+        }
+    )
+
+
+def test_temporal_reducer_keeps_small_xy_jitter_in_deadzone() -> None:
+    reducer = GestureTemporalReducer(
+        GestureTemporalConfig(
+            smoothing_alpha=0.65,
+            xy_smoothing_alpha=0.35,
+            position_deadzone=0.02,
+        )
+    )
+
+    first = reducer.process(
+        timestamp_ms=100,
+        index_tip=Vec3(0.10, 0.10, 0.0),
+        thumb_tip=Vec3(0.12, 0.10, 0.0),
+        wrist=Vec3(0.30, 0.20, 0.0),
+        raw_confidence=0.9,
+    )
+    second = reducer.process(
+        timestamp_ms=101,
+        index_tip=Vec3(0.11, 0.10, 0.0),
+        thumb_tip=Vec3(0.13, 0.10, 0.0),
+        wrist=Vec3(0.312, 0.209, 0.0),
+        raw_confidence=0.9,
+    )
+
+    assert first.wrist == Vec3(0.30, 0.20, 0.0)
+    assert second.wrist == Vec3(0.30, 0.20, 0.0)
+
+
+def test_temporal_reducer_allows_large_xy_motion_through_adaptive_smoothing() -> None:
+    reducer = GestureTemporalReducer(
+        GestureTemporalConfig(
+            smoothing_alpha=0.65,
+            xy_smoothing_alpha=0.35,
+            position_deadzone=0.02,
+        )
+    )
+
+    reducer.process(
+        timestamp_ms=100,
+        index_tip=Vec3(0.10, 0.10, 0.0),
+        thumb_tip=Vec3(0.12, 0.10, 0.0),
+        wrist=Vec3(0.00, 0.00, 0.0),
+        raw_confidence=0.9,
+    )
+    moved = reducer.process(
+        timestamp_ms=101,
+        index_tip=Vec3(0.20, 0.20, 0.0),
+        thumb_tip=Vec3(0.22, 0.20, 0.0),
+        wrist=Vec3(0.30, 0.24, 0.0),
+        raw_confidence=0.9,
+    )
+
+    assert moved.wrist.x > 0.15
+    assert moved.wrist.y > 0.12
+
+
+def test_extract_landmarks_uses_hand_scale_for_camera_depth() -> None:
+    def make_landmarks(scale: float) -> list[SimpleNamespace]:
+        points = [SimpleNamespace(x=0.5, y=0.5, z=0.2) for _ in range(21)]
+        points[0] = SimpleNamespace(x=0.5, y=0.5 + scale * 0.95, z=0.20)
+        points[4] = SimpleNamespace(x=0.5 - scale * 0.45, y=0.5 + scale * 0.25, z=0.12)
+        points[5] = SimpleNamespace(x=0.5 - scale * 0.50, y=0.5 + scale * 0.10, z=0.16)
+        points[8] = SimpleNamespace(x=0.5 - scale * 0.55, y=0.5 - scale * 0.95, z=0.08)
+        points[9] = SimpleNamespace(x=0.5, y=0.5 - scale * 0.35, z=0.15)
+        points[17] = SimpleNamespace(x=0.5 + scale * 0.50, y=0.5 + scale * 0.12, z=0.18)
+        return points
+
+    far_landmarks = extract_landmarks(make_landmarks(0.08))
+    near_landmarks = extract_landmarks(make_landmarks(0.24))
+
+    assert near_landmarks["wrist"].z > far_landmarks["wrist"].z
+    assert far_landmarks["index_finger_tip"].z != far_landmarks["wrist"].z
+    assert -1.0 <= far_landmarks["wrist"].z <= 1.0
+    assert -1.0 <= near_landmarks["wrist"].z <= 1.0
 
 
 def test_live_preview_and_service_share_temporal_behavior(monkeypatch: pytest.MonkeyPatch) -> None:

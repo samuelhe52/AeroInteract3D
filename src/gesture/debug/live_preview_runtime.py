@@ -10,6 +10,8 @@ from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import (
     GestureRuntimeConfig,
     create_hand_detector,
+    estimate_camera_depth_from_hand_scale,
+    estimate_hand_scale,
     open_capture,
 )
 from src.gesture.temporal import GestureFrameAnalysis, GestureTemporalReducer
@@ -54,6 +56,9 @@ class GestureDebugAnalyzer:
         )
 
         debug = {"source": "mediapipe", "tracking_loss_streak": analysis.tracking_loss_streak}
+        if landmarks is not None:
+            debug["camera_depth"] = estimate_camera_depth_from_hand_scale(landmarks)
+            debug["hand_scale"] = estimate_hand_scale(landmarks)
         if landmarks is None:
             debug = {"reason": "no_hand_detected", "tracking_loss_streak": analysis.tracking_loss_streak}
 
@@ -92,7 +97,11 @@ def overlay_packet(frame: Any, packet: GesturePacket) -> Any:
         f"pinch={packet.pinch_state}",
         f"confidence={packet.confidence:.2f}",
         f"pinch_distance={packet.pinch_distance or 0.0:.3f}",
+        f"wrist_z={packet.wrist.z:.3f}",
     ]
+    hand_scale = None if packet.debug is None else packet.debug.get("hand_scale")
+    if isinstance(hand_scale, (float, int)):
+        lines.append(f"hand_scale={float(hand_scale):.3f}")
     y = 30
     for line in lines:
         cv2.putText(frame, line, (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, pinch_color, 2, cv2.LINE_AA)

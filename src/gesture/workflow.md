@@ -23,6 +23,12 @@ gesture 模块只负责把输入后端转换为有序 GesturePacket 流，不负
 - 中间结果：手部关键点、tracking_state、pinch_state、confidence、velocity。
 - 输出：符合 src/contracts.py 中 GesturePacket 契约的消息流。
 
+其中 z 轴现在采用“手部尺度启发式深度”语义：
+
+- 不再直接把 MediaPipe 原始 landmark z 当作手到摄像头距离。
+- 先用手在图像中的尺度估算整体前后距离。
+- 再叠加少量相对局部 z 偏移，保留手内部前后结构。
+
 ## 运行总流程
 
 ```mermaid
@@ -83,9 +89,10 @@ poll() 是主处理路径，每调用一次处理一帧。
 1. _read_frame() 从摄像头读取 BGR 帧，并给出 timestamp_ms。
 2. _resolve_timestamp_ms() 与 GestureTemporalReducer 共同保证时间戳单调递增。
 3. _detect_hand() 用 MediaPipe 检测关键点。
-4. GestureTemporalReducer.process() 统一完成 tracking_state、pinch_state、confidence、坐标平滑与 velocity。
-5. _sync_analysis_state() 更新服务内部缓存。
-6. _build_packet() 构造完整 GesturePacket。
+4. src/gesture/runtime.py 会先把原始 landmark z 转换为“基于手尺度的相机深度估计”，避免把 MediaPipe 原始 z 直接当作绝对前后距离。
+5. GestureTemporalReducer.process() 统一完成 tracking_state、pinch_state、confidence、坐标平滑与 velocity。
+6. _sync_analysis_state() 更新服务内部缓存。
+7. _build_packet() 构造完整 GesturePacket。
 
 #### 路径 C：成功读取一帧，但这一帧没检测到手
 
@@ -115,6 +122,16 @@ poll() 是主处理路径，每调用一次处理一帧。
 - 让实时服务与 live preview 使用同一套状态逻辑。
 - 避免调试窗口与正式服务出现状态漂移。
 - 把 gesture 级别的稳定性策略留在 gesture 模块，而不是在 bridge 里重复确认。
+
+### 3.1 深度语义修正
+
+当前 forward/back 信号不再直接依赖 MediaPipe 原始 z，而是遵循 [src/gesture/DEPTH_LIMITATIONS.md](src/gesture/DEPTH_LIMITATIONS.md) 的建议：
+
+- 用 index_mcp 到 pinky_mcp、wrist 到 middle_mcp、以及手部包围框尺度估算 hand_scale。
+- 把 hand_scale 映射成 camera_norm 下的整体深度。
+- 用较小权重保留 landmark 相对 wrist 的局部 z 起伏。
+
+这样 bridge 读取 packet.wrist.z 时，拿到的是更接近“整只手离摄像头远近”的信号，而不是仅反映手内部几何的原始模型 z。
 
 ### 4. pinch_state 状态机
 
