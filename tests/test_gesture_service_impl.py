@@ -128,8 +128,8 @@ def test_build_preview_config_uses_default_model_fallback(
     assert preview_config.hand_model == str(model_path)
     assert preview_config.camera_index == 0
     assert preview_config.target_fps == 60.0
-    assert preview_config.frame_width == 1280
-    assert preview_config.frame_height == 960
+    assert preview_config.frame_width == 640
+    assert preview_config.frame_height == 480
 
 
 def test_poll_renders_live_preview_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:

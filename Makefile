@@ -7,7 +7,7 @@ help:
 	@echo "  make setup  - Install/update all dependency groups into .venv"
 	@echo "  make sync   - Alias for setup"
 	@echo "  make lock   - Regenerate uv.lock from pyproject.toml"
-	@echo "  make run    - Run the app entrypoint"
+	@echo "  make run -- [args] - Run the app entrypoint and forward CLI args"
 	@echo "  make test   - Run test suite"
 	@echo "  make lint   - Run Ruff lint checks"
 	@echo "  make clean  - Remove local caches"
@@ -21,7 +21,10 @@ lock:
 	$(UV) lock
 
 run:
-	$(UV) run python main.py
+	$(UV) run python main.py $(filter-out $@,$(MAKECMDGOALS))
+
+%:
+	@:
 
 test:
 	$(UV) run pytest

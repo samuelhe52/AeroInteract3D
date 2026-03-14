@@ -35,6 +35,12 @@ make sync
 make run
 ```
 
+- Run the app with forwarded CLI args:
+
+```bash
+make run -- --target-fps 30 --camera-index 1
+```
+
 - Run the live gesture preview:
 
 ```bash

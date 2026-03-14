@@ -147,6 +147,7 @@ class GestureServiceImpl(GestureInputPort):
         self._preview_closed_by_user = False
         self._preview_smoothed_fps = 0.0
         self._preview_last_frame_started_at: float | None = None
+        self._preview_window_property_check_interval = 15
 
     def start(self) -> None:
         if self._started:
@@ -585,17 +586,19 @@ class GestureServiceImpl(GestureInputPort):
             self._close_preview_window()
             return
 
+        self._metrics.preview_frames_rendered += 1
+
+        if self._metrics.preview_frames_rendered % self._preview_window_property_check_interval != 0:
+            return
+
         try:
             if cv2.getWindowProperty(self._preview_window_name, cv2.WND_PROP_VISIBLE) < 1:
                 logger.info("Live preview window was closed by the window manager")
                 self._preview_active = False
                 self._preview_closed_by_user = True
                 self._close_preview_window()
-                return
         except Exception:
             logger.debug("Preview visibility check skipped after OpenCV property lookup failure", exc_info=True)
-
-        self._metrics.preview_frames_rendered += 1
 
     def _compute_preview_fps(self) -> float:
         now = time.perf_counter()

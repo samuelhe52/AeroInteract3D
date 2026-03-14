@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,8 +120,9 @@ def create_capture(
         return cv2.VideoCapture(input_video)
 
     assert camera_index is not None
+    backend = cv2.CAP_DSHOW if sys.platform.startswith("win") and hasattr(cv2, "CAP_DSHOW") else cv2.CAP_ANY
     return configure_capture(
-        cv2.VideoCapture(camera_index),
+        cv2.VideoCapture(camera_index, backend),
         target_fps=target_fps,
         frame_width=frame_width,
         frame_height=frame_height,

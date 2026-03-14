@@ -81,6 +81,22 @@ def test_parse_args_enables_live_preview_flag() -> None:
     assert config.live_preview is True
 
 
+def test_parse_args_disables_live_preview_by_default() -> None:
+    args = parse_args([])
+
+    config = build_config(args)
+
+    assert config.live_preview is False
+
+
+def test_parse_args_disables_live_preview_flag() -> None:
+    args = parse_args(["--no-live-preview"])
+
+    config = build_config(args)
+
+    assert config.live_preview is False
+
+
 def test_build_app_passes_live_preview_to_gesture_service(monkeypatch) -> None:
     captured_kwargs: dict[str, object] = {}
     fake_gesture = object()

@@ -111,10 +111,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--frame-height", type=int, default=DEFAULT_FRAME_HEIGHT)
     parser.add_argument(
         "--live-preview",
+        dest="live_preview",
         action="store_true",
-        default=True,
         help="Show the current camera stream in an OpenCV preview window alongside Panda3D.",
     )
+    parser.add_argument(
+        "--no-live-preview",
+        dest="live_preview",
+        action="store_false",
+        help="Disable the OpenCV live preview window to reduce CPU/GPU overhead.",
+    )
+    parser.set_defaults(live_preview=False)
     return parser.parse_args(argv)
 
 
