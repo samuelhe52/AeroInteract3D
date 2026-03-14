@@ -82,7 +82,7 @@ The main app entrypoint in `main.py` currently supports:
 - `--frame-width`
 - `--frame-height`
 
-Current defaults are `60 FPS` and `640x480` requested capture resolution.
+Current defaults are `30 FPS` and `1280x960` requested capture resolution.
 
 The gesture live preview uses the same capture configuration shape through `GesturePreviewConfig` in `src/gesture/debug/live_preview.py`.
 

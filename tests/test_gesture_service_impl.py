@@ -106,7 +106,7 @@ def test_build_service_uses_preview_config_fields() -> None:
     service = build_service(config)
 
     assert service._camera_index == 2
-    assert service._target_fps == 60.0
+    assert service._target_fps == 30.0
     assert service._frame_width == 800
     assert service._frame_height == 600
     assert service._hand_model == "custom.task"
@@ -127,9 +127,9 @@ def test_build_preview_config_uses_default_model_fallback(
 
     assert preview_config.hand_model == str(model_path)
     assert preview_config.camera_index == 0
-    assert preview_config.target_fps == 60.0
-    assert preview_config.frame_width == 640
-    assert preview_config.frame_height == 480
+    assert preview_config.target_fps == 30.0
+    assert preview_config.frame_width == 1280
+    assert preview_config.frame_height == 960
 
 
 def test_poll_renders_live_preview_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -380,6 +380,199 @@ def test_temporal_reducer_allows_large_xy_motion_through_adaptive_smoothing() ->
 
     assert moved.wrist.x > 0.15
     assert moved.wrist.y > 0.12
+
+
+def test_temporal_reducer_predicts_forward_during_temporary_loss() -> None:
+    reducer = GestureTemporalReducer(
+        GestureTemporalConfig(
+            tracking_temporary_loss_frames=3,
+            smoothing_alpha=0.42,
+            xy_smoothing_alpha=0.18,
+            prediction_blend=0.40,
+            prediction_lead=0.85,
+            lost_tracking_motion_damping=0.72,
+        )
+    )
+
+    reducer.process(
+        timestamp_ms=100,
+        index_tip=Vec3(0.00, 0.00, 0.0),
+        thumb_tip=Vec3(0.04, 0.00, 0.0),
+        wrist=Vec3(0.00, 0.00, 0.0),
+        raw_confidence=0.9,
+    )
+    tracked = reducer.process(
+        timestamp_ms=101,
+        index_tip=Vec3(0.22, 0.00, 0.0),
+        thumb_tip=Vec3(0.26, 0.00, 0.0),
+        wrist=Vec3(0.22, 0.00, 0.0),
+        raw_confidence=0.9,
+    )
+    lost = reducer.process(timestamp_ms=102, raw_confidence=0.0)
+
+    assert tracked.tracking_state == "tracked"
+    assert lost.tracking_state == "temporarily_lost"
+    assert lost.wrist.x > tracked.wrist.x
+    assert lost.velocity.x > 0.0
+
+
+def test_temporal_reducer_prediction_reduces_fast_motion_lag() -> None:
+    predictive = GestureTemporalReducer(
+        GestureTemporalConfig(
+            smoothing_alpha=0.42,
+            xy_smoothing_alpha=0.18,
+            prediction_blend=0.40,
+            prediction_lead=0.85,
+        )
+    )
+    baseline = GestureTemporalReducer(
+        GestureTemporalConfig(
+            smoothing_alpha=0.42,
+            xy_smoothing_alpha=0.18,
+            prediction_blend=0.0,
+            prediction_lead=0.0,
+        )
+    )
+
+    samples = [
+        (100, Vec3(0.00, 0.00, 0.0), Vec3(0.04, 0.00, 0.0), Vec3(0.00, 0.00, 0.0)),
+        (101, Vec3(0.20, 0.00, 0.0), Vec3(0.24, 0.00, 0.0), Vec3(0.20, 0.00, 0.0)),
+        (102, Vec3(0.45, 0.00, 0.0), Vec3(0.49, 0.00, 0.0), Vec3(0.45, 0.00, 0.0)),
+    ]
+
+    for timestamp_ms, index_tip, thumb_tip, wrist in samples[:-1]:
+        predictive.process(
+            timestamp_ms=timestamp_ms,
+            index_tip=index_tip,
+            thumb_tip=thumb_tip,
+            wrist=wrist,
+            raw_confidence=0.9,
+        )
+        baseline.process(
+            timestamp_ms=timestamp_ms,
+            index_tip=index_tip,
+            thumb_tip=thumb_tip,
+            wrist=wrist,
+            raw_confidence=0.9,
+        )
+
+    timestamp_ms, index_tip, thumb_tip, wrist = samples[-1]
+    predictive_frame = predictive.process(
+        timestamp_ms=timestamp_ms,
+        index_tip=index_tip,
+        thumb_tip=thumb_tip,
+        wrist=wrist,
+        raw_confidence=0.9,
+    )
+    baseline_frame = baseline.process(
+        timestamp_ms=timestamp_ms,
+        index_tip=index_tip,
+        thumb_tip=thumb_tip,
+        wrist=wrist,
+        raw_confidence=0.9,
+    )
+
+    assert predictive_frame.wrist.x > baseline_frame.wrist.x
+    assert predictive_frame.index_tip.x > baseline_frame.index_tip.x
+
+
+def test_temporal_reducer_confirms_release_on_configured_frame() -> None:
+    reducer = GestureTemporalReducer(
+        GestureTemporalConfig(
+            pinch_hold_threshold=0.04,
+            pinch_enter_threshold=0.08,
+            pinch_release_threshold=0.12,
+            pinch_confirm_frames=2,
+            release_confirm_frames=2,
+            smooth_coordinates=False,
+        )
+    )
+
+    first = reducer.process(
+        timestamp_ms=100,
+        index_tip=Vec3(0.0, 0.0, 0.0),
+        thumb_tip=Vec3(0.02, 0.0, 0.0),
+        wrist=Vec3(0.0, 0.0, 0.0),
+        raw_confidence=0.9,
+    )
+    second = reducer.process(
+        timestamp_ms=101,
+        index_tip=Vec3(0.0, 0.0, 0.0),
+        thumb_tip=Vec3(0.02, 0.0, 0.0),
+        wrist=Vec3(0.0, 0.0, 0.0),
+        raw_confidence=0.9,
+    )
+    third = reducer.process(
+        timestamp_ms=102,
+        index_tip=Vec3(0.0, 0.0, 0.0),
+        thumb_tip=Vec3(0.20, 0.0, 0.0),
+        wrist=Vec3(0.0, 0.0, 0.0),
+        raw_confidence=0.9,
+    )
+    fourth = reducer.process(
+        timestamp_ms=103,
+        index_tip=Vec3(0.0, 0.0, 0.0),
+        thumb_tip=Vec3(0.20, 0.0, 0.0),
+        wrist=Vec3(0.0, 0.0, 0.0),
+        raw_confidence=0.9,
+    )
+
+    assert first.pinch_state == "pinch_candidate"
+    assert second.pinch_state == "pinched"
+    assert third.pinch_state == "release_candidate"
+    assert fourth.pinch_state == "open"
+
+
+def test_temporal_reducer_confirms_release_on_missing_hand_frame() -> None:
+    reducer = GestureTemporalReducer(
+        GestureTemporalConfig(
+            pinch_hold_threshold=0.04,
+            pinch_enter_threshold=0.08,
+            pinch_release_threshold=0.12,
+            pinch_confirm_frames=1,
+            release_confirm_frames=2,
+            smooth_coordinates=False,
+        )
+    )
+
+    pinched = reducer.process(
+        timestamp_ms=100,
+        index_tip=Vec3(0.0, 0.0, 0.0),
+        thumb_tip=Vec3(0.02, 0.0, 0.0),
+        wrist=Vec3(0.0, 0.0, 0.0),
+        raw_confidence=0.9,
+    )
+    lost_once = reducer.process(timestamp_ms=101, raw_confidence=0.0)
+    lost_twice = reducer.process(timestamp_ms=102, raw_confidence=0.0)
+
+    assert pinched.pinch_state == "pinched"
+    assert lost_once.pinch_state == "release_candidate"
+    assert lost_twice.pinch_state == "open"
+
+
+def test_temporal_reducer_tracking_loss_boundary_matches_configuration() -> None:
+    reducer = GestureTemporalReducer(
+        GestureTemporalConfig(
+            tracking_temporary_loss_frames=2,
+            smooth_coordinates=False,
+        )
+    )
+
+    tracked = reducer.process(
+        timestamp_ms=100,
+        index_tip=Vec3(0.0, 0.0, 0.0),
+        thumb_tip=Vec3(0.10, 0.0, 0.0),
+        wrist=Vec3(0.0, 0.0, 0.0),
+        raw_confidence=0.9,
+    )
+    lost_once = reducer.process(timestamp_ms=101, raw_confidence=0.0)
+    lost_twice = reducer.process(timestamp_ms=102, raw_confidence=0.0)
+    lost_third = reducer.process(timestamp_ms=103, raw_confidence=0.0)
+
+    assert tracked.tracking_state == "tracked"
+    assert lost_once.tracking_state == "temporarily_lost"
+    assert lost_twice.tracking_state == "temporarily_lost"
+    assert lost_third.tracking_state == "not_detected"
 
 
 def test_extract_landmarks_uses_hand_scale_for_camera_depth() -> None:

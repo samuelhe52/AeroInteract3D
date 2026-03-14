@@ -3,6 +3,7 @@ from __future__ import annotations
 import main
 
 from main import App, AppConfig, LIFECYCLE_RUNNING, build_config, parse_args
+from src.constants import DEFAULT_TARGET_FPS
 
 
 class FakeGestureInput:
@@ -79,6 +80,12 @@ def test_parse_args_enables_live_preview_flag() -> None:
     config = build_config(args)
 
     assert config.live_preview is True
+
+
+def test_build_config_uses_default_target_fps() -> None:
+    config = build_config(parse_args([]))
+
+    assert config.target_fps == DEFAULT_TARGET_FPS
 
 
 def test_parse_args_disables_live_preview_by_default() -> None:

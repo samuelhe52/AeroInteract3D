@@ -23,7 +23,7 @@ The live preview also shows measured on-screen FPS from the actual preview loop,
 
 Current runtime defaults:
 
-- target FPS request: `60`
-- requested capture resolution: `640x480`
+- target FPS request: `30`
+- requested capture resolution: `1280x960`
 
 Developer environment setup: see [DEVELOPMENT.md](DEVELOPMENT.md).

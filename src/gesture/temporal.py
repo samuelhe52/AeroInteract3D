@@ -7,8 +7,11 @@ from src.constants import (
     TEMPORAL_PINCH_ENTER_THRESHOLD as PINCH_ENTER_THRESHOLD,
     TEMPORAL_PINCH_HOLD_THRESHOLD as PINCH_HOLD_THRESHOLD,
     TEMPORAL_POSITION_DEADZONE as POSITION_DEADZONE,
+    TEMPORAL_PREDICTION_BLEND as PREDICTION_BLEND,
+    TEMPORAL_PREDICTION_LEAD as PREDICTION_LEAD,
     TEMPORAL_PINCH_RELEASE_THRESHOLD as PINCH_RELEASE_THRESHOLD,
     TEMPORAL_RELEASE_CONFIRM_FRAMES as RELEASE_CONFIRM_FRAMES,
+    TEMPORAL_LOST_TRACKING_MOTION_DAMPING as LOST_TRACKING_MOTION_DAMPING,
     TEMPORAL_SMOOTHING_ALPHA as SMOOTHING_ALPHA,
     TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES as TRACKING_TEMPORARY_LOSS_FRAMES,
     TEMPORAL_XY_SMOOTHING_ALPHA as XY_SMOOTHING_ALPHA,
@@ -28,6 +31,9 @@ class GestureTemporalConfig:
     smoothing_alpha: float = SMOOTHING_ALPHA
     xy_smoothing_alpha: float = XY_SMOOTHING_ALPHA
     position_deadzone: float = POSITION_DEADZONE
+    prediction_blend: float = PREDICTION_BLEND
+    prediction_lead: float = PREDICTION_LEAD
+    lost_tracking_motion_damping: float = LOST_TRACKING_MOTION_DAMPING
     smooth_coordinates: bool = True
 
 
@@ -63,6 +69,8 @@ class GestureTemporalReducer:
         self._last_index_tip = Vec3(0.0, 0.0, 0.0)
         self._last_thumb_tip = Vec3(0.0, 0.0, 0.0)
         self._last_wrist = Vec3(0.0, 0.0, 0.0)
+        self._last_index_velocity = Vec3(0.0, 0.0, 0.0)
+        self._last_thumb_velocity = Vec3(0.0, 0.0, 0.0)
         self._last_velocity = Vec3(0.0, 0.0, 0.0)
         self._processed_frames = 0
 
@@ -82,12 +90,34 @@ class GestureTemporalReducer:
             tracking_state = self._compute_tracking_state(hand_detected=False)
             pinch_state = self._compute_pinch_state(None, None)
             confidence = self._compute_confidence(tracking_state, pinch_state, raw_confidence)
-            velocity = Vec3(0.0, 0.0, 0.0)
+
+            if tracking_state == "temporarily_lost" and self._processed_frames > 0:
+                predicted_index_tip, index_velocity = self._extrapolate_missing_point(
+                    self._last_index_tip,
+                    self._last_index_velocity,
+                )
+                predicted_thumb_tip, thumb_velocity = self._extrapolate_missing_point(
+                    self._last_thumb_tip,
+                    self._last_thumb_velocity,
+                )
+                predicted_wrist, wrist_velocity = self._extrapolate_missing_point(
+                    self._last_wrist,
+                    self._last_velocity,
+                )
+                self._last_index_tip = predicted_index_tip
+                self._last_thumb_tip = predicted_thumb_tip
+                self._last_wrist = predicted_wrist
+                self._last_index_velocity = index_velocity
+                self._last_thumb_velocity = thumb_velocity
+                self._last_velocity = wrist_velocity
+            else:
+                self._last_index_velocity = Vec3(0.0, 0.0, 0.0)
+                self._last_thumb_velocity = Vec3(0.0, 0.0, 0.0)
+                self._last_velocity = Vec3(0.0, 0.0, 0.0)
 
             self._tracking_state = tracking_state
             self._pinch_state = pinch_state
             self._confidence = confidence
-            self._last_velocity = velocity
 
             return GestureFrameAnalysis(
                 timestamp_ms=timestamp_ms,
@@ -97,7 +127,7 @@ class GestureTemporalReducer:
                 index_tip=self._last_index_tip,
                 thumb_tip=self._last_thumb_tip,
                 wrist=self._last_wrist,
-                velocity=velocity,
+                velocity=self._last_velocity,
                 pinch_distance=self._last_pinch_distance,
                 tracking_loss_streak=self._tracking_loss_streak,
                 smoothing_hint=self._smoothing_hint(),
@@ -109,18 +139,43 @@ class GestureTemporalReducer:
         normalized_thumb_tip = self._normalize_vec3(thumb_tip)
         normalized_wrist = self._normalize_vec3(wrist)
 
+        estimated_index_tip = self._apply_prediction(
+            normalized_index_tip,
+            self._last_index_tip,
+            self._last_index_velocity,
+        )
+        estimated_thumb_tip = self._apply_prediction(
+            normalized_thumb_tip,
+            self._last_thumb_tip,
+            self._last_thumb_velocity,
+        )
+        estimated_wrist = self._apply_prediction(
+            normalized_wrist,
+            self._last_wrist,
+            self._last_velocity,
+        )
+
         tracking_state = self._compute_tracking_state(hand_detected=True)
         pinch_state = self._compute_pinch_state(normalized_index_tip, normalized_thumb_tip)
         confidence = self._compute_confidence(tracking_state, pinch_state, raw_confidence)
 
-        smoothed_index_tip = self._smooth_vec3(normalized_index_tip, self._last_index_tip)
-        smoothed_thumb_tip = self._smooth_vec3(normalized_thumb_tip, self._last_thumb_tip)
-        smoothed_wrist = self._smooth_vec3(normalized_wrist, self._last_wrist)
-        velocity = self._compute_velocity(smoothed_wrist, self._last_wrist)
+        smoothed_index_tip = self._smooth_vec3(estimated_index_tip, self._last_index_tip)
+        smoothed_thumb_tip = self._smooth_vec3(estimated_thumb_tip, self._last_thumb_tip)
+        smoothed_wrist = self._smooth_vec3(estimated_wrist, self._last_wrist)
+        if self._processed_frames == 0:
+            index_velocity = Vec3(0.0, 0.0, 0.0)
+            thumb_velocity = Vec3(0.0, 0.0, 0.0)
+            velocity = Vec3(0.0, 0.0, 0.0)
+        else:
+            index_velocity = self._compute_velocity(smoothed_index_tip, self._last_index_tip)
+            thumb_velocity = self._compute_velocity(smoothed_thumb_tip, self._last_thumb_tip)
+            velocity = self._compute_velocity(smoothed_wrist, self._last_wrist)
 
         self._last_index_tip = smoothed_index_tip
         self._last_thumb_tip = smoothed_thumb_tip
         self._last_wrist = smoothed_wrist
+        self._last_index_velocity = index_velocity
+        self._last_thumb_velocity = thumb_velocity
         self._last_velocity = velocity
         self._tracking_state = tracking_state
         self._pinch_state = pinch_state
@@ -159,8 +214,11 @@ class GestureTemporalReducer:
             self._pinch_candidate_streak = 0
             if self._pinch_state in {"pinched", "pinch_candidate", "release_candidate"}:
                 self._release_candidate_streak += 1
-                if self._release_candidate_streak <= self._config.release_confirm_frames:
-                    return "release_candidate"
+                if self._release_candidate_streak >= self._config.release_confirm_frames:
+                    self._release_candidate_streak = 0
+                    self._last_pinch_distance = 0.0
+                    return "open"
+                return "release_candidate"
             self._release_candidate_streak = 0
             self._last_pinch_distance = 0.0
             return "open"
@@ -185,10 +243,10 @@ class GestureTemporalReducer:
         self._pinch_candidate_streak = 0
         if self._pinch_state in {"pinched", "pinch_candidate", "release_candidate"} and pinch_distance >= self._config.pinch_release_threshold:
             self._release_candidate_streak += 1
-            if self._release_candidate_streak <= self._config.release_confirm_frames:
-                return "release_candidate"
-            self._release_candidate_streak = 0
-            return "open"
+            if self._release_candidate_streak >= self._config.release_confirm_frames:
+                self._release_candidate_streak = 0
+                return "open"
+            return "release_candidate"
 
         self._release_candidate_streak = 0
         return "open"
@@ -238,6 +296,56 @@ class GestureTemporalReducer:
             z=smoothed_z,
         )
 
+    def _apply_prediction(self, current: Vec3, previous: Vec3, velocity: Vec3) -> Vec3:
+        if not self._config.smooth_coordinates or self._processed_frames == 0:
+            return current
+
+        return self._normalize_vec3(
+            Vec3(
+                x=self._apply_prediction_coordinate(current.x, previous.x, velocity.x, deadzone=self._config.position_deadzone),
+                y=self._apply_prediction_coordinate(current.y, previous.y, velocity.y, deadzone=self._config.position_deadzone),
+                z=self._apply_prediction_coordinate(current.z, previous.z, velocity.z, deadzone=0.0),
+            )
+        )
+
+    def _apply_prediction_coordinate(
+        self,
+        current: float,
+        previous: float,
+        velocity: float,
+        *,
+        deadzone: float,
+    ) -> float:
+        observed_delta = current - previous
+        if abs(observed_delta) <= deadzone:
+            return current
+
+        predicted_delta = velocity * self._config.prediction_lead
+        if predicted_delta == 0.0 or observed_delta * predicted_delta <= 0.0:
+            return current
+
+        blend = max(0.0, min(1.0, self._config.prediction_blend))
+        return current + predicted_delta * blend
+
+    def _extrapolate_missing_point(self, previous: Vec3, velocity: Vec3) -> tuple[Vec3, Vec3]:
+        damping = max(0.0, min(1.0, self._config.lost_tracking_motion_damping))
+        streak_decay = damping ** max(self._tracking_loss_streak - 1, 0)
+        damped_velocity = self._normalize_vec3(
+            Vec3(
+                x=velocity.x * streak_decay,
+                y=velocity.y * streak_decay,
+                z=velocity.z * streak_decay,
+            )
+        )
+        predicted = self._normalize_vec3(
+            Vec3(
+                x=previous.x + damped_velocity.x,
+                y=previous.y + damped_velocity.y,
+                z=previous.z + damped_velocity.z,
+            )
+        )
+        return predicted, damped_velocity
+
     def _smooth_coordinate(
         self,
         *,
@@ -271,9 +379,11 @@ class GestureTemporalReducer:
     def _smoothing_hint(self) -> dict[str, float | str]:
         if self._config.smooth_coordinates:
             return {
-                "method": "adaptive_linear",
+                "method": "predictive_adaptive_linear",
                 "alpha": self._config.smoothing_alpha,
                 "xy_alpha": self._config.xy_smoothing_alpha,
                 "deadzone": self._config.position_deadzone,
+                "prediction_blend": self._config.prediction_blend,
+                "prediction_lead": self._config.prediction_lead,
             }
         return {"method": "none", "alpha": 1.0}
