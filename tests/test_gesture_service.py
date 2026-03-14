@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
+import src.gesture.service as gesture_service
 from src.gesture.runtime import RawHandObservation
 from src.gesture.service import GestureServiceImpl
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
@@ -115,3 +118,22 @@ def test_gesture_service_enters_degraded_mode_when_backends_fail_to_start() -> N
     service.stop()
 
     assert service.lifecycle_state == LIFECYCLE_STOPPED
+
+
+def test_gesture_summary_logging_is_debug_only(monkeypatch, caplog) -> None:
+    preview = FakePreview()
+    service = GestureServiceImpl(
+        preview_enabled=True,
+        capture_factory=FakeCapture,
+        detector_factory=FakeDetector,
+        preview_factory=lambda: preview,
+        clock=iter([3.0]).__next__,
+    )
+    monkeypatch.setattr(gesture_service, "GESTURE_FRAME_SUMMARY_INTERVAL", 1)
+    service.start()
+
+    with caplog.at_level(logging.INFO, logger="gesture.service"):
+        packet = service.poll()
+
+    assert packet is not None
+    assert "Gesture summary frame=" not in caplog.text

@@ -294,12 +294,16 @@ class BridgeServiceImpl(BridgeService):
         def clip(v: float) -> float:
             return max(-1.0, min(1.0, v))
         
-        final_x = clip(-x)
-        final_y = clip(y)
-        final_z = clip(z)
+        unclipped_world_x = -x
+        unclipped_world_y = y
+        unclipped_world_z = z
+
+        final_x = clip(unclipped_world_x)
+        final_y = clip(unclipped_world_y)
+        final_z = clip(unclipped_world_z)
         
         # 4. Warning log for clipped coordinates (aids debugging)
-        if (final_x, final_y, final_z) != (x, y, z):
+        if (final_x, final_y, final_z) != (unclipped_world_x, unclipped_world_y, unclipped_world_z):
             self._record_error(
                 error_entry(
                     "bridge.coordinate.clipped",
@@ -307,7 +311,12 @@ class BridgeServiceImpl(BridgeService):
                     recoverable=True,
                     hint="Keep bridge output coordinates within the world_norm range [-1.0, 1.0].",
                     details={
-                        "original": {"x": x, "y": y, "z": z},
+                        "camera_input": {"x": x, "y": y, "z": z},
+                        "world_unclipped": {
+                            "x": unclipped_world_x,
+                            "y": unclipped_world_y,
+                            "z": unclipped_world_z,
+                        },
                         "clipped": {"x": final_x, "y": final_y, "z": final_z},
                     },
                 )

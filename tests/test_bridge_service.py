@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from src.bridge.service import BridgeServiceImpl
@@ -127,3 +129,14 @@ def test_bridge_records_coordinate_transform_faults() -> None:
     health = bridge.health()
     assert health["errors"][-1]["code"] == "bridge.coordinate.position.missing"
     assert "timestamp" in health["errors"][-1]
+
+
+def test_bridge_does_not_log_coordinate_clipped_for_axis_inversion_only(caplog) -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    with caplog.at_level(logging.WARNING, logger="bridge.coordinate_transformation"):
+        transformed = bridge._camera_to_world_position(Vec3(0.25, 0.5, -0.5))
+
+    assert transformed == Vec3(-0.25, 0.5, -0.5)
+    assert "Coordinate clipped" not in caplog.text

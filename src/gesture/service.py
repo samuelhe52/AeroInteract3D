@@ -97,6 +97,7 @@ class GestureServiceImpl(GestureInputPort):
         self._detector: Any | None = None
         self._preview: Any | None = None
         self._errors: list[dict[str, Any]] = []
+        self._logged_error_codes: set[str] = set()
         self._metrics = GestureMetrics()
         self._last_packet: GesturePacket | None = None
         self._last_preview_frame = None
@@ -109,6 +110,7 @@ class GestureServiceImpl(GestureInputPort):
 
         self.lifecycle_state = LIFECYCLE_INITIALIZING
         self._errors = []
+        self._logged_error_codes = set()
         self._metrics = GestureMetrics()
         self._reducer.reset()
         self._last_packet = None
@@ -152,7 +154,7 @@ class GestureServiceImpl(GestureInputPort):
         self._maybe_render_preview(frame, observation, packet)
 
         if packet.frame_id % GESTURE_FRAME_SUMMARY_INTERVAL == 0:
-            logger.info(
+            logger.debug(
                 "Gesture summary frame=%s tracking=%s pinch=%s confidence=%.3f",
                 packet.frame_id,
                 packet.tracking_state,
@@ -309,7 +311,13 @@ class GestureServiceImpl(GestureInputPort):
                     details={"error": str(exc), "frame_id": self._frame_id},
                 )
             )
-            logger.exception("Gesture detector failed for frame %s", self._frame_id)
+            self._log_recoverable_error_once(
+                code="gesture.detector.detect_failed",
+                message=(
+                    "Gesture detector failed while processing frames; subsequent detector logs "
+                    f"will be suppressed. frame_id={self._frame_id} error={exc}"
+                ),
+            )
             return None
 
         if observation is not None and self.lifecycle_state == LIFECYCLE_DEGRADED and self._capture is not None:
@@ -339,7 +347,13 @@ class GestureServiceImpl(GestureInputPort):
                     details={"error": str(exc), "frame_id": packet.frame_id},
                 )
             )
-            logger.exception("Gesture preview render failed")
+            self._log_recoverable_error_once(
+                code="gesture.preview.render_failed",
+                message=(
+                    "Gesture preview render failed and preview will be disabled. "
+                    f"frame_id={packet.frame_id} error={exc}"
+                ),
+            )
             try:
                 self._preview.close()
             except Exception:
@@ -352,6 +366,12 @@ class GestureServiceImpl(GestureInputPort):
         payload.setdefault("timestamp", time.time())
         self._errors.append(payload)
         self._errors = self._errors[-MAX_ERROR_HISTORY:]
+
+    def _log_recoverable_error_once(self, *, code: str, message: str) -> None:
+        if code in self._logged_error_codes:
+            return None
+        self._logged_error_codes.add(code)
+        logger.warning(message)
 
     def _next_timestamp_ms(self) -> int:
         candidate = int(self._clock() * 1000)
