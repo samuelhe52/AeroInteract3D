@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: help setup sync lock run test lint clean
+.PHONY: help setup sync lock run preview test lint clean
 
 help:
 	@echo "Available targets:"
@@ -8,6 +8,7 @@ help:
 	@echo "  make sync   - Alias for setup"
 	@echo "  make lock   - Regenerate uv.lock from pyproject.toml"
 	@echo "  make run -- [args] - Run the app entrypoint and forward CLI args"
+	@echo "  make preview -- [args] - Run the gesture live preview and forward CLI args"
 	@echo "  make test   - Run test suite"
 	@echo "  make lint   - Run Ruff lint checks"
 	@echo "  make clean  - Remove local caches"
@@ -22,6 +23,9 @@ lock:
 
 run:
 	$(UV) run python main.py $(filter-out $@,$(MAKECMDGOALS))
+
+preview:
+	$(UV) run python -m src.gesture.debug $(filter-out $@,$(MAKECMDGOALS))
 
 %:
 	@:

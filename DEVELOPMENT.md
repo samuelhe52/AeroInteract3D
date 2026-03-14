@@ -44,6 +44,12 @@ make run -- --target-fps 30 --camera-index 1
 - Run the live gesture preview:
 
 ```bash
+make preview
+```
+
+Or directly:
+
+```bash
 uv run python -m src.gesture.debug
 ```
 
@@ -82,7 +88,7 @@ The main app entrypoint in `main.py` currently supports:
 - `--frame-width`
 - `--frame-height`
 
-Current defaults are `30 FPS` and `1280x960` requested capture resolution.
+Current defaults are `30 FPS` and `1280x640` requested capture resolution.
 
 The gesture live preview uses the same capture configuration shape through `GesturePreviewConfig` in `src/gesture/debug/live_preview.py`.
 
