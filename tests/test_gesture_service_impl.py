@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from src.contracts import Vec3
@@ -12,7 +13,13 @@ from src.gesture.debug.live_preview import (
     build_service,
 )
 from src.gesture.debug.live_preview_runtime import GestureDebugAnalyzer
-from src.gesture.runtime import estimate_palm_anchor, extract_landmarks
+from src.gesture.runtime import (
+    GestureRuntimeConfig,
+    LANDMARK_NAMES,
+    TaskHandLandmarkerDetector,
+    estimate_palm_anchor,
+    extract_landmarks,
+)
 from src.gesture.service import (
     GestureServiceImpl,
 )
@@ -232,6 +239,91 @@ def test_detect_hand_uses_palm_anchor() -> None:
             "wrist": Vec3(0.3, 0.2, -0.2),
         }
     )
+
+
+def test_task_hand_detector_uses_live_stream_results(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    model_path = tmp_path / "hand_landmarker.task"
+    model_path.write_text("stub", encoding="utf-8")
+
+    options_holder: dict[str, object] = {}
+
+    class StubBaseOptions:
+        def __init__(self, *, model_asset_path: str) -> None:
+            self.model_asset_path = model_asset_path
+
+    class StubRunningMode:
+        LIVE_STREAM = "live_stream"
+
+    class StubOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.__dict__.update(kwargs)
+
+    class StubConnection:
+        def __init__(self, start: int, end: int) -> None:
+            self.start = start
+            self.end = end
+
+    class StubConnections:
+        HAND_CONNECTIONS = [StubConnection(0, 1)]
+
+    class StubLandmarker:
+        def __init__(self, options: StubOptions) -> None:
+            self._options = options
+
+        @classmethod
+        def create_from_options(cls, options: StubOptions) -> "StubLandmarker":
+            options_holder["options"] = options
+            return cls(options)
+
+        def close(self) -> None:
+            return None
+
+        def detect_async(self, image: object, timestamp_ms: int) -> None:
+            options_holder["image"] = image
+            landmarks = [SimpleNamespace(x=0.5, y=0.5, z=0.0) for _ in LANDMARK_NAMES]
+            result = SimpleNamespace(
+                hand_landmarks=[landmarks],
+                handedness=[[SimpleNamespace(score=0.8)]],
+            )
+            self._options.result_callback(result, None, timestamp_ms)
+
+    monkeypatch.setattr("src.gesture.runtime.MpBaseOptions", StubBaseOptions)
+    monkeypatch.setattr("src.gesture.runtime.MpVisionTaskRunningMode", StubRunningMode)
+    monkeypatch.setattr("src.gesture.runtime.MpHandLandmarkerOptions", StubOptions)
+    monkeypatch.setattr("src.gesture.runtime.MpHandLandmarker", StubLandmarker)
+    monkeypatch.setattr("src.gesture.runtime.MpHandLandmarksConnections", StubConnections)
+    monkeypatch.setattr(
+        "src.gesture.runtime.mp",
+        SimpleNamespace(
+            ImageFormat=SimpleNamespace(SRGB="srgb"),
+            Image=lambda **kwargs: kwargs,
+        ),
+    )
+
+    detector = TaskHandLandmarkerDetector(
+        GestureRuntimeConfig(
+            input_video=None,
+            camera_index=0,
+            hand_model=str(model_path),
+            output_dir=None,
+            target_fps=60.0,
+            frame_width=640,
+            frame_height=480,
+        )
+    )
+
+    frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    landmarks, raw_confidence, raw_landmarks = detector.detect(frame, 123)
+
+    assert options_holder["options"].running_mode == StubRunningMode.LIVE_STREAM
+    assert callable(options_holder["options"].result_callback)
+    assert landmarks is not None
+    assert raw_confidence == pytest.approx(0.8)
+    assert raw_landmarks is not None
+    assert len(raw_landmarks) == len(LANDMARK_NAMES)
 
 
 def test_temporal_reducer_keeps_small_xy_jitter_in_deadzone() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -200,16 +201,32 @@ class TaskHandLandmarkerDetector:
         if not model_path.exists():
             raise FileNotFoundError(f"Hand landmarker model not found: {model_path}")
 
+        self._result_condition = threading.Condition()
+        self._pending_results: dict[int, Any] = {}
+        self._result_wait_timeout_s = self._resolve_result_wait_timeout(config.target_fps)
+
         options = MpHandLandmarkerOptions(
             base_options=MpBaseOptions(model_asset_path=str(model_path)),
-            running_mode=MpVisionTaskRunningMode.VIDEO,
+            running_mode=MpVisionTaskRunningMode.LIVE_STREAM,
             num_hands=1,
             min_hand_detection_confidence=config.min_detection_confidence,
             min_hand_presence_confidence=config.min_detection_confidence,
             min_tracking_confidence=config.min_tracking_confidence,
+            result_callback=self._handle_result,
         )
         self._landmarker = MpHandLandmarker.create_from_options(options)
         self._connections = list(MpHandLandmarksConnections.HAND_CONNECTIONS)
+
+    @staticmethod
+    def _resolve_result_wait_timeout(target_fps: float | None) -> float:
+        if target_fps is None or target_fps <= 0:
+            return 0.1
+        return max(0.05, 2.0 / float(target_fps))
+
+    def _handle_result(self, result: Any, _output_image: Any, timestamp_ms: int) -> None:
+        with self._result_condition:
+            self._pending_results[int(timestamp_ms)] = result
+            self._result_condition.notify_all()
 
     def __enter__(self) -> "TaskHandLandmarkerDetector":
         return self
@@ -220,7 +237,17 @@ class TaskHandLandmarkerDetector:
     def detect(self, frame: Any, timestamp_ms: int) -> tuple[dict[str, Vec3] | None, float, Any]:
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-        result = self._landmarker.detect_for_video(image, timestamp_ms)
+        with self._result_condition:
+            self._pending_results.pop(timestamp_ms, None)
+            self._landmarker.detect_async(image, timestamp_ms)
+            has_result = self._result_condition.wait_for(
+                lambda: timestamp_ms in self._pending_results,
+                timeout=self._result_wait_timeout_s,
+            )
+            result = self._pending_results.pop(timestamp_ms, None) if has_result else None
+
+        if result is None:
+            return None, 0.0, None
         if not result.hand_landmarks:
             return None, 0.0, None
 
