@@ -54,7 +54,7 @@ Gesture module MUST NOT define a local `GesturePacket` dataclass copy.
 ## Current Runtime Defaults
 
 - target FPS request: `30`
-- requested capture resolution: `1280x640`
+- requested capture resolution: `1280x960`
 - measured preview FPS is shown on screen from actual loop timing
 
 ## Out of Scope (Gesture)

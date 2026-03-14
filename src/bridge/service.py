@@ -228,7 +228,7 @@ class BridgeServiceImpl(BridgeService):
 
     def _make_object_pose(self, packet: GesturePacket) -> SceneCommand:
         self._metrics.pose_updates += 1
-        world_position = self._camera_to_world_position(packet.wrist)
+        world_position = self._camera_to_world_position(self._interaction_anchor(packet))
         return SceneCommand(
             contract_version=self._expected_contract_version,
             command_id=make_command_id("set-pose", packet.frame_id),
@@ -240,6 +240,13 @@ class BridgeServiceImpl(BridgeService):
                 "position": vec3_payload(world_position),
                 "coordinate_space": "world_norm",
             },
+        )
+
+    def _interaction_anchor(self, packet: GesturePacket) -> Vec3:
+        return Vec3(
+            x=(packet.index_tip.x + packet.thumb_tip.x) * 0.5,
+            y=(packet.index_tip.y + packet.thumb_tip.y) * 0.5,
+            z=(packet.index_tip.z + packet.thumb_tip.z) * 0.5,
         )
 
 
@@ -287,7 +294,7 @@ class BridgeServiceImpl(BridgeService):
         def clip(v: float) -> float:
             return max(-1.0, min(1.0, v))
         
-        final_x = clip(x)
+        final_x = clip(-x)
         final_y = clip(y)
         final_z = clip(z)
         

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from src.constants import (
     GESTURE_DEFAULT_HAND_ID,
@@ -23,11 +24,55 @@ from src.utils.contracts import EXPECTED_CONTRACT_VERSION
 
 
 ZERO_VEC3 = Vec3(0.0, 0.0, 0.0)
+SmoothingPreset = Literal["high", "medium", "low"]
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalTuning:
+    smoothing_alpha: float
+    xy_smoothing_alpha: float
+    position_deadzone: float
+    prediction_blend: float
+    prediction_lead: float
+    lost_tracking_motion_damping: float
+
+
+PRESET_TUNINGS: dict[SmoothingPreset, TemporalTuning] = {
+    "high": TemporalTuning(
+        smoothing_alpha=0.72,
+        xy_smoothing_alpha=0.68,
+        position_deadzone=0.006,
+        prediction_blend=0.30,
+        prediction_lead=0.40,
+        lost_tracking_motion_damping=0.60,
+    ),
+    "medium": TemporalTuning(
+        smoothing_alpha=TEMPORAL_SMOOTHING_ALPHA,
+        xy_smoothing_alpha=TEMPORAL_XY_SMOOTHING_ALPHA,
+        position_deadzone=TEMPORAL_POSITION_DEADZONE,
+        prediction_blend=TEMPORAL_PREDICTION_BLEND,
+        prediction_lead=TEMPORAL_PREDICTION_LEAD,
+        lost_tracking_motion_damping=TEMPORAL_LOST_TRACKING_MOTION_DAMPING,
+    ),
+    "low": TemporalTuning(
+        smoothing_alpha=0.94,
+        xy_smoothing_alpha=0.92,
+        position_deadzone=0.0,
+        prediction_blend=0.12,
+        prediction_lead=0.18,
+        lost_tracking_motion_damping=0.35,
+    ),
+}
+
+
+def temporal_tuning_for_preset(preset: SmoothingPreset) -> TemporalTuning:
+    return PRESET_TUNINGS[preset]
 
 
 @dataclass(slots=True)
 class TemporalReducer:
     hand_id: str = GESTURE_DEFAULT_HAND_ID
+    tuning: TemporalTuning = field(default_factory=lambda: PRESET_TUNINGS["medium"])
     _last_index_tip: Vec3 = field(init=False, default_factory=lambda: ZERO_VEC3)
     _last_thumb_tip: Vec3 = field(init=False, default_factory=lambda: ZERO_VEC3)
     _last_wrist: Vec3 = field(init=False, default_factory=lambda: ZERO_VEC3)
@@ -75,8 +120,9 @@ class TemporalReducer:
         self._missing_frames = 0
         previous_wrist = self._last_wrist
         index_tip = self._smooth(self._last_index_tip, observation.index_tip, xy_alpha=TEMPORAL_XY_SMOOTHING_ALPHA)
-        thumb_tip = self._smooth(self._last_thumb_tip, observation.thumb_tip, xy_alpha=TEMPORAL_XY_SMOOTHING_ALPHA)
-        wrist = self._smooth(self._last_wrist, observation.wrist, xy_alpha=TEMPORAL_XY_SMOOTHING_ALPHA)
+        thumb_tip = self._smooth(self._last_thumb_tip, observation.thumb_tip, xy_alpha=self.tuning.xy_smoothing_alpha)
+        wrist = self._smooth(self._last_wrist, observation.wrist, xy_alpha=self.tuning.xy_smoothing_alpha)
+        index_tip = self._smooth(self._last_index_tip, observation.index_tip, xy_alpha=self.tuning.xy_smoothing_alpha)
         velocity = self._compute_velocity(previous_wrist, wrist, timestamp_ms=timestamp_ms)
         pinch_distance = self._normalized_camera_pinch_distance(index_tip, thumb_tip, hand_scale=observation.hand_scale)
         pinch_state = self._update_pinch_state(observation.raw_pinch_distance)
@@ -106,8 +152,9 @@ class TemporalReducer:
             smoothing_hint={
                 "method": "ema_loss_prediction",
                 "window": 1,
-                "alpha_xy": TEMPORAL_XY_SMOOTHING_ALPHA,
-                "alpha_z": TEMPORAL_SMOOTHING_ALPHA,
+                "preset": self._preset_name(),
+                "alpha_xy": self.tuning.xy_smoothing_alpha,
+                "alpha_z": self.tuning.smoothing_alpha,
             },
             debug={
                 "raw_pinch_distance": observation.raw_pinch_distance,
@@ -163,7 +210,8 @@ class TemporalReducer:
             smoothing_hint={
                 "method": "loss_prediction",
                 "window": self._missing_frames,
-                "blend": TEMPORAL_PREDICTION_BLEND,
+                "preset": self._preset_name(),
+                "blend": self.tuning.prediction_blend,
             },
             debug={
                 "missing_frames": self._missing_frames,
@@ -237,12 +285,12 @@ class TemporalReducer:
         return Vec3(
             x=self._smooth_component(previous.x, current.x, alpha=xy_alpha),
             y=self._smooth_component(previous.y, current.y, alpha=xy_alpha),
-            z=self._smooth_component(previous.z, current.z, alpha=TEMPORAL_SMOOTHING_ALPHA),
+            z=self._smooth_component(previous.z, current.z, alpha=self.tuning.smoothing_alpha),
         )
 
     def _smooth_component(self, previous: float, current: float, *, alpha: float) -> float:
         delta = current - previous
-        if abs(delta) <= TEMPORAL_POSITION_DEADZONE:
+        if abs(delta) <= self.tuning.position_deadzone:
             return previous
         return previous + (alpha * delta)
 
@@ -259,8 +307,8 @@ class TemporalReducer:
         )
 
     def _predict_positions(self) -> tuple[Vec3, Vec3, Vec3]:
-        factor = TEMPORAL_PREDICTION_BLEND * (TEMPORAL_LOST_TRACKING_MOTION_DAMPING ** self._missing_frames)
-        lead = TEMPORAL_PREDICTION_LEAD * self._missing_frames
+        factor = self.tuning.prediction_blend * (self.tuning.lost_tracking_motion_damping ** self._missing_frames)
+        lead = self.tuning.prediction_lead * self._missing_frames
         return (
             self._predict_vec(self._last_index_tip, factor=factor, lead=lead),
             self._predict_vec(self._last_thumb_tip, factor=factor, lead=lead),
@@ -275,16 +323,22 @@ class TemporalReducer:
         )
 
     def _dampened_velocity(self) -> Vec3:
-        factor = TEMPORAL_LOST_TRACKING_MOTION_DAMPING ** self._missing_frames
+        factor = self.tuning.lost_tracking_motion_damping ** self._missing_frames
         return Vec3(
             x=self._last_velocity.x * factor,
             y=self._last_velocity.y * factor,
             z=self._last_velocity.z * factor,
         )
 
+    def _preset_name(self) -> str:
+        for name, preset_tuning in PRESET_TUNINGS.items():
+            if preset_tuning == self.tuning:
+                return name
+        return "custom"
+
     def _tracked_confidence(self, observation_confidence: float, pinch_distance: float) -> float:
-        pinch_signal = 1.0 - self._clamp(pinch_distance / TEMPORAL_PINCH_RELEASE_THRESHOLD, low=0.0, high=1.0)
-        return self._clamp((0.75 * observation_confidence) + (0.25 * pinch_signal), low=0.0, high=1.0)
+        _ = pinch_distance
+        return self._clamp(observation_confidence, low=0.0, high=1.0)
 
     def _normalized_camera_pinch_distance(self, index_tip: Vec3, thumb_tip: Vec3, *, hand_scale: float) -> float:
         return distance_2d(index_tip, thumb_tip) / max(2.0 * hand_scale, 1e-6)
@@ -299,4 +353,4 @@ class TemporalReducer:
         return max(low, min(high, float(value)))
 
 
-__all__ = ["TemporalReducer"]
+__all__ = ["PRESET_TUNINGS", "SmoothingPreset", "TemporalReducer", "TemporalTuning", "temporal_tuning_for_preset"]

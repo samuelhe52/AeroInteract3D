@@ -12,11 +12,12 @@ from src.constants import (
     DEFAULT_MIN_TRACKING_CONFIDENCE,
     DEFAULT_TARGET_FPS,
     GESTURE_FRAME_SUMMARY_INTERVAL,
+    GESTURE_SMOOTHING_PRESET,
     MAX_ERROR_HISTORY,
 )
 from src.contracts import GesturePacket
 from src.gesture.runtime import CaptureRuntime, HandLandmarkerRuntime, RawHandObservation
-from src.gesture.temporal import TemporalReducer
+from src.gesture.temporal import SmoothingPreset, TemporalReducer, temporal_tuning_for_preset
 from src.ports import GestureInputPort
 from src.utils.contracts import validate_gesture_packet
 from src.utils.runtime import (
@@ -54,6 +55,7 @@ class GestureConfig:
     min_tracking_confidence: float = DEFAULT_MIN_TRACKING_CONFIDENCE
     model_path: str | None = None
     preview_enabled: bool = False
+    smoothing_preset: SmoothingPreset = GESTURE_SMOOTHING_PRESET
 
 
 class GestureServiceImpl(GestureInputPort):
@@ -68,6 +70,7 @@ class GestureServiceImpl(GestureInputPort):
         min_tracking_confidence: float = DEFAULT_MIN_TRACKING_CONFIDENCE,
         model_path: str | None = None,
         preview_enabled: bool = False,
+        smoothing_preset: SmoothingPreset = GESTURE_SMOOTHING_PRESET,
         capture_factory: Callable[..., Any] = CaptureRuntime,
         detector_factory: Callable[..., Any] = HandLandmarkerRuntime,
         preview_factory: Callable[[], Any] | None = None,
@@ -82,13 +85,14 @@ class GestureServiceImpl(GestureInputPort):
             min_tracking_confidence=min_tracking_confidence,
             model_path=model_path,
             preview_enabled=preview_enabled,
+            smoothing_preset=smoothing_preset,
         )
         self._capture_factory = capture_factory
         self._detector_factory = detector_factory
         self._preview_factory = preview_factory
         self._clock = clock or time.perf_counter
         self.lifecycle_state = LIFECYCLE_STOPPED
-        self._reducer = TemporalReducer()
+        self._reducer = TemporalReducer(tuning=temporal_tuning_for_preset(smoothing_preset))
         self._capture: Any | None = None
         self._detector: Any | None = None
         self._preview: Any | None = None
@@ -177,6 +181,7 @@ class GestureServiceImpl(GestureInputPort):
                 "detector_failures": self._metrics.detector_failures,
                 "validation_failures": self._metrics.validation_failures,
                 "preview_enabled": self._config.preview_enabled,
+                "smoothing_preset": self._config.smoothing_preset,
                 "last_frame_id": None if self._last_packet is None else self._last_packet.frame_id,
                 "last_tracking_state": None if self._last_packet is None else self._last_packet.tracking_state,
                 "last_pinch_state": None if self._last_packet is None else self._last_packet.pinch_state,

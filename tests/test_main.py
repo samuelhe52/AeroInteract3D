@@ -86,6 +86,7 @@ def test_build_config_uses_default_target_fps() -> None:
     config = build_config(parse_args([]))
 
     assert config.target_fps == DEFAULT_TARGET_FPS
+    assert config.smoothing_preset == "medium"
 
 
 def test_parse_args_disables_live_preview_by_default() -> None:
@@ -121,7 +122,16 @@ def test_build_app_passes_live_preview_to_gesture_service(monkeypatch) -> None:
     app = main.build_app(AppConfig(live_preview=True))
 
     assert captured_kwargs["preview_enabled"] is True
+    assert captured_kwargs["smoothing_preset"] == "medium"
     assert isinstance(app, App)
     assert app.gesture_input is not None
     assert app.bridge is fake_bridge
     assert app.render_output is fake_render
+
+
+def test_parse_args_accepts_smoothing_preset() -> None:
+    args = parse_args(["--smoothing-preset", "low"])
+
+    config = build_config(args)
+
+    assert config.smoothing_preset == "low"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.bridge.service import BridgeServiceImpl
 from src.contracts import GesturePacket, Vec3
 
@@ -48,7 +50,7 @@ def test_bridge_enters_grab_and_emits_pose_updates() -> None:
 
     assert [command.command_type for command in commands] == ["set_object_state", "set_object_pose"]
     assert commands[0].payload["interaction_state"] == "grabbed"
-    assert commands[1].payload["position"] == {"x": 0.0, "y": 0.0, "z": 0.0}
+    assert commands[1].payload["position"] == pytest.approx({"x": -0.105, "y": 0.195, "z": 0.29})
     assert commands[1].payload["coordinate_space"] == "world_norm"
 
     commands = bridge.process(
@@ -57,12 +59,27 @@ def test_bridge_enters_grab_and_emits_pose_updates() -> None:
             timestamp_ms=140,
             pinch_state="pinched",
             wrist=Vec3(0.4, 0.2, -0.1),
+            
         )
     )
 
     assert [command.command_type for command in commands] == ["set_object_pose"]
-    assert commands[0].payload["position"] == {"x": 0.4, "y": 0.2, "z": -0.1}
+    assert commands[0].payload["position"] == pytest.approx({"x": -0.105, "y": 0.195, "z": 0.29})
     assert commands[0].payload["coordinate_space"] == "world_norm"
+
+
+def test_bridge_uses_pinch_midpoint_and_inverts_horizontal_axis() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100, pinch_state="open"))
+    packet = make_packet(frame_id=2, timestamp_ms=120, pinch_state="pinched")
+    packet.index_tip = Vec3(0.6, 0.7, 0.1)
+    packet.thumb_tip = Vec3(0.2, 0.5, 0.3)
+
+    commands = bridge.process(packet)
+
+    assert commands[1].payload["position"] == pytest.approx({"x": -0.4, "y": 0.6, "z": 0.2})
 
 
 def test_bridge_resets_when_tracking_is_lost_during_grab() -> None:

@@ -12,6 +12,7 @@ from src.constants import (
     DEFAULT_FRAME_HEIGHT,
     DEFAULT_FRAME_WIDTH,
     DEFAULT_TARGET_FPS,
+    GESTURE_SMOOTHING_PRESET,
 )
 from src.bridge.service import BridgeServiceImpl
 from src.gesture.service import GestureServiceImpl
@@ -33,6 +34,7 @@ class AppConfig:
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
     live_preview: bool = True
+    smoothing_preset: str = GESTURE_SMOOTHING_PRESET
 
 
 class App:
@@ -110,6 +112,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--frame-width", type=int, default=DEFAULT_FRAME_WIDTH)
     parser.add_argument("--frame-height", type=int, default=DEFAULT_FRAME_HEIGHT)
     parser.add_argument(
+        "--smoothing-preset",
+        choices=["high", "medium", "low"],
+        default=GESTURE_SMOOTHING_PRESET,
+        help="Coordinate smoothing preset for gesture tracking.",
+    )
+    parser.add_argument(
         "--live-preview",
         dest="live_preview",
         action="store_true",
@@ -141,6 +149,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         frame_width=args.frame_width,
         frame_height=args.frame_height,
         live_preview=args.live_preview,
+        smoothing_preset=args.smoothing_preset,
     )
 
 
@@ -151,6 +160,7 @@ def build_app(config: AppConfig) -> App:
         frame_width=config.frame_width,
         frame_height=config.frame_height,
         preview_enabled=config.live_preview,
+        smoothing_preset=config.smoothing_preset,
     )
     bridge = BridgeServiceImpl()
     render_output = RenderingServiceImpl()

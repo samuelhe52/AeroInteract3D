@@ -14,6 +14,7 @@ from src.constants import (
     DEPTH_ESTIMATION_FAR_HAND_SCALE,
     DEPTH_ESTIMATION_LOCAL_Z_WEIGHT,
     DEPTH_ESTIMATION_NEAR_HAND_SCALE,
+    GESTURE_DETECT_MAX_SIDE,
     GESTURE_MODEL_RELATIVE_PATH,
 )
 from src.contracts import Vec3
@@ -96,7 +97,8 @@ class HandLandmarkerRuntime:
         self._landmarker = vision.HandLandmarker.create_from_options(options)
 
     def detect(self, frame_bgr: np.ndarray, *, timestamp_ms: int) -> RawHandObservation | None:
-        rgb_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        detect_frame = resize_for_detection(frame_bgr, max_side=GESTURE_DETECT_MAX_SIDE)
+        rgb_frame = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
         image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb_frame)
         result = self._landmarker.detect_for_video(image, timestamp_ms)
 
@@ -176,8 +178,8 @@ def landmark_to_camera_vec3(landmark: Vec3, *, depth_hint: float) -> Vec3:
         DEPTH_ESTIMATION_LOCAL_Z_WEIGHT * local_depth
     )
     return Vec3(
-        x=_clamp((landmark.x * 2.0) - 1.0),
-        y=_clamp(1.0 - (landmark.y * 2.0)),
+        x=_clamp_signed((landmark.x * 2.0) - 1.0),
+        y=_clamp_signed(1.0 - (landmark.y * 2.0)),
         z=(2.0 * _clamp(blended_depth)) - 1.0,
     )
 
@@ -199,12 +201,28 @@ def normalized_pinch_distance(index_tip: Vec3, thumb_tip: Vec3, *, hand_scale: f
     return distance_2d(index_tip, thumb_tip) / max(hand_scale, 1e-6)
 
 
+def resize_for_detection(frame_bgr: np.ndarray, *, max_side: int) -> np.ndarray:
+    height, width = frame_bgr.shape[:2]
+    largest_side = max(height, width)
+    if largest_side <= max_side:
+        return frame_bgr
+
+    scale = max_side / largest_side
+    resized_width = max(int(width * scale), 1)
+    resized_height = max(int(height * scale), 1)
+    return cv2.resize(frame_bgr, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+
+
 def _normalized_scale(scale: float) -> float:
     span = max(DEPTH_ESTIMATION_NEAR_HAND_SCALE - DEPTH_ESTIMATION_FAR_HAND_SCALE, 1e-6)
     return _clamp((scale - DEPTH_ESTIMATION_FAR_HAND_SCALE) / span)
 
 
 def _clamp(value: float, *, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, float(value)))
+
+
+def _clamp_signed(value: float, *, low: float = -1.0, high: float = 1.0) -> float:
     return max(low, min(high, float(value)))
 
 
@@ -221,5 +239,6 @@ __all__ = [
     "estimate_hand_scale",
     "landmark_to_camera_vec3",
     "normalized_pinch_distance",
+    "resize_for_detection",
     "resolve_model_path",
 ]

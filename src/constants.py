@@ -9,6 +9,8 @@ DEFAULT_MIN_TRACKING_CONFIDENCE = 0.5
 DEFAULT_MODEL_COMPLEXITY = 1
 GESTURE_DEFAULT_HAND_ID = "hand-1"
 GESTURE_MODEL_RELATIVE_PATH = "models/hand_landmarker.task"
+GESTURE_DETECT_MAX_SIDE = 640
+GESTURE_SMOOTHING_PRESET = "medium"
 
 # Emit one summary log for every N processed gesture packets.
 GESTURE_FRAME_SUMMARY_INTERVAL = 30
@@ -28,12 +30,18 @@ TEMPORAL_PINCH_RELEASE_THRESHOLD = 0.18
 TEMPORAL_PINCH_CONFIRM_FRAMES = 4
 # Require this many consecutive frames before promoting a release candidate to confirmed open.
 TEMPORAL_RELEASE_CONFIRM_FRAMES = 4
-TEMPORAL_SMOOTHING_ALPHA = 0.48
-TEMPORAL_XY_SMOOTHING_ALPHA = 0.22
-TEMPORAL_POSITION_DEADZONE = 0.02
-TEMPORAL_PREDICTION_BLEND = 0.55
-TEMPORAL_PREDICTION_LEAD = 0.8
-TEMPORAL_LOST_TRACKING_MOTION_DAMPING = 0.7
+# Z-axis EMA gain. Higher values follow depth changes more directly with less lag.
+TEMPORAL_SMOOTHING_ALPHA = 0.88
+# X/Y EMA gain. Higher values reduce lateral/vertical smoothing and increase responsiveness.
+TEMPORAL_XY_SMOOTHING_ALPHA = 0.82
+# Ignore motions smaller than this camera_norm delta to suppress sub-pixel landmark jitter.
+TEMPORAL_POSITION_DEADZONE = 0.001
+# Weight applied to short-term extrapolation when tracking is temporarily lost.
+TEMPORAL_PREDICTION_BLEND = 0.25
+# How far to project the last measured velocity forward during temporary tracking loss.
+TEMPORAL_PREDICTION_LEAD = 0.35
+# Per-frame decay applied to predicted velocity while the hand is not currently detected.
+TEMPORAL_LOST_TRACKING_MOTION_DAMPING = 0.55
 
 # Hand-scale heuristic depth estimation tuning.
 DEPTH_ESTIMATION_NEAR_HAND_SCALE = 0.55

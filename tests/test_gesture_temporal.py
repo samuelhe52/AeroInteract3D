@@ -3,7 +3,7 @@ from __future__ import annotations
 from src.constants import TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
 from src.contracts import Vec3
 from src.gesture.runtime import RawHandObservation, normalized_pinch_distance
-from src.gesture.temporal import TemporalReducer
+from src.gesture.temporal import PRESET_TUNINGS, TemporalReducer, temporal_tuning_for_preset
 
 
 def make_observation(
@@ -68,3 +68,33 @@ def test_normalized_pinch_distance_scales_with_hand_size() -> None:
 
     assert near_distance < 0.10
     assert far_distance > 0.90
+
+
+def test_temporal_reducer_preserves_small_vertical_motion() -> None:
+    reducer = TemporalReducer()
+
+    first_packet = reducer.reduce(make_observation(), frame_id=1, timestamp_ms=16)
+    second_observation = make_observation()
+    second_observation.wrist = Vec3(0.0, 0.012, 0.0)
+    second_observation.index_tip = Vec3(0.04, 0.212, 0.10)
+    second_observation.thumb_tip = Vec3(0.0, 0.212, 0.10)
+
+    second_packet = reducer.reduce(second_observation, frame_id=2, timestamp_ms=32)
+
+    assert second_packet.wrist.y > first_packet.wrist.y
+
+
+def test_temporal_smoothing_preset_affects_responsiveness() -> None:
+    high_reducer = TemporalReducer(tuning=temporal_tuning_for_preset("high"))
+    low_reducer = TemporalReducer(tuning=temporal_tuning_for_preset("low"))
+
+    initial_observation = make_observation()
+    moved_observation = make_observation(wrist_x=0.5)
+
+    high_reducer.reduce(initial_observation, frame_id=1, timestamp_ms=16)
+    low_reducer.reduce(initial_observation, frame_id=1, timestamp_ms=16)
+    high_packet = high_reducer.reduce(moved_observation, frame_id=2, timestamp_ms=32)
+    low_packet = low_reducer.reduce(moved_observation, frame_id=2, timestamp_ms=32)
+
+    assert PRESET_TUNINGS["low"].xy_smoothing_alpha > PRESET_TUNINGS["high"].xy_smoothing_alpha
+    assert low_packet.wrist.x > high_packet.wrist.x
