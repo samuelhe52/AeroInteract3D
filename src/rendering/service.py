@@ -61,7 +61,7 @@ class Panda3DWindowAdapter:
         self._base: Optional[ShowBase] = None
         self._is_initialized: bool = False
     
-    def init_window(self, window_size: tuple = (800, 600), window_title: str = "AeroInteract3D Rendering") -> None:
+    def init_window(self, window_size: tuple = (2560, 1440), window_title: str = "AeroInteract3D Rendering") -> None:
         """Initialize the rendering window."""
         if self._is_initialized:
             logger.info(f"Window already initialized ({window_size}), skipping duplicate creation")
@@ -72,6 +72,8 @@ class Panda3DWindowAdapter:
             window_props.setTitle(window_title)
             # Use correct way to set window properties
             self._base = ShowBase()
+            # Set window background to white
+            self._base.setBackgroundColor(1, 1, 1, 1)
             self._base.win.requestProperties(window_props)
             self._is_initialized = True
             logger.info(f"Window initialized successfully: size={window_size}, title={window_title}")
@@ -90,8 +92,8 @@ class Panda3DWindowAdapter:
             lens.setNearFar(0.1, 100.0)  # Use a more practical near/far clip range.
             self._base.cam.node().setLens(lens)
             
-            # Position the camera for a useful angled view of the objects.
-            self._base.cam.setPos(0.0, 3.0, 2.0)  # View from above and at an angle.
+            # Position the camera with a shallow 10-degree俯角 view of the objects.
+            self._base.cam.setPos(0.0, 5.0, 0.9)  # Low angle view (≈10 degrees)
             self._base.cam.lookAt(0.0, 0.0, 0.0)  # Look at the origin.
             logger.info("Camera configured, using perspective camera for 3D scene")
         except Exception as e:
@@ -207,8 +209,10 @@ class RenderingServiceImpl(RenderOutputPort):
         - y: forward/depth
         - z: up
         """
+        # Adjust scale factor to match hand gesture movement range
+        scale_factor = 4.0
         x, y, z = (float(value) for value in position)
-        return (x, z, y)
+        return (x * scale_factor, z * scale_factor, y * scale_factor)
     
     def start(self) -> None:
         """Start the module and initialize the environment into RUNNING or DEGRADED."""
@@ -676,6 +680,10 @@ class RenderingServiceImpl(RenderOutputPort):
             cube_model = base.loader.loadModel("box")
             if cube_model.isEmpty():
                 raise RuntimeError("Failed to load cube model")
+            # Forcefully disable all textures to eliminate noise completely
+            cube_model.setTextureOff(1)
+            # Set solid color to match idle material
+            cube_model.setColor(0.5, 0.5, 0.5, 1.0)
             
             # Parse objects from payload
             objects = command.payload.get("objects", [])
