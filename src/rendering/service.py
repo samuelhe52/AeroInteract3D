@@ -6,16 +6,8 @@ import logging
 from typing import List, Dict, Optional, Set, Any, Callable
 
 from panda3d.core import (
-    WindowProperties, Material, AmbientLight, DirectionalLight,
-    PerspectiveLens, Vec4, NodePath, TextNode, Texture, CardMaker
+    Material, Vec4, NodePath
 )
-from direct.gui.OnscreenText import OnscreenText
-from direct.gui.DirectFrame import DirectFrame
-from direct.showbase.ShowBase import ShowBase
-import cv2
-import numpy as np
-
-from src.gesture.debug.live_preview_runtime import GesturePreviewWindow, HAND_CONNECTIONS, OverlayColors
 
 from src.constants import MAX_ERROR_HISTORY, RENDER_POSE_LOG_DEBOUNCE_MS
 from src.contracts import SceneCommand
@@ -25,6 +17,11 @@ from src.utils.runtime import (
     LIFECYCLE_INITIALIZING, LIFECYCLE_RUNNING, LIFECYCLE_DEGRADED, LIFECYCLE_STOPPED,
     build_health, classify_frame, error_entry
 )
+
+from .rendering_core import RenderingCoreManager
+from .auto_scaling import AutoScalingManager
+from .data_panel import DataPanelManager
+from .cam_preview import CameraPreviewManager
 
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
@@ -60,100 +57,13 @@ class RenderingMetrics:
     render_steps: int = 0
 
 
-class Panda3DWindowAdapter:
-    """Panda3D window adapter for window, camera, and light lifecycle management."""
-    
-    def __init__(self):
-        self._base: Optional[ShowBase] = None
-        self._is_initialized: bool = False
-    
-    def init_window(self, window_size: tuple = (2560, 1440), window_title: str = "AeroInteract3D Rendering") -> None:
-        """Initialize the rendering window."""
-        if self._is_initialized:
-            logger.info(f"Window already initialized ({window_size}), skipping duplicate creation")
-            return
-        try:
-            window_props = WindowProperties()
-            window_props.setSize(*window_size)
-            window_props.setTitle(window_title)
-            # Use correct way to set window properties
-            self._base = ShowBase()
-            # Set window background to white
-            self._base.setBackgroundColor(1, 1, 1, 1)
-            self._base.win.requestProperties(window_props)
-            self._is_initialized = True
-            logger.info(f"Window initialized successfully: size={window_size}, title={window_title}")
-        except Exception as e:
-            logger.error(f"Window initialization failed: {str(e)}")
-            raise RuntimeError(f"Window initialization failed: {str(e)}") from e
-    
-    def config_camera_for_world_norm(self) -> None:
-        """Configure the camera for the world_norm coordinate space."""
-        if not self._is_initialized:
-            raise RuntimeError("Window is not initialized; cannot configure the camera")
-        try:
-            # A perspective camera gives a clearer 3D view than an orthographic one.
-            lens = PerspectiveLens()
-            lens.setFov(60)  # Set the field of view.
-            lens.setNearFar(0.1, 100.0)  # Use a more practical near/far clip range.
-            self._base.cam.node().setLens(lens)
-            
-            # Position the camera with a shallow 10-degree俯角 view of the objects.
-            self._base.cam.setPos(0.0, 5.0, 0.9)  # Low angle view (≈10 degrees)
-            self._base.cam.lookAt(0.0, 0.0, 0.0)  # Look at the origin.
-            logger.info("Camera configured, using perspective camera for 3D scene")
-        except Exception as e:
-            logger.error(f"Camera configuration failed: {str(e)}")
-            raise RuntimeError(f"Camera configuration failed: {str(e)}") from e
-    
-    def create_base_lights(self) -> None:
-        """Create the base lighting setup."""
-        if not self._is_initialized:
-            raise RuntimeError("Window is not initialized; cannot create lights")
-        try:
-            # Ambient light.
-            amb_light = AmbientLight("ambient_light")
-            amb_light.setColor((0.2, 0.2, 0.2, 1.0))
-            amb_light_np = self._base.render.attachNewNode(amb_light)
-            self._base.render.setLight(amb_light_np)
-            # Directional light.
-            dir_light = DirectionalLight("directional_light")
-            dir_light.setColor((0.8, 0.8, 0.8, 1.0))
-            dir_light_np = self._base.render.attachNewNode(dir_light)
-            dir_light_np.setHpr(45, -45, 0)
-            self._base.render.setLight(dir_light_np)
-            logger.info("Basic lights created successfully")
-        except Exception as e:
-            logger.error(f"Light creation failed: {str(e)}")
-            raise RuntimeError(f"Light creation failed: {str(e)}") from e
-    
-    def get_base(self) -> Optional[ShowBase]:
-        return self._base
-    
-    def is_initialized(self) -> bool:
-        return self._is_initialized
-    
-    def reset_scene(self, scene_root: NodePath) -> None:
-        """Reset the scene graph."""
-        if not self._is_initialized:
-            raise RuntimeError("Window is not initialized; cannot reset the scene")
-        scene_root.get_children().detach()
-        logger.info("Scene reset safely (window/camera/lights preserved)")
-
-    def step(self) -> None:
-        """Advance Panda3D by one frame to process window events and present the scene."""
-        if not self._is_initialized or self._base is None:
-            return
-        self._base.taskMgr.step()
-
-
 class RenderingServiceImpl(RenderOutputPort):
-    """Core RenderOutputPort implementation for rendering SceneCommand streams."""
+    """核心RenderOutputPort实现，用于渲染SceneCommand流（整合所有子模块）"""
     
-    def __init__(self, window_adapter_factory: Callable[[], Panda3DWindowAdapter] | None = None):
+    def __init__(self, window_adapter_factory: Callable[[], RenderingCoreManager] | None = None):
         super().__init__()
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
-        self._window_adapter_factory = window_adapter_factory or Panda3DWindowAdapter
+        self._window_adapter_factory = window_adapter_factory or RenderingCoreManager
         self._window_adapter = self._window_adapter_factory()
         # Material cache keyed by interaction state.
         self._material_cache: Dict[str, Material] = self._init_materials()
@@ -173,28 +83,17 @@ class RenderingServiceImpl(RenderOutputPort):
         # For storing gesture data
         self._last_gesture_packet = None
         self._last_fps = 0.0
-        # For storing coordinate data
-        self._last_world_norm_pos = (0.0, 0.0, 0.0)
-        self._last_scene_pos = (0.0, 0.0, 0.0)
         # FPS calculation related
         self._frame_times = []
         self._frame_time_window = 1.0  # 1秒窗口
-        # Reuse live_preview drawing logic
-        self._colors = OverlayColors()
         # Camera preview related
-        self._camera_frame = None
-        self._last_observation = None
-        self._last_packet = None
-        self._camera_texture = None
-        self._camera_preview_node = None
-        self._camera_preview_enabled = False
         self._last_camera_update_time = 0
         self._camera_update_interval = 0.033  # 30fps
-        # Window size monitoring related properties
-        self._last_window_size = (0, 0)  # Record last main window size
-        self._base_window_size = (2560, 1440)  # Original base size for UI scaling (2560x1440)
-        # Global UI scale factor
-        self._ui_scale = 1.0
+        # Submodules
+        self._data_panel: Optional[DataPanelManager] = None
+        self._camera_preview: Optional[CameraPreviewManager] = None
+        self._auto_scaling: Optional[AutoScalingManager] = None
+        self._rendering_core: Optional[RenderingCoreManager] = None
     
     def _init_materials(self) -> Dict[str, Material]:
         """Initialize materials for each interaction state."""
@@ -246,7 +145,7 @@ class RenderingServiceImpl(RenderOutputPort):
         return (x * scale_factor, z * scale_factor, y * scale_factor)
     
     def start(self) -> None:
-        """Start the module and initialize the environment into RUNNING or DEGRADED."""
+        """启动模块并初始化环境为RUNNING或DEGRADED（原有逻辑保留）"""
         if self._status == LIFECYCLE_RUNNING:
             return None
         
@@ -254,49 +153,23 @@ class RenderingServiceImpl(RenderOutputPort):
         self._reset_runtime_state()
         self._errors = []
         self._metrics = RenderingMetrics()
-        self._window_adapter = self._window_adapter_factory()
+        self._rendering_core = self._window_adapter_factory()
         
         try:
-            # Initialize window/camera/lights
-            self._window_adapter.init_window()
-            self._window_adapter.config_camera_for_world_norm()
-            self._window_adapter.create_base_lights()
-            base = self._window_adapter.get_base()
-            self._status_frame = DirectFrame(
-                parent=base.pixel2d,
-                pos=(12, 0, -12),
-                frameSize=(0, 512, -288, 0),
-                frameColor=(0.0, 0.0, 0.0, 0.9),
-                relief=1,
-                borderWidth=(1, 1),
-                color=(60/255, 68/255, 86/255, 1.0)
-            )
-            # Text control in the panel, compatible with original update logic
-            self._status_panel = OnscreenText(
-                parent=base.pixel2d,
-                pos=(30, -70),
-                align=TextNode.ALeft,
-                scale=28,
-                fg=(1.0, 1.0, 1.0, 1.0),
-                wordwrap=65,
-                text="""
-                ----------------------------
-                ----------------------------
-                frame: 0
-                tracking: idle
-                pinch: idle
-                confidence: 0.00
-                pinch_distance: 0.000
-                wrist: (+0.00, +0.00, +0.00)
-                fps: 0.0""",
-                mayChange=True
-            )
+            # 初始化窗口/相机/灯光（原有逻辑保留）
+            self._rendering_core.init_window()
+            self._rendering_core.config_camera_for_world_norm()
+            self._rendering_core.create_base_lights()
             
-            # Initialize camera preview window (placed below the data panel)
-            self._init_camera_preview(base)
+            # 初始化子模块（依赖注入）
+            self._auto_scaling = AutoScalingManager(self._rendering_core)
+            self._auto_scaling.set_scale_callback(self._handle_scale_change)
+            self._data_panel = DataPanelManager(self._auto_scaling)
+            self._camera_preview = CameraPreviewManager(self._auto_scaling)
+            
             # Create scene root node
             self._scene_root = NodePath("scene_root")
-            self._scene_root.reparentTo(self._window_adapter.get_base().render)
+            self._scene_root.reparentTo(self._rendering_core.get_base().render)
             # Switch state to RUNNING
             self._status = LIFECYCLE_RUNNING
             logger.info("Rendering module started successfully, state switched to RUNNING")
@@ -313,6 +186,13 @@ class RenderingServiceImpl(RenderOutputPort):
             self._record_error(error)
             logger.error(f"Module startup failed: {error['message']} (code: {error['code']})")
             raise RuntimeError(f"Module startup failed: {error['message']} (code: {error['code']})") from e
+    
+    def _handle_scale_change(self, scale: float) -> None:
+        """处理UI缩放变化"""
+        if self._data_panel:
+            self._data_panel.set_ui_scale(scale)
+        if self._camera_preview:
+            self._camera_preview.set_ui_scale(scale)
     
     def push(self, command: SceneCommand) -> None:
         """Push a command through the main entry point with fault-tolerant handling."""
@@ -386,8 +266,8 @@ class RenderingServiceImpl(RenderOutputPort):
                 logger.warning(f"Command processing failed: {details_msg}")
 
     def step(self) -> None:
-        """Advance the Panda3D event/render loop without leaving the app's main loop."""
-        if not self._window_adapter.is_initialized():
+        """推进Panda3D事件/渲染循环，不离开应用主循环（原有逻辑保留）"""
+        if not self._rendering_core or not self._rendering_core.is_initialized():
             return
 
         # Calculate FPS
@@ -401,116 +281,31 @@ class RenderingServiceImpl(RenderOutputPort):
             self._last_fps = 0.0
 
         # Update data panel
-        if hasattr(self, "_status_panel") and self._status_panel is not None:
-            self.update_runtime_status(self._last_gesture_packet, self._last_fps)
+        if self._data_panel:
+            self._data_panel.update_data(self._last_gesture_packet, self._last_fps)
 
         # Update camera preview
-        if self._camera_preview_enabled and current_time - self._last_camera_update_time > self._camera_update_interval:
-            self._update_camera_preview()
+        if self._camera_preview and current_time - self._last_camera_update_time > self._camera_update_interval:
+            self._camera_preview.update_preview()
             self._last_camera_update_time = current_time
 
         # Main window size monitoring + auto-scaling logic
-        # 1. Get ShowBase instance and validate its validity
-        base = self._window_adapter.get_base()
-        if base is not None and base.win is not None:
-            # 2. Get current main window size
-            current_size = (base.win.getXSize(), base.win.getYSize())
-            # 3. Only perform scaling calculation when size changes
-            if current_size != self._last_window_size:
-                # 4. Calculate scale factor, take minimum of width and height scaling to ensure UI doesn't exceed window
-                scale_x = current_size[0] / self._base_window_size[0]
-                scale_y = current_size[1] / self._base_window_size[1]
-                new_scale = min(scale_x, scale_y)
-                # 5. Limit scale range between 0.5~2.0 times
-                new_scale = max(0.5, min(2.0, new_scale))
-                # 6. Only trigger scaling when scale factor changes by more than 0.01
-                if hasattr(self, "_ui_scale") and abs(new_scale - self._ui_scale) > 0.01:
-                    self.set_ui_scale(new_scale)
-                # 7. Update last window size
-                self._last_window_size = current_size
+        if self._auto_scaling:
+            self._auto_scaling.update_window_scale()
 
-        if hasattr(self._window_adapter, "step"):
-            self._window_adapter.step()
+        if hasattr(self._rendering_core, "step"):
+            self._rendering_core.step()
         else:
-            base = self._window_adapter.get_base()
+            base = self._rendering_core.get_base()
             if base is None:
                 return
             base.taskMgr.step()
         self._metrics.render_steps += 1
     
-    def set_ui_scale(self, scale: float) -> None:
-        """Set UI scale factor and update size and position of all UI elements"""
-        self._ui_scale = scale
-        
-        # Scale data panel
-        if hasattr(self, "_status_frame") and self._status_frame is not None:
-            # Original position and size
-            original_pos = (12, 0, -12)
-            original_size = (0, 512, -288, 0)
-            # Calculate new position and size
-            new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
-            new_size = (original_size[0], original_size[1] * scale, original_size[2] * scale, original_size[3])
-            self._status_frame.setPos(*new_pos)
-            self._status_frame['frameSize'] = new_size
-        
-        # Scale data text
-        if hasattr(self, "_status_panel") and self._status_panel is not None:
-            original_pos = (30, -70)
-            original_scale = 28
-            new_pos = (original_pos[0] * scale, original_pos[1] * scale)
-            new_scale = original_scale * scale
-            self._status_panel.setPos(*new_pos)
-            self._status_panel['scale'] = new_scale
-        
-        # Scale camera preview window
-        if hasattr(self, "_camera_preview_frame") and self._camera_preview_frame is not None:
-            original_pos = (12, 0, -320)
-            original_size = (0, 512, -288, 0)
-            new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
-            new_size = (original_size[0], original_size[1] * scale, original_size[2] * scale, original_size[3])
-            self._camera_preview_frame.setPos(*new_pos)
-            self._camera_preview_frame['frameSize'] = new_size
-        
-        # Scale camera preview title
-        if hasattr(self, "_camera_preview_title") and self._camera_preview_title is not None:
-            try:
-                original_pos = (30, -330)
-                original_scale = 20
-                new_pos = (original_pos[0] * scale, original_pos[1] * scale)
-                new_scale = original_scale * scale
-                self._camera_preview_title.setPos(*new_pos)
-                self._camera_preview_title['scale'] = new_scale
-            except Exception as e:
-                logger.warning(f"Failed to scale camera preview title: {e}")
-        
-        # Scale camera preview node
-        if hasattr(self, "_camera_preview_node") and self._camera_preview_node is not None:
-            try:
-                original_pos = (12 + 512, 0, -300 - 288)  # According to actual position in initialization code
-                new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
-                self._camera_preview_node.setPos(*new_pos)
-                # Adjust camera preview size
-                # Since CardMaker generated nodes cannot be directly resized, we scale the node instead
-                self._camera_preview_node.setScale(-scale, 1, -scale)  # Scale while maintaining flip effect
-            except Exception as e:
-                logger.warning(f"Failed to scale camera preview node: {e}")
-        
-        # Scale camera preview status text
-        if hasattr(self, "_camera_preview_status") and self._camera_preview_status is not None:
-            try:
-                original_pos = (30, -350)
-                original_scale = 16
-                new_pos = (original_pos[0] * scale, original_pos[1] * scale)
-                new_scale = original_scale * scale
-                self._camera_preview_status.setPos(*new_pos)
-                self._camera_preview_status['scale'] = new_scale
-            except Exception as e:
-                logger.warning(f"Failed to scale camera preview status: {e}")
-    
 
     
     def health(self) -> Dict[str, Any]:
-        """Return structured health information, including logging-related state."""
+        """返回结构化健康信息，包括日志相关状态"""
         return build_health(
             component="rendering",
             lifecycle_state=self._status,
@@ -528,7 +323,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 "heartbeats_received": self._metrics.heartbeats_received,
                 "render_steps": self._metrics.render_steps,
                 "last_command_ts": self._last_command_ts,
-                "window_initialized": self._window_adapter.is_initialized(),
+                "window_initialized": self._rendering_core.is_initialized() if self._rendering_core else False,
                 "executed_command_count": len(self._executed_command_ids),
                 "latest_frame_id": self._latest_frame_id,
                 "pending_commands_count": len(self._pending_commands)
@@ -536,25 +331,32 @@ class RenderingServiceImpl(RenderOutputPort):
         )
     
     def stop(self) -> None:
-        """Stop the module, release resources, and switch to STOPPED."""
+        """Stop the module, release resources, and switch to STOPPED state (original logic preserved)"""
         if self._status == LIFECYCLE_STOPPED:
             logger.info("Module already stopped, no need for repeated operation")
             return None
 
         self._flush_pose_log_summary()
         
-        # Clean up camera preview resources
-        self._cleanup_camera_preview()
+        # Clean up submodules
+        if self._camera_preview:
+            self._camera_preview.destroy()
+        if self._data_panel:
+            self._data_panel.destroy()
         
         # Stop task loop, release window
-        if self._window_adapter.is_initialized():
-            base = self._window_adapter.get_base()
+        if self._rendering_core and self._rendering_core.is_initialized():
+            base = self._rendering_core.get_base()
             base.taskMgr.stop()
             base.win.close()
             base.destroy()
         
-        self._window_adapter = self._window_adapter_factory()
+        self._rendering_core = self._window_adapter_factory()
         self._reset_runtime_state()
+        # Reset submodules
+        self._data_panel = None
+        self._camera_preview = None
+        self._auto_scaling = None
         self._status = LIFECYCLE_STOPPED
         logger.info("Rendering module stopped, all resources released")
         return None
@@ -701,8 +503,8 @@ class RenderingServiceImpl(RenderOutputPort):
             self._metrics.commands_applied += 1
             
             # 保存坐标数据用于显示
-            self._last_world_norm_pos = tuple(clipped_pos)
-            self._last_scene_pos = scene_pos
+            if self._data_panel:
+                self._data_panel.update_coordinate_data(tuple(clipped_pos), scene_pos)
             
             # 8. Logging
             if tuple(clipped_pos) != tuple(pos_float):
@@ -847,19 +649,19 @@ class RenderingServiceImpl(RenderOutputPort):
             )
     
     def _handle_init_scene(self, command: SceneCommand) -> None:
-        """Handle an init_scene command."""
+        """处理init_scene命令"""
         try:
             self._metrics.init_scene_commands += 1
             self._metrics.commands_applied += 1
             # Reset scene
             if self._scene_root is not None and not self._scene_root.isEmpty():
-                self._window_adapter.reset_scene(self._scene_root)
+                self._rendering_core.reset_scene(self._scene_root)
                 self._object_cache.clear()
                 self._object_initial_states.clear()
                 logger.info("Duplicate init_scene received, scene cache reset")
             
             # Load cube model
-            base = self._window_adapter.get_base()
+            base = self._rendering_core.get_base()
             cube_model = base.loader.loadModel("box")
             if cube_model.isEmpty():
                 raise RuntimeError("Failed to load cube model")
@@ -1106,6 +908,9 @@ class RenderingServiceImpl(RenderOutputPort):
         self._is_resetting = False
         self._last_pose_log_ts = None
         self._suppressed_pose_logs = 0
+        self._last_gesture_packet = None
+        self._last_fps = 0.0
+        self._frame_times = []
 
     def _record_error(self, error: Dict[str, Any]) -> None:
         payload = dict(error)
@@ -1149,149 +954,13 @@ class RenderingServiceImpl(RenderOutputPort):
     
     def update_camera_frame(self, frame, observation=None, packet=None) -> None:
         """Update camera frame data"""
-        if frame is not None and self._camera_preview_enabled:
-            self._camera_frame = frame
-            self._last_observation = observation
-            self._last_packet = packet
+        if self._camera_preview:
+            self._camera_preview.update_frame(frame, observation)
 
     def enable_camera_preview(self, enabled: bool = True) -> None:
         """Enable or disable camera preview"""
-        self._camera_preview_enabled = enabled
-        if not enabled and self._camera_preview_node is not None:
-            self._camera_preview_node.removeNode()
-            self._camera_preview_node = None
-
-    def _init_camera_preview(self, base) -> None:
-        """Initialize camera preview window"""
-        try:
-            # Create camera preview background panel (placed below the data panel)
-            self._camera_preview_frame = DirectFrame(
-                parent=base.pixel2d,
-                pos=(12, 0, -320),  # 20 pixels below the data panel
-                frameSize=(0, 512, -288, 0),  # 512x288 pixel preview window
-                frameColor=(0.0, 0.0, 0.0, 0.9),
-                relief=1,
-                borderWidth=(1, 1),
-                color=(20/255, 24/255, 32/255, 1.0)
-            )
-            
-            # Create camera preview title
-            self._camera_preview_title = OnscreenText(
-                parent=base.pixel2d,
-                pos=(30, -330),
-                align=TextNode.ALeft,
-                scale=20,
-                fg=(1.0, 1.0, 1.0, 1.0),
-                text="Camera Preview",
-                mayChange=False
-            )
-            
-            # Create camera preview status text
-            self._camera_preview_status = OnscreenText(
-                parent=base.pixel2d,
-                pos=(30, -350),
-                align=TextNode.ALeft,
-                scale=16,
-                fg=(0.8, 0.8, 0.8, 1.0),
-                text="Camera: Not Connected",
-                mayChange=True
-            )
-            
-            # Create camera preview texture and node
-            self._camera_texture = Texture("camera_preview")
-            self._camera_texture.setup2dTexture(512, 288, Texture.T_unsigned_byte, Texture.F_rgb)
-            
-            card_maker = CardMaker("camera_preview_card")
-            card_maker.setFrame(0, 512, -288, 0)
-            
-            self._camera_preview_node = base.pixel2d.attachNewNode(card_maker.generate())
-            # Set negative scale to flip: -1 for left-right mirror, -1 for up-down flip
-            # Adjust position to keep the image in place
-            self._camera_preview_node.setScale(-1, 1, -1)
-            self._camera_preview_node.setPos(12 + 512, 0, -300 - 288)
-            
-            # Apply texture
-            self._camera_preview_node.setTexture(self._camera_texture)
-            
-            # Enable preview
-            self._camera_preview_enabled = True
-            logger.info("Camera preview initialized successfully")
-            
-        except Exception as e:
-            logger.warning(f"Camera preview initialization failed: {str(e)}")
-            self._camera_preview_enabled = False
-    
-    def _update_camera_preview(self) -> None:
-        """Update camera preview frame"""
-        if self._camera_frame is None or self._camera_preview_node is None:
-            return
-            
-        try:
-            # Resize image
-            frame = cv2.resize(self._camera_frame, (512, 288))
-            
-            # If there is gesture data, draw hand skeleton (reuse live_preview logic)
-            if self._last_observation is not None:
-                frame = self._draw_hand_skeleton(frame, self._last_observation)
-            
-            # Convert BGR to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Update texture
-            self._camera_texture.setRamImage(frame_rgb)
-            
-            # Update status text
-            if hasattr(self, "_camera_preview_status"):
-                self._camera_preview_status.setText("Camera: Active")
-                
-        except Exception as e:
-            logger.warning(f"Camera preview update failed: {str(e)}")
-            if hasattr(self, "_camera_preview_status"):
-                self._camera_preview_status.setText("Camera: Error")
-    
-    def _draw_hand_skeleton(self, frame, observation) -> np.ndarray:
-        """Draw hand skeleton (reuse live_preview logic)"""
-        height, width = frame.shape[:2]
-        
-        # Draw connection lines
-        for start_idx, end_idx in HAND_CONNECTIONS:
-            if start_idx < len(observation.landmarks) and end_idx < len(observation.landmarks):
-                start_point = self._landmark_to_pixel(observation.landmarks[start_idx], width, height)
-                end_point = self._landmark_to_pixel(observation.landmarks[end_idx], width, height)
-                cv2.line(frame, start_point, end_point, self._colors.bones, 2)
-        
-        # Draw key points
-        for landmark in observation.landmarks:
-            point = self._landmark_to_pixel(landmark, width, height)
-            cv2.circle(frame, point, 4, self._colors.landmarks, -1)
-        
-        return frame
-    
-
-    
-    def _landmark_to_pixel(self, landmark, width, height) -> tuple[int, int]:
-        """Convert landmark coordinates to pixel coordinates"""
-        return (int(landmark.x * width), int(landmark.y * height))
-    
-    def _cleanup_camera_preview(self) -> None:
-        """Clean up camera preview resources"""
-        if self._camera_preview_node is not None:
-            self._camera_preview_node.removeNode()
-            self._camera_preview_node = None
-        
-        if hasattr(self, "_camera_preview_frame"):
-            self._camera_preview_frame.destroy()
-            
-        if hasattr(self, "_camera_preview_title"):
-            self._camera_preview_title.destroy()
-            
-        if hasattr(self, "_camera_preview_status"):
-            self._camera_preview_status.destroy()
-        
-        self._camera_frame = None
-        self._last_observation = None
-        self._last_packet = None
-        self._camera_preview_enabled = False
+        if self._camera_preview:
+            self._camera_preview.enable_preview(enabled)
 
     def _log_pose_update(
         self,
@@ -1313,6 +982,21 @@ class RenderingServiceImpl(RenderOutputPort):
         if elapsed_ms < RENDER_POSE_LOG_DEBOUNCE_MS:
             self._suppressed_pose_logs += 1
             return
+    
+    def _flush_pose_log_summary(self) -> None:
+        """Flush pose log summary."""
+        if self._suppressed_pose_logs > 0:
+            logger.info(f"Suppressed {self._suppressed_pose_logs} pose update logs to reduce verbosity")
+            self._suppressed_pose_logs = 0
+    
+    def _clip_coordinate(self, coord: list[float], rotation: bool = False) -> list[float]:
+        """Clip coordinate to world_norm range [-1.0, 1.0]."""
+        if rotation:
+            # For rotation, just ensure they are floats
+            return [float(v) for v in coord]
+        else:
+            # For position, clip to [-1.0, 1.0]
+            return [max(-1.0, min(1.0, float(v))) for v in coord]
 
         suppressed_count = self._suppressed_pose_logs
         self._suppressed_pose_logs = 0
