@@ -148,7 +148,6 @@ class GestureServiceImpl(GestureInputPort):
             timestamp_ms=timestamp_ms,
             runtime_hint=runtime_hint,
         )
-        packet = self._apply_runtime_hint(packet, runtime_hint)
         validation_errors = validate_gesture_packet(packet)
         if validation_errors:
             self._metrics.validation_failures += len(validation_errors)
@@ -397,24 +396,6 @@ class GestureServiceImpl(GestureInputPort):
             "blur_level": observation.blur_level,
             "quality_hint": observation.quality_hint,
         }
-
-    def _apply_runtime_hint(self, packet: GesturePacket, runtime_hint: dict[str, Any] | None) -> GesturePacket:
-        if runtime_hint is None:
-            return packet
-
-        smoothing_hint = dict(packet.smoothing_hint or {})
-        smoothing_hint.setdefault("observation_source", runtime_hint.get("observation_source"))
-        smoothing_hint.setdefault("runtime_quality_hint", runtime_hint.get("quality_hint"))
-
-        debug = dict(packet.debug or {})
-        debug.setdefault("observation_source", runtime_hint.get("observation_source"))
-        debug.setdefault("appearance_match_score", runtime_hint.get("appearance_match_score"))
-        debug.setdefault("predicted_tracked", runtime_hint.get("predicted_tracked"))
-        debug.setdefault("blur_level", runtime_hint.get("blur_level"))
-
-        packet.smoothing_hint = smoothing_hint
-        packet.debug = debug
-        return packet
 
 
 __all__ = ["GestureConfig", "GestureMetrics", "GestureServiceImpl"]

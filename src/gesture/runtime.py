@@ -121,14 +121,20 @@ class HandLandmarkerRuntime:
         self._min_template_match = 0.45
 
     def detect(self, frame_bgr: np.ndarray, *, timestamp_ms: int) -> RawHandObservation | None:
-        blur_level = self._estimate_blur_level(frame_bgr)
+        frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        blur_level = self._estimate_blur_level(frame_gray)
         detect_frame = resize_for_detection(frame_bgr, max_side=GESTURE_DETECT_MAX_SIDE)
         rgb_frame = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
         image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb_frame)
         result = self._landmarker.detect_for_video(image, timestamp_ms)
 
         if not result.hand_landmarks:
-            return self._detect_fallback(frame_bgr, timestamp_ms=timestamp_ms, blur_level=blur_level)
+            return self._detect_fallback(
+                frame_bgr,
+                frame_gray,
+                timestamp_ms=timestamp_ms,
+                blur_level=blur_level,
+            )
 
         hand_landmarks = result.hand_landmarks[0]
         landmarks = [
@@ -173,12 +179,13 @@ class HandLandmarkerRuntime:
             blur_level=blur_level,
             quality_hint=max(0.0, 1.0 - (blur_level * 0.55)),
         )
-        self._update_fallback_state(frame_bgr, observation, timestamp_ms=timestamp_ms)
+        self._update_fallback_state(frame_gray, observation, timestamp_ms=timestamp_ms)
         return observation
 
     def _detect_fallback(
         self,
         frame_bgr: np.ndarray,
+        frame_gray: np.ndarray,
         *,
         timestamp_ms: int,
         blur_level: float,
@@ -187,7 +194,6 @@ class HandLandmarkerRuntime:
         if state.last_observation is None or state.fallback_frames >= self._fallback_max_frames:
             return None
 
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         dt_scale = self._dt_scale(timestamp_ms)
         predicted_wrist_px = self._predict_wrist_px(dt_scale=dt_scale)
         source = "predicted"
@@ -195,7 +201,7 @@ class HandLandmarkerRuntime:
 
         candidate_wrist_px = predicted_wrist_px
         if state.template_patch is not None:
-            matched = self._local_template_match(gray, predicted_wrist_px)
+            matched = self._local_template_match(frame_gray, predicted_wrist_px)
             if matched is not None:
                 candidate_wrist_px, appearance_match_score = matched
                 source = "fallback"
@@ -220,7 +226,7 @@ class HandLandmarkerRuntime:
             return None
 
         state.fallback_frames += 1
-        state.last_frame_gray = gray
+        state.last_frame_gray = frame_gray
         state.last_timestamp_ms = timestamp_ms
         state.last_wrist_px = candidate_wrist_px
         state.last_observation = fallback_observation
@@ -232,14 +238,13 @@ class HandLandmarkerRuntime:
 
     def _update_fallback_state(
         self,
-        frame_bgr: np.ndarray,
+        frame_gray: np.ndarray,
         observation: RawHandObservation,
         *,
         timestamp_ms: int,
     ) -> None:
         state = self._fallback_state
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        wrist_px = self._vec_to_pixel(observation.wrist, frame_bgr.shape[1], frame_bgr.shape[0])
+        wrist_px = self._vec_to_pixel(observation.wrist, frame_gray.shape[1], frame_gray.shape[0])
 
         if state.last_wrist_px is not None and state.last_timestamp_ms is not None:
             dt_scale = self._dt_scale(timestamp_ms)
@@ -252,10 +257,10 @@ class HandLandmarkerRuntime:
             state.velocity_px = (0.0, 0.0)
 
         state.last_observation = observation
-        state.last_frame_gray = gray
+        state.last_frame_gray = frame_gray
         state.last_wrist_px = wrist_px
         state.last_timestamp_ms = timestamp_ms
-        state.template_patch = self._extract_patch(gray, wrist_px)
+        state.template_patch = self._extract_patch(frame_gray, wrist_px)
         state.fallback_frames = 0
 
     def _observation_from_wrist_shift(
@@ -368,9 +373,8 @@ class HandLandmarkerRuntime:
             z=vec.z,
         )
 
-    def _estimate_blur_level(self, frame_bgr: np.ndarray) -> float:
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    def _estimate_blur_level(self, frame_gray: np.ndarray) -> float:
+        lap_var = float(cv2.Laplacian(frame_gray, cv2.CV_64F).var())
         # Higher blur means lower Laplacian variance, then invert to [0, 1].
         return _clamp(1.0 - (lap_var / (lap_var + 200.0)))
 
