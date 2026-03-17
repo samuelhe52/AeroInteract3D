@@ -134,7 +134,9 @@ class TemporalReducer:
         timestamp_ms: int,
         runtime_hint: dict[str, Any] | None,
     ) -> GesturePacket:
-        source = str(runtime_hint.get("observation_source") if runtime_hint else observation.observation_source)
+        source = str(
+            runtime_hint.get("observation_source") if runtime_hint and "observation_source" in runtime_hint else observation.observation_source
+        )
         appearance_match_score = self._clamp01(
             float(runtime_hint.get("appearance_match_score") if runtime_hint and "appearance_match_score" in runtime_hint else observation.appearance_match_score)
         )
