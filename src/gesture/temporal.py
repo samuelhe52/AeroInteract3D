@@ -252,7 +252,6 @@ class TemporalReducer:
                 "raw_pinch_distance": observation.raw_pinch_distance,
                 "pinch_score": pinch_score,
                 "appearance_match_score": appearance_match_score,
-                "feature_assisted_score": appearance_match_score,
                 "predicted_tracked": predicted_tracked,
                 "grace_frames_used": self._grace_frames_used,
                 "blur_level": blur_level,
