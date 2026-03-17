@@ -3,30 +3,43 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from src.constants import GESTURE_DEFAULT_HAND_ID, TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
 from src.contracts import GesturePacket, PinchState, TrackingState, Vec3
+from src.gesture.constants import (
+    ENTER_THRESHOLD,
+    FALLBACK_MAX_FRAMES,
+    GESTURE_DEFAULT_HAND_ID,
+    GRACE_FRAMES,
+    HIGH_BLUR_LEVEL,
+    HIGH_MOTION_ALPHA_Y_FLOOR,
+    LATERAL_BLUR_X_GATE_MULTIPLIER,
+    LATERAL_BLUR_Y_DELTA_BLEND,
+    LOW_QUALITY_CONFIDENCE,
+    LOW_QUALITY_MOTION_ALPHA_Y_FLOOR,
+    LOW_QUALITY_MOTION_ALPHA_Y_MULTIPLIER,
+    MOTION_ALPHA_X_FLOOR,
+    MOTION_ALPHA_X_MULTIPLIER,
+    MOTION_ALPHA_Y_MAX,
+    MOTION_ALPHA_Y_OFFSET,
+    OPEN_MARGIN_MIN,
+    PINCH_CONFIRM_FRAMES,
+    PINCH_MIN_HOLD_FRAMES,
+    REACQUIRE_BLEND_FRAMES,
+    REACQUIRE_GATE_DISTANCE,
+    REACQUIRE_MAX_DX,
+    REACQUIRE_MAX_DY,
+    RELAXED_OPEN_MARGIN_MIN,
+    RELAXED_QUALITY_CONFIDENCE,
+    RELAXED_RELEASE_CONFIRM_FRAMES,
+    RELEASE_CONFIRM_FRAMES,
+    RELEASE_THRESHOLD,
+    TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES,
+)
 from src.gesture.runtime import RawHandObservation, distance_2d
 from src.utils.contracts import EXPECTED_CONTRACT_VERSION
 
 
 ZERO_VEC3 = Vec3(0.0, 0.0, 0.0)
-SmoothingPreset = Literal["high", "medium", "low"]
-
-# Tunable defaults for blur/fallback stability while keeping low latency.
-ENTER_THRESHOLD = 0.62
-RELEASE_THRESHOLD = 0.42
-PINCH_CONFIRM_FRAMES = 4
-RELEASE_CONFIRM_FRAMES = 4
-PINCH_MIN_HOLD_FRAMES = 1
-GRACE_FRAMES = 6
-FALLBACK_MAX_FRAMES = 8
-REACQUIRE_BLEND_FRAMES = 4
-REACQUIRE_GATE_DISTANCE = 0.16
-REACQUIRE_MAX_DX = 0.06
-REACQUIRE_MAX_DY = 0.05
-OPEN_MARGIN_MIN = 0.10
-LOW_QUALITY_CONFIDENCE = 0.60
-HIGH_BLUR_LEVEL = 0.62
+MotionPreset = Literal["high", "medium", "low"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +52,7 @@ class TemporalTuning:
     lost_tracking_motion_damping: float
 
 
-PRESET_TUNINGS: dict[SmoothingPreset, TemporalTuning] = {
+MOTION_PRESET_TUNINGS: dict[MotionPreset, TemporalTuning] = {
     "high": TemporalTuning(
         smoothing_alpha=0.72,
         xy_smoothing_alpha=0.64,
@@ -67,14 +80,15 @@ PRESET_TUNINGS: dict[SmoothingPreset, TemporalTuning] = {
 }
 
 
-def temporal_tuning_for_preset(preset: SmoothingPreset) -> TemporalTuning:
-    return PRESET_TUNINGS[preset]
+def temporal_tuning_for_motion_preset(preset: MotionPreset) -> TemporalTuning:
+    return MOTION_PRESET_TUNINGS[preset]
 
 
 @dataclass(slots=True)
 class TemporalReducer:
     hand_id: str = GESTURE_DEFAULT_HAND_ID
-    tuning: TemporalTuning = field(default_factory=lambda: PRESET_TUNINGS["medium"])
+    tuning: TemporalTuning = field(default_factory=lambda: MOTION_PRESET_TUNINGS["medium"])
+    aggressive_release_guard: bool = False
     _last_index_tip: Vec3 = field(init=False, default_factory=lambda: ZERO_VEC3)
     _last_thumb_tip: Vec3 = field(init=False, default_factory=lambda: ZERO_VEC3)
     _last_wrist: Vec3 = field(init=False, default_factory=lambda: ZERO_VEC3)
@@ -204,6 +218,7 @@ class TemporalReducer:
             pinch_score=pinch_score,
             quality_score=quality_score,
             geometry_open_margin=geometry_open_margin,
+            source=source,
         )
 
         self._last_index_tip = index_tip
@@ -288,6 +303,7 @@ class TemporalReducer:
             pinch_score=pinch_score,
             quality_score=0.25,
             geometry_open_margin=geometry_open_margin,
+            source="predicted",
         )
 
         if self._missing_frames > TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES:
@@ -381,6 +397,7 @@ class TemporalReducer:
         pinch_score: float,
         quality_score: float,
         geometry_open_margin: float,
+        source: str,
     ) -> PinchState:
         prior_pinch = self._is_pinch_stable()
 
@@ -415,10 +432,11 @@ class TemporalReducer:
             pinch_score=pinch_score,
             quality_score=quality_score,
             geometry_open_margin=geometry_open_margin,
+            source=source,
         )
         if release_allowed:
             self._release_confirm_count += 1
-            if self._release_confirm_count >= RELEASE_CONFIRM_FRAMES:
+            if self._release_confirm_count >= self._release_confirm_frames():
                 self._pinch_confirm_count = 0
                 self._last_pinch_state = "open"
                 self._pinched_hold_frames = 0
@@ -430,13 +448,26 @@ class TemporalReducer:
         self._last_pinch_state = "pinched"
         return self._last_pinch_state
 
-    def _allow_release(self, *, pinch_score: float, quality_score: float, geometry_open_margin: float) -> bool:
+    def _allow_release(self, *, pinch_score: float, quality_score: float, geometry_open_margin: float, source: str) -> bool:
+        if self.aggressive_release_guard:
+            return (
+                pinch_score < RELEASE_THRESHOLD
+                and quality_score >= LOW_QUALITY_CONFIDENCE
+                and geometry_open_margin >= OPEN_MARGIN_MIN
+                and source not in {"fallback", "predicted"}
+            )
+
         return (
-            pinch_score < RELEASE_THRESHOLD
-            and quality_score >= LOW_QUALITY_CONFIDENCE
-            and geometry_open_margin >= OPEN_MARGIN_MIN
-            and self._last_source not in {"fallback", "predicted"}
+            pinch_score < 0.50
+            and quality_score >= RELAXED_QUALITY_CONFIDENCE
+            and geometry_open_margin >= RELAXED_OPEN_MARGIN_MIN
+            and source != "predicted"
         )
+
+    def _release_confirm_frames(self) -> int:
+        if self.aggressive_release_guard:
+            return RELEASE_CONFIRM_FRAMES
+        return RELAXED_RELEASE_CONFIRM_FRAMES
 
     def _pinch_score(
         self,
@@ -472,22 +503,23 @@ class TemporalReducer:
         raw_dx = current.x - previous.x
         raw_dy = current.y - previous.y
 
-        alpha_x = max(self.tuning.xy_smoothing_alpha * 0.70, 0.05)
+        alpha_x = max(self.tuning.xy_smoothing_alpha * MOTION_ALPHA_X_MULTIPLIER, MOTION_ALPHA_X_FLOOR)
+        base_alpha_y = min(max(self.tuning.xy_smoothing_alpha + MOTION_ALPHA_Y_OFFSET, alpha_x), MOTION_ALPHA_Y_MAX)
         deadzone_x = self.tuning.position_deadzone * 1.8
 
         motion_y = abs(raw_dy)
         if low_quality or blur_level > HIGH_BLUR_LEVEL:
-            alpha_y = 0.20
+            alpha_y = max(base_alpha_y * LOW_QUALITY_MOTION_ALPHA_Y_MULTIPLIER, LOW_QUALITY_MOTION_ALPHA_Y_FLOOR)
         elif motion_y > 0.04:
-            alpha_y = 0.55
+            alpha_y = max(base_alpha_y, HIGH_MOTION_ALPHA_Y_FLOOR)
         else:
-            alpha_y = self.tuning.xy_smoothing_alpha
+            alpha_y = base_alpha_y
 
         x = self._smooth_component(previous.x, current.x, alpha=alpha_x, deadzone=deadzone_x)
 
         # Keep Y independent when X jump is likely noise from lateral sweep blur.
-        if abs(raw_dx) > (deadzone_x * 4.0):
-            y_current = previous.y + (raw_dy * 0.4)
+        if abs(raw_dx) > (deadzone_x * LATERAL_BLUR_X_GATE_MULTIPLIER):
+            y_current = previous.y + (raw_dy * LATERAL_BLUR_Y_DELTA_BLEND)
         else:
             y_current = current.y
         y = self._smooth_component(previous.y, y_current, alpha=alpha_y, deadzone=self.tuning.position_deadzone)
@@ -613,7 +645,7 @@ class TemporalReducer:
         return self._last_pinch_state in {"pinched", "release_candidate"}
 
     def _preset_name(self) -> str:
-        for name, preset_tuning in PRESET_TUNINGS.items():
+        for name, preset_tuning in MOTION_PRESET_TUNINGS.items():
             if preset_tuning == self.tuning:
                 return name
         return "custom"
@@ -631,4 +663,4 @@ class TemporalReducer:
         return self._clamp(value, low=0.0, high=1.0)
 
 
-__all__ = ["PRESET_TUNINGS", "SmoothingPreset", "TemporalReducer", "TemporalTuning", "temporal_tuning_for_preset"]
+__all__ = ["MOTION_PRESET_TUNINGS", "MotionPreset", "TemporalReducer", "TemporalTuning", "temporal_tuning_for_motion_preset"]

@@ -158,3 +158,16 @@ def test_gesture_service_relies_on_reducer_runtime_fields_without_post_mutation(
     assert packet.debug["predicted_tracked"] is False
     assert packet.debug["blur_level"] == 0.0
     assert "runtime_quality_hint" not in packet.smoothing_hint
+
+
+def test_gesture_service_health_reports_aggressive_release_guard() -> None:
+    service = GestureServiceImpl(
+        aggressive_release_guard=True,
+        capture_factory=FakeCapture,
+        detector_factory=FakeDetector,
+        clock=iter([5.0]).__next__,
+    )
+
+    service.start()
+
+    assert service.health()["stats"]["aggressive_release_guard"] is True

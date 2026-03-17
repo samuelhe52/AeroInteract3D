@@ -8,7 +8,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from src.constants import (
+from src.gesture.constants import (
     DEFAULT_MIN_DETECTION_CONFIDENCE,
     DEFAULT_MIN_TRACKING_CONFIDENCE,
     DEPTH_ESTIMATION_FAR_HAND_SCALE,

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from src.constants import TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
+from src.gesture.constants import TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
 from src.contracts import Vec3
 from src.gesture.runtime import RawHandObservation, normalized_pinch_distance
-from src.gesture.temporal import PRESET_TUNINGS, TemporalReducer, temporal_tuning_for_preset
+from src.gesture.temporal import MOTION_PRESET_TUNINGS, TemporalReducer, temporal_tuning_for_motion_preset
 
 
 def make_observation(
@@ -33,6 +33,20 @@ def test_temporal_reducer_requires_multiple_frames_to_confirm_pinch_and_release(
         pinch_states.append(packet.pinch_state)
 
     assert pinch_states == ["pinch_candidate", "pinch_candidate", "pinch_candidate", "pinched"]
+
+    release_states: list[str] = []
+    for offset in range(5, 9):
+        packet = reducer.reduce(make_observation(pinch_gap=0.18), frame_id=offset, timestamp_ms=offset * 16)
+        release_states.append(packet.pinch_state)
+
+    assert release_states == ["release_candidate", "open", "open", "open"]
+
+
+def test_temporal_reducer_aggressive_release_guard_keeps_stricter_release_confirmation() -> None:
+    reducer = TemporalReducer(aggressive_release_guard=True)
+
+    for frame_id in range(1, 5):
+        reducer.reduce(make_observation(pinch_gap=0.03), frame_id=frame_id, timestamp_ms=frame_id * 16)
 
     release_states: list[str] = []
     for offset in range(5, 9):
@@ -84,9 +98,28 @@ def test_temporal_reducer_preserves_small_vertical_motion() -> None:
     assert second_packet.wrist.y > first_packet.wrist.y
 
 
-def test_temporal_smoothing_preset_affects_responsiveness() -> None:
-    high_reducer = TemporalReducer(tuning=temporal_tuning_for_preset("high"))
-    low_reducer = TemporalReducer(tuning=temporal_tuning_for_preset("low"))
+def test_temporal_reducer_keeps_vertical_motion_responsive_under_blur() -> None:
+    reducer = TemporalReducer()
+
+    reducer.reduce(make_observation(), frame_id=1, timestamp_ms=16)
+    blurred_observation = make_observation()
+    blurred_observation.wrist = Vec3(0.0, 0.06, 0.0)
+    blurred_observation.index_tip = Vec3(0.04, 0.26, 0.10)
+    blurred_observation.thumb_tip = Vec3(0.0, 0.26, 0.10)
+
+    packet = reducer.reduce(
+        blurred_observation,
+        frame_id=2,
+        timestamp_ms=32,
+        runtime_hint={"blur_level": 0.85},
+    )
+
+    assert packet.wrist.y > 0.02
+
+
+def test_temporal_motion_preset_affects_responsiveness() -> None:
+    high_reducer = TemporalReducer(tuning=temporal_tuning_for_motion_preset("high"))
+    low_reducer = TemporalReducer(tuning=temporal_tuning_for_motion_preset("low"))
 
     initial_observation = make_observation()
     moved_observation = make_observation(wrist_x=0.5)
@@ -96,5 +129,5 @@ def test_temporal_smoothing_preset_affects_responsiveness() -> None:
     high_packet = high_reducer.reduce(moved_observation, frame_id=2, timestamp_ms=32)
     low_packet = low_reducer.reduce(moved_observation, frame_id=2, timestamp_ms=32)
 
-    assert PRESET_TUNINGS["low"].xy_smoothing_alpha > PRESET_TUNINGS["high"].xy_smoothing_alpha
+    assert MOTION_PRESET_TUNINGS["low"].xy_smoothing_alpha > MOTION_PRESET_TUNINGS["high"].xy_smoothing_alpha
     assert low_packet.wrist.x > high_packet.wrist.x

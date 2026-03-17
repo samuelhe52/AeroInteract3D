@@ -5,12 +5,12 @@ from dataclasses import dataclass
 import logging
 import time
 
-from src.constants import (
+from src.gesture.constants import (
     DEFAULT_CAMERA_INDEX,
     DEFAULT_FRAME_HEIGHT,
     DEFAULT_FRAME_WIDTH,
     DEFAULT_TARGET_FPS,
-    GESTURE_SMOOTHING_PRESET,
+    GESTURE_MOTION_PRESET,
 )
 from src.gesture.service import GestureServiceImpl
 
@@ -22,7 +22,8 @@ class GesturePreviewConfig:
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
     log_level: str = "INFO"
-    smoothing_preset: str = GESTURE_SMOOTHING_PRESET
+    motion_preset: str = GESTURE_MOTION_PRESET
+    aggressive_release_guard: bool = False
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -31,7 +32,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--target-fps", type=int, default=DEFAULT_TARGET_FPS)
     parser.add_argument("--frame-width", type=int, default=DEFAULT_FRAME_WIDTH)
     parser.add_argument("--frame-height", type=int, default=DEFAULT_FRAME_HEIGHT)
-    parser.add_argument("--smoothing-preset", choices=["high", "medium", "low"], default=GESTURE_SMOOTHING_PRESET)
+    parser.add_argument("--motion-preset", choices=["high", "medium", "low"], default=GESTURE_MOTION_PRESET)
+    parser.add_argument(
+        "--aggressive-release-guard",
+        action="store_true",
+        help="Require higher-quality observations before pinch release is accepted.",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args(argv)
 
@@ -43,7 +49,8 @@ def build_config(args: argparse.Namespace) -> GesturePreviewConfig:
         frame_width=args.frame_width,
         frame_height=args.frame_height,
         log_level=args.log_level.upper(),
-        smoothing_preset=args.smoothing_preset,
+        motion_preset=args.motion_preset,
+        aggressive_release_guard=args.aggressive_release_guard,
     )
 
 
@@ -65,7 +72,8 @@ def main(argv: list[str] | None = None) -> int:
         frame_width=config.frame_width,
         frame_height=config.frame_height,
         preview_enabled=True,
-        smoothing_preset=config.smoothing_preset,
+        motion_preset=config.motion_preset,
+        aggressive_release_guard=config.aggressive_release_guard,
     )
 
     try:
