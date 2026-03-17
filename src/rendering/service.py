@@ -190,6 +190,11 @@ class RenderingServiceImpl(RenderOutputPort):
         self._camera_preview_enabled = False
         self._last_camera_update_time = 0
         self._camera_update_interval = 0.033  # 30fps
+        # Window size monitoring related properties
+        self._last_window_size = (0, 0)  # Record last main window size
+        self._base_window_size = (2560, 1440)  # Original base size for UI scaling (2560x1440)
+        # Global UI scale factor
+        self._ui_scale = 1.0
     
     def _init_materials(self) -> Dict[str, Material]:
         """Initialize materials for each interaction state."""
@@ -404,6 +409,26 @@ class RenderingServiceImpl(RenderOutputPort):
             self._update_camera_preview()
             self._last_camera_update_time = current_time
 
+        # Main window size monitoring + auto-scaling logic
+        # 1. Get ShowBase instance and validate its validity
+        base = self._window_adapter.get_base()
+        if base is not None and base.win is not None:
+            # 2. Get current main window size
+            current_size = (base.win.getXSize(), base.win.getYSize())
+            # 3. Only perform scaling calculation when size changes
+            if current_size != self._last_window_size:
+                # 4. Calculate scale factor, take minimum of width and height scaling to ensure UI doesn't exceed window
+                scale_x = current_size[0] / self._base_window_size[0]
+                scale_y = current_size[1] / self._base_window_size[1]
+                new_scale = min(scale_x, scale_y)
+                # 5. Limit scale range between 0.5~2.0 times
+                new_scale = max(0.5, min(2.0, new_scale))
+                # 6. Only trigger scaling when scale factor changes by more than 0.01
+                if hasattr(self, "_ui_scale") and abs(new_scale - self._ui_scale) > 0.01:
+                    self.set_ui_scale(new_scale)
+                # 7. Update last window size
+                self._last_window_size = current_size
+
         if hasattr(self._window_adapter, "step"):
             self._window_adapter.step()
         else:
@@ -412,6 +437,75 @@ class RenderingServiceImpl(RenderOutputPort):
                 return
             base.taskMgr.step()
         self._metrics.render_steps += 1
+    
+    def set_ui_scale(self, scale: float) -> None:
+        """Set UI scale factor and update size and position of all UI elements"""
+        self._ui_scale = scale
+        
+        # Scale data panel
+        if hasattr(self, "_status_frame") and self._status_frame is not None:
+            # Original position and size
+            original_pos = (12, 0, -12)
+            original_size = (0, 512, -288, 0)
+            # Calculate new position and size
+            new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
+            new_size = (original_size[0], original_size[1] * scale, original_size[2] * scale, original_size[3])
+            self._status_frame.setPos(*new_pos)
+            self._status_frame['frameSize'] = new_size
+        
+        # Scale data text
+        if hasattr(self, "_status_panel") and self._status_panel is not None:
+            original_pos = (30, -70)
+            original_scale = 28
+            new_pos = (original_pos[0] * scale, original_pos[1] * scale)
+            new_scale = original_scale * scale
+            self._status_panel.setPos(*new_pos)
+            self._status_panel['scale'] = new_scale
+        
+        # Scale camera preview window
+        if hasattr(self, "_camera_preview_frame") and self._camera_preview_frame is not None:
+            original_pos = (12, 0, -320)
+            original_size = (0, 512, -288, 0)
+            new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
+            new_size = (original_size[0], original_size[1] * scale, original_size[2] * scale, original_size[3])
+            self._camera_preview_frame.setPos(*new_pos)
+            self._camera_preview_frame['frameSize'] = new_size
+        
+        # Scale camera preview title
+        if hasattr(self, "_camera_preview_title") and self._camera_preview_title is not None:
+            try:
+                original_pos = (30, -330)
+                original_scale = 20
+                new_pos = (original_pos[0] * scale, original_pos[1] * scale)
+                new_scale = original_scale * scale
+                self._camera_preview_title.setPos(*new_pos)
+                self._camera_preview_title['scale'] = new_scale
+            except Exception as e:
+                logger.warning(f"Failed to scale camera preview title: {e}")
+        
+        # Scale camera preview node
+        if hasattr(self, "_camera_preview_node") and self._camera_preview_node is not None:
+            try:
+                original_pos = (12 + 512, 0, -300 - 288)  # According to actual position in initialization code
+                new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
+                self._camera_preview_node.setPos(*new_pos)
+                # Adjust camera preview size
+                # Since CardMaker generated nodes cannot be directly resized, we scale the node instead
+                self._camera_preview_node.setScale(-scale, 1, -scale)  # Scale while maintaining flip effect
+            except Exception as e:
+                logger.warning(f"Failed to scale camera preview node: {e}")
+        
+        # Scale camera preview status text
+        if hasattr(self, "_camera_preview_status") and self._camera_preview_status is not None:
+            try:
+                original_pos = (30, -350)
+                original_scale = 16
+                new_pos = (original_pos[0] * scale, original_pos[1] * scale)
+                new_scale = original_scale * scale
+                self._camera_preview_status.setPos(*new_pos)
+                self._camera_preview_status['scale'] = new_scale
+            except Exception as e:
+                logger.warning(f"Failed to scale camera preview status: {e}")
     
 
     
