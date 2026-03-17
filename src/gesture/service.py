@@ -150,6 +150,8 @@ class GestureServiceImpl(GestureInputPort):
             self.lifecycle_state = LIFECYCLE_DEGRADED
 
         self._last_packet = packet
+        self._last_frame = frame  
+        self._last_observation = observation  
         self._record_packet_metrics(packet)
         self._maybe_render_preview(frame, observation, packet)
 
@@ -167,6 +169,10 @@ class GestureServiceImpl(GestureInputPort):
 
         self._metrics.packets_emitted += 1
         return packet
+    
+    def get_camera_data(self) -> tuple[Any | None, Any | None]:
+        """Get camera frame and gesture observation data"""
+        return self._last_frame, self._last_observation
 
     def health(self) -> dict[str, Any]:
         return build_health(
@@ -205,6 +211,18 @@ class GestureServiceImpl(GestureInputPort):
         self._detector = None
         self._capture = None
         self.lifecycle_state = LIFECYCLE_STOPPED
+        return None
+
+    def get_last_frame(self) -> Any | None:
+        """Get the last camera frame for rendering module preview functionality"""
+        if self._capture is not None and hasattr(self._capture, 'get_last_frame'):
+            return self._capture.get_last_frame()
+        return None
+
+    def get_preview_frame(self) -> Any | None:
+        """Get the already rendered preview frame (if preview window exists)"""
+        if self._preview is not None and hasattr(self._preview, 'get_last_canvas'):
+            return self._preview.get_last_canvas()
         return None
 
     @property

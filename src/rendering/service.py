@@ -7,11 +7,15 @@ from typing import List, Dict, Optional, Set, Any, Callable
 
 from panda3d.core import (
     WindowProperties, Material, AmbientLight, DirectionalLight,
-    PerspectiveLens, Vec4, NodePath, TextNode
+    PerspectiveLens, Vec4, NodePath, TextNode, Texture, CardMaker
 )
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectFrame import DirectFrame
 from direct.showbase.ShowBase import ShowBase
+import cv2
+import numpy as np
+
+from src.gesture.debug.live_preview_runtime import GesturePreviewWindow, HAND_CONNECTIONS, OverlayColors
 
 from src.constants import MAX_ERROR_HISTORY, RENDER_POSE_LOG_DEBOUNCE_MS
 from src.contracts import SceneCommand
@@ -166,15 +170,26 @@ class RenderingServiceImpl(RenderOutputPort):
         self._last_pose_log_ts: Optional[int] = None
         self._suppressed_pose_logs: int = 0
         self._metrics = RenderingMetrics()
-        # 用于存储gesture数据
+        # For storing gesture data
         self._last_gesture_packet = None
         self._last_fps = 0.0
-        # 用于存储坐标数据
+        # For storing coordinate data
         self._last_world_norm_pos = (0.0, 0.0, 0.0)
         self._last_scene_pos = (0.0, 0.0, 0.0)
-        # 帧率计算相关
+        # FPS calculation related
         self._frame_times = []
         self._frame_time_window = 1.0  # 1秒窗口
+        # Reuse live_preview drawing logic
+        self._colors = OverlayColors()
+        # Camera preview related
+        self._camera_frame = None
+        self._last_observation = None
+        self._last_packet = None
+        self._camera_texture = None
+        self._camera_preview_node = None
+        self._camera_preview_enabled = False
+        self._last_camera_update_time = 0
+        self._camera_update_interval = 0.033  # 30fps
     
     def _init_materials(self) -> Dict[str, Material]:
         """Initialize materials for each interaction state."""
@@ -241,19 +256,17 @@ class RenderingServiceImpl(RenderOutputPort):
             self._window_adapter.init_window()
             self._window_adapter.config_camera_for_world_norm()
             self._window_adapter.create_base_lights()
-            # 初始化左上角4倍面积固定大小数据面板
             base = self._window_adapter.get_base()
-            # 固定尺寸背景面板（宽900高400像素，原面积4倍）
             self._status_frame = DirectFrame(
                 parent=base.pixel2d,
                 pos=(12, 0, -12),
-                frameSize=(0, 500, -300, 0),
+                frameSize=(0, 512, -288, 0),
                 frameColor=(0.0, 0.0, 0.0, 0.9),
                 relief=1,
                 borderWidth=(1, 1),
                 color=(60/255, 68/255, 86/255, 1.0)
             )
-            # 面板内的文本控件，兼容原有更新逻辑
+            # Text control in the panel, compatible with original update logic
             self._status_panel = OnscreenText(
                 parent=base.pixel2d,
                 pos=(30, -70),
@@ -273,6 +286,9 @@ class RenderingServiceImpl(RenderOutputPort):
                 fps: 0.0""",
                 mayChange=True
             )
+            
+            # Initialize camera preview window (placed below the data panel)
+            self._init_camera_preview(base)
             # Create scene root node
             self._scene_root = NodePath("scene_root")
             self._scene_root.reparentTo(self._window_adapter.get_base().render)
@@ -369,21 +385,24 @@ class RenderingServiceImpl(RenderOutputPort):
         if not self._window_adapter.is_initialized():
             return
 
-        # 计算FPS
-        import time
+        # Calculate FPS
         current_time = time.time()
         self._frame_times.append(current_time)
-        # 移除1秒前的时间
+        # Remove times older than 1 second
         self._frame_times = [t for t in self._frame_times if current_time - t < self._frame_time_window]
-        # 计算FPS
         if len(self._frame_times) > 1:
             self._last_fps = (len(self._frame_times) - 1) / (current_time - self._frame_times[0])
         else:
             self._last_fps = 0.0
 
-        # 更新数据面板
+        # Update data panel
         if hasattr(self, "_status_panel") and self._status_panel is not None:
             self.update_runtime_status(self._last_gesture_packet, self._last_fps)
+
+        # Update camera preview
+        if self._camera_preview_enabled and current_time - self._last_camera_update_time > self._camera_update_interval:
+            self._update_camera_preview()
+            self._last_camera_update_time = current_time
 
         if hasattr(self._window_adapter, "step"):
             self._window_adapter.step()
@@ -393,6 +412,8 @@ class RenderingServiceImpl(RenderOutputPort):
                 return
             base.taskMgr.step()
         self._metrics.render_steps += 1
+    
+
     
     def health(self) -> Dict[str, Any]:
         """Return structured health information, including logging-related state."""
@@ -428,6 +449,9 @@ class RenderingServiceImpl(RenderOutputPort):
 
         self._flush_pose_log_summary()
         
+        # Clean up camera preview resources
+        self._cleanup_camera_preview()
+        
         # Stop task loop, release window
         if self._window_adapter.is_initialized():
             base = self._window_adapter.get_base()
@@ -440,6 +464,8 @@ class RenderingServiceImpl(RenderOutputPort):
         self._status = LIFECYCLE_STOPPED
         logger.info("Rendering module stopped, all resources released")
         return None
+    
+
     
     def _handle_set_object_pose(self, command: SceneCommand) -> None:
         """Handle a set_object_pose command."""
@@ -993,21 +1019,10 @@ class RenderingServiceImpl(RenderOutputPort):
         self._errors.append(payload)
         self._errors = self._errors[-MAX_ERROR_HISTORY:]
 
-    def _update_status_panel(self, *, packet, fps: float) -> None:
-        """更新左上角数据面板"""
-        lines = (
-            f"frame: {packet.frame_id}",
-            f"tracking: {packet.tracking_state}",
-            f"pinch: {packet.pinch_state}",
-            f"confidence: {packet.confidence:.2f}",
-            f"pinch_distance: {0.0 if packet.pinch_distance is None else packet.pinch_distance:.3f}",
-            f"wrist: ({packet.wrist.x:+.2f}, {packet.wrist.y:+.2f}, {packet.wrist.z:+.2f})",
-            f"fps: {fps:.1f}",
-        )
-        self._status_panel.setText("\n".join(lines))
+
 
     def update_runtime_status(self, packet=None, fps: float = 0.0) -> None:
-        """外部传入手势数据包和FPS，实时更新左上角数据面板"""
+        """Update the top-left data panel with externally passed gesture data packets and FPS"""
         if not hasattr(self, "_status_panel") or self._status_panel is None:
             return
         if packet is None:
@@ -1035,8 +1050,154 @@ class RenderingServiceImpl(RenderOutputPort):
         self._status_panel.setText("\n".join(lines))
     
     def update_gesture_data(self, packet) -> None:
-        """更新手势数据"""
+        """Update gesture data"""
         self._last_gesture_packet = packet
+    
+    def update_camera_frame(self, frame, observation=None, packet=None) -> None:
+        """Update camera frame data"""
+        if frame is not None and self._camera_preview_enabled:
+            self._camera_frame = frame
+            self._last_observation = observation
+            self._last_packet = packet
+
+    def enable_camera_preview(self, enabled: bool = True) -> None:
+        """Enable or disable camera preview"""
+        self._camera_preview_enabled = enabled
+        if not enabled and self._camera_preview_node is not None:
+            self._camera_preview_node.removeNode()
+            self._camera_preview_node = None
+
+    def _init_camera_preview(self, base) -> None:
+        """Initialize camera preview window"""
+        try:
+            # Create camera preview background panel (placed below the data panel)
+            self._camera_preview_frame = DirectFrame(
+                parent=base.pixel2d,
+                pos=(12, 0, -320),  # 20 pixels below the data panel
+                frameSize=(0, 512, -288, 0),  # 512x288 pixel preview window
+                frameColor=(0.0, 0.0, 0.0, 0.9),
+                relief=1,
+                borderWidth=(1, 1),
+                color=(20/255, 24/255, 32/255, 1.0)
+            )
+            
+            # Create camera preview title
+            self._camera_preview_title = OnscreenText(
+                parent=base.pixel2d,
+                pos=(30, -330),
+                align=TextNode.ALeft,
+                scale=20,
+                fg=(1.0, 1.0, 1.0, 1.0),
+                text="Camera Preview",
+                mayChange=False
+            )
+            
+            # Create camera preview status text
+            self._camera_preview_status = OnscreenText(
+                parent=base.pixel2d,
+                pos=(30, -350),
+                align=TextNode.ALeft,
+                scale=16,
+                fg=(0.8, 0.8, 0.8, 1.0),
+                text="Camera: Not Connected",
+                mayChange=True
+            )
+            
+            # Create camera preview texture and node
+            self._camera_texture = Texture("camera_preview")
+            self._camera_texture.setup2dTexture(512, 288, Texture.T_unsigned_byte, Texture.F_rgb)
+            
+            card_maker = CardMaker("camera_preview_card")
+            card_maker.setFrame(0, 512, -288, 0)
+            
+            self._camera_preview_node = base.pixel2d.attachNewNode(card_maker.generate())
+            # Set negative scale to flip: -1 for left-right mirror, -1 for up-down flip
+            # Adjust position to keep the image in place
+            self._camera_preview_node.setScale(-1, 1, -1)
+            self._camera_preview_node.setPos(12 + 512, 0, -300 - 288)
+            
+            # Apply texture
+            self._camera_preview_node.setTexture(self._camera_texture)
+            
+            # Enable preview
+            self._camera_preview_enabled = True
+            logger.info("Camera preview initialized successfully")
+            
+        except Exception as e:
+            logger.warning(f"Camera preview initialization failed: {str(e)}")
+            self._camera_preview_enabled = False
+    
+    def _update_camera_preview(self) -> None:
+        """Update camera preview frame"""
+        if self._camera_frame is None or self._camera_preview_node is None:
+            return
+            
+        try:
+            # Resize image
+            frame = cv2.resize(self._camera_frame, (512, 288))
+            
+            # If there is gesture data, draw hand skeleton (reuse live_preview logic)
+            if self._last_observation is not None:
+                frame = self._draw_hand_skeleton(frame, self._last_observation)
+            
+            # Convert BGR to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Update texture
+            self._camera_texture.setRamImage(frame_rgb)
+            
+            # Update status text
+            if hasattr(self, "_camera_preview_status"):
+                self._camera_preview_status.setText("Camera: Active")
+                
+        except Exception as e:
+            logger.warning(f"Camera preview update failed: {str(e)}")
+            if hasattr(self, "_camera_preview_status"):
+                self._camera_preview_status.setText("Camera: Error")
+    
+    def _draw_hand_skeleton(self, frame, observation) -> np.ndarray:
+        """Draw hand skeleton (reuse live_preview logic)"""
+        height, width = frame.shape[:2]
+        
+        # Draw connection lines
+        for start_idx, end_idx in HAND_CONNECTIONS:
+            if start_idx < len(observation.landmarks) and end_idx < len(observation.landmarks):
+                start_point = self._landmark_to_pixel(observation.landmarks[start_idx], width, height)
+                end_point = self._landmark_to_pixel(observation.landmarks[end_idx], width, height)
+                cv2.line(frame, start_point, end_point, self._colors.bones, 2)
+        
+        # Draw key points
+        for landmark in observation.landmarks:
+            point = self._landmark_to_pixel(landmark, width, height)
+            cv2.circle(frame, point, 4, self._colors.landmarks, -1)
+        
+        return frame
+    
+
+    
+    def _landmark_to_pixel(self, landmark, width, height) -> tuple[int, int]:
+        """Convert landmark coordinates to pixel coordinates"""
+        return (int(landmark.x * width), int(landmark.y * height))
+    
+    def _cleanup_camera_preview(self) -> None:
+        """Clean up camera preview resources"""
+        if self._camera_preview_node is not None:
+            self._camera_preview_node.removeNode()
+            self._camera_preview_node = None
+        
+        if hasattr(self, "_camera_preview_frame"):
+            self._camera_preview_frame.destroy()
+            
+        if hasattr(self, "_camera_preview_title"):
+            self._camera_preview_title.destroy()
+            
+        if hasattr(self, "_camera_preview_status"):
+            self._camera_preview_status.destroy()
+        
+        self._camera_frame = None
+        self._last_observation = None
+        self._last_packet = None
+        self._camera_preview_enabled = False
 
     def _log_pose_update(
         self,
