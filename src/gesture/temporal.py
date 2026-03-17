@@ -15,9 +15,9 @@ SmoothingPreset = Literal["high", "medium", "low"]
 # Tunable defaults for blur/fallback stability while keeping low latency.
 ENTER_THRESHOLD = 0.62
 RELEASE_THRESHOLD = 0.42
-PINCH_CONFIRM_FRAMES = 2
+PINCH_CONFIRM_FRAMES = 4
 RELEASE_CONFIRM_FRAMES = 4
-PINCH_MIN_HOLD_FRAMES = 4
+PINCH_MIN_HOLD_FRAMES = 1
 GRACE_FRAMES = 6
 FALLBACK_MAX_FRAMES = 8
 REACQUIRE_BLEND_FRAMES = 4
