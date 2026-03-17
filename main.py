@@ -6,6 +6,9 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
 
 from src.gesture.constants import (
     DEFAULT_CAMERA_INDEX,
@@ -23,6 +26,20 @@ from src.rendering.service import RenderingServiceImpl
 LIFECYCLE_INITIALIZING = "INITIALIZING"
 LIFECYCLE_RUNNING = "RUNNING"
 LIFECYCLE_STOPPED = "STOPPED"
+DEFAULT_RUN_CONFIG_PATH = Path(".run.yaml")
+RUN_CONFIG_HELP = "Path to a YAML file with machine-local default run options."
+RUN_CONFIG_KEYS = frozenset(
+    {
+        "log_level",
+        "camera_index",
+        "target_fps",
+        "frame_width",
+        "frame_height",
+        "live_preview",
+        "motion_preset",
+        "aggressive_release_guard",
+    }
+)
 
 
 @dataclass(slots=True)
@@ -36,6 +53,93 @@ class AppConfig:
     live_preview: bool = True
     motion_preset: str = GESTURE_MOTION_PRESET
     aggressive_release_guard: bool = False
+
+
+def _built_in_run_defaults() -> dict[str, object]:
+    return {
+        "log_level": "INFO",
+        "camera_index": DEFAULT_CAMERA_INDEX,
+        "target_fps": DEFAULT_TARGET_FPS,
+        "frame_width": DEFAULT_FRAME_WIDTH,
+        "frame_height": DEFAULT_FRAME_HEIGHT,
+        "live_preview": False,
+        "motion_preset": GESTURE_MOTION_PRESET,
+        "aggressive_release_guard": False,
+    }
+
+
+def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
+    if config_data is None:
+        return {}
+    if not isinstance(config_data, dict):
+        raise ValueError(f"Run config {path} must contain a top-level mapping")
+
+    unknown_keys = sorted(set(config_data) - RUN_CONFIG_KEYS)
+    if unknown_keys:
+        joined_keys = ", ".join(unknown_keys)
+        raise ValueError(f"Run config {path} contains unsupported keys: {joined_keys}")
+
+    validated: dict[str, object] = {}
+
+    for key, value in config_data.items():
+        if key in {"log_level", "motion_preset"}:
+            if not isinstance(value, str):
+                raise ValueError(f"Run config {path} field '{key}' must be a string")
+            validated[key] = value
+            continue
+
+        if key in {
+            "camera_index",
+            "target_fps",
+            "frame_width",
+            "frame_height",
+        }:
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"Run config {path} field '{key}' must be an integer")
+            validated[key] = value
+            continue
+
+        if key in {"live_preview", "aggressive_release_guard"}:
+            if not isinstance(value, bool):
+                raise ValueError(f"Run config {path} field '{key}' must be a boolean")
+            validated[key] = value
+            continue
+
+    motion_preset = validated.get("motion_preset")
+    if motion_preset is not None and motion_preset not in {"high", "medium", "low"}:
+        raise ValueError(
+            f"Run config {path} field 'motion_preset' must be one of: high, medium, low"
+        )
+
+    return validated
+
+
+def load_run_config(path: Path | None) -> dict[str, object]:
+    if path is None or not path.is_file():
+        return {}
+
+    with path.open("r", encoding="utf-8") as handle:
+        return _validate_run_config(yaml.safe_load(handle), path)
+
+
+def _resolve_run_defaults(argv: list[str] | None) -> tuple[dict[str, object], Path | None]:
+    bootstrap_parser = argparse.ArgumentParser(add_help=False)
+    bootstrap_parser.add_argument("--run-config", default=str(DEFAULT_RUN_CONFIG_PATH))
+    bootstrap_parser.add_argument("--no-run-config", action="store_true")
+    bootstrap_args, _ = bootstrap_parser.parse_known_args(argv)
+
+    if bootstrap_args.no_run_config:
+        return _built_in_run_defaults(), None
+
+    run_config_path = Path(bootstrap_args.run_config)
+    try:
+        run_defaults = load_run_config(run_config_path)
+    except ValueError as exc:
+        bootstrap_parser.error(str(exc))
+
+    defaults = _built_in_run_defaults()
+    defaults.update(run_defaults)
+    return defaults, run_config_path
 
 
 class App:
@@ -106,22 +210,36 @@ class App:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    defaults, run_config_path = _resolve_run_defaults(argv)
     parser = argparse.ArgumentParser(description="AeroInteract3D bootstrap entrypoint")
-    parser.add_argument("--log-level", default="INFO")
-    parser.add_argument("--camera-index", type=int, default=DEFAULT_CAMERA_INDEX)
-    parser.add_argument("--target-fps", type=int, default=DEFAULT_TARGET_FPS)
-    parser.add_argument("--frame-width", type=int, default=DEFAULT_FRAME_WIDTH)
-    parser.add_argument("--frame-height", type=int, default=DEFAULT_FRAME_HEIGHT)
+    parser.add_argument("--run-config", default=None if run_config_path is None else str(run_config_path), help=RUN_CONFIG_HELP)
+    parser.add_argument(
+        "--no-run-config",
+        action="store_true",
+        help="Ignore .run.yaml and use built-in defaults unless CLI flags override them.",
+    )
+    parser.add_argument("--log-level", default=defaults["log_level"])
+    parser.add_argument("--camera-index", type=int, default=defaults["camera_index"])
+    parser.add_argument("--target-fps", type=int, default=defaults["target_fps"])
+    parser.add_argument("--frame-width", type=int, default=defaults["frame_width"])
+    parser.add_argument("--frame-height", type=int, default=defaults["frame_height"])
     parser.add_argument(
         "--motion-preset",
         choices=["high", "medium", "low"],
-        default=GESTURE_MOTION_PRESET,
+        default=defaults["motion_preset"],
         help="Motion response preset for gesture smoothing and loss prediction.",
     )
     parser.add_argument(
         "--aggressive-release-guard",
+        dest="aggressive_release_guard",
         action="store_true",
         help="Require higher-quality observations before pinch release is accepted.",
+    )
+    parser.add_argument(
+        "--no-aggressive-release-guard",
+        dest="aggressive_release_guard",
+        action="store_false",
+        help="Disable the stricter pinch release guard even if it is enabled in .run.yaml.",
     )
     parser.add_argument(
         "--live-preview",
@@ -135,7 +253,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_false",
         help="Disable the OpenCV live preview window to reduce CPU/GPU overhead.",
     )
-    parser.set_defaults(live_preview=False)
+    parser.set_defaults(
+        live_preview=defaults["live_preview"],
+        aggressive_release_guard=defaults["aggressive_release_guard"],
+    )
     return parser.parse_args(argv)
 
 

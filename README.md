@@ -26,4 +26,7 @@ Current runtime defaults:
 - target FPS request: `30`
 - requested capture resolution: `1280x960`
 
+Local machine run defaults can be stored in `.run.yaml` at the repository root. A committed
+template is available in `.run.example.yaml`, while the real `.run.yaml` stays untracked.
+
 Developer environment setup: see [DEVELOPMENT.md](DEVELOPMENT.md).

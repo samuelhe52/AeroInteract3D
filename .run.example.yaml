@@ -1,0 +1,8 @@
+log_level: INFO
+camera_index: 0
+target_fps: 30
+frame_width: 1280
+frame_height: 960
+live_preview: false
+motion_preset: medium
+aggressive_release_guard: false

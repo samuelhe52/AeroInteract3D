@@ -9,6 +9,7 @@ dependencies = [
     "opencv-python>=4.13.0.92",
     "numpy>=2.2.0",
     "panda3d>=1.10.15",
+    "pyyaml>=6.0.2",
     "types-panda3d>=0.4.1",
 ]
 

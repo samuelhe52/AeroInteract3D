@@ -98,6 +98,73 @@ def test_parse_args_disables_live_preview_by_default() -> None:
     assert config.live_preview is False
 
 
+def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    run_config = tmp_path / ".run.yaml"
+    run_config.write_text(
+        "\n".join(
+            [
+                "camera_index: 2",
+                "target_fps: 55",
+                "frame_width: 960",
+                "frame_height: 540",
+                "live_preview: true",
+                "motion_preset: low",
+                "aggressive_release_guard: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = build_config(parse_args([]))
+
+    assert config.camera_index == 2
+    assert config.target_fps == 55
+    assert config.frame_width == 960
+    assert config.frame_height == 540
+    assert config.live_preview is True
+    assert config.motion_preset == "low"
+    assert config.aggressive_release_guard is True
+
+
+def test_cli_flags_override_run_config_defaults(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".run.yaml").write_text(
+        "\n".join(
+            [
+                "target_fps: 55",
+                "live_preview: true",
+                "aggressive_release_guard: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = build_config(
+        parse_args(
+            [
+                "--target-fps",
+                "24",
+                "--no-live-preview",
+                "--no-aggressive-release-guard",
+            ]
+        )
+    )
+
+    assert config.target_fps == 24
+    assert config.live_preview is False
+    assert config.aggressive_release_guard is False
+
+
+def test_no_run_config_ignores_local_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".run.yaml").write_text("target_fps: 55\n", encoding="utf-8")
+
+    config = build_config(parse_args(["--no-run-config"]))
+
+    assert config.target_fps == DEFAULT_TARGET_FPS
+
+
 def test_parse_args_disables_live_preview_flag() -> None:
     args = parse_args(["--no-live-preview"])
 

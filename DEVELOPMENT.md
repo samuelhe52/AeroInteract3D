@@ -41,6 +41,12 @@ make run
 make run -- --target-fps 30 --camera-index 1
 ```
 
+- Use machine-local default run options:
+
+```bash
+cp .run.example.yaml .run.yaml
+```
+
 - Run the live gesture preview:
 
 ```bash
@@ -83,12 +89,21 @@ Equivalent direct uv commands remain valid if needed.
 
 The main app entrypoint in `main.py` currently supports:
 
+- `--run-config`
+- `--no-run-config`
 - `--camera-index`
 - `--target-fps`
 - `--frame-width`
 - `--frame-height`
 
 Current defaults are `30 FPS` and `1280x960` requested capture resolution.
+
+If `.run.yaml` exists at the repository root, `make run` and direct `uv run python main.py`
+invocations automatically use it as the default source for these options. Command-line flags
+still win over file values. The real `.run.yaml` is gitignored; start from `.run.example.yaml`
+and adjust it per machine. Use `--no-run-config` to ignore the local file for one run.
+Use `--no-live-preview` or `--no-aggressive-release-guard` when you need to override a boolean
+enabled in the local file.
 
 The gesture live preview uses the same capture configuration shape through `GesturePreviewConfig` in `src/gesture/debug/live_preview.py`.
 
