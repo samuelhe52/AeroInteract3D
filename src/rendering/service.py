@@ -7,8 +7,10 @@ from typing import List, Dict, Optional, Set, Any, Callable
 
 from panda3d.core import (
     WindowProperties, Material, AmbientLight, DirectionalLight,
-    PerspectiveLens, Vec4, NodePath
+    PerspectiveLens, Vec4, NodePath, TextNode
 )
+from direct.gui.OnscreenText import OnscreenText
+from direct.gui.DirectFrame import DirectFrame
 from direct.showbase.ShowBase import ShowBase
 
 from src.constants import MAX_ERROR_HISTORY, RENDER_POSE_LOG_DEBOUNCE_MS
@@ -131,7 +133,7 @@ class Panda3DWindowAdapter:
         """Reset the scene graph."""
         if not self._is_initialized:
             raise RuntimeError("Window is not initialized; cannot reset the scene")
-        scene_root.removeChildren()
+        scene_root.get_children().detach()
         logger.info("Scene reset safely (window/camera/lights preserved)")
 
     def step(self) -> None:
@@ -164,6 +166,15 @@ class RenderingServiceImpl(RenderOutputPort):
         self._last_pose_log_ts: Optional[int] = None
         self._suppressed_pose_logs: int = 0
         self._metrics = RenderingMetrics()
+        # 用于存储gesture数据
+        self._last_gesture_packet = None
+        self._last_fps = 0.0
+        # 用于存储坐标数据
+        self._last_world_norm_pos = (0.0, 0.0, 0.0)
+        self._last_scene_pos = (0.0, 0.0, 0.0)
+        # 帧率计算相关
+        self._frame_times = []
+        self._frame_time_window = 1.0  # 1秒窗口
     
     def _init_materials(self) -> Dict[str, Material]:
         """Initialize materials for each interaction state."""
@@ -230,6 +241,38 @@ class RenderingServiceImpl(RenderOutputPort):
             self._window_adapter.init_window()
             self._window_adapter.config_camera_for_world_norm()
             self._window_adapter.create_base_lights()
+            # 初始化左上角4倍面积固定大小数据面板
+            base = self._window_adapter.get_base()
+            # 固定尺寸背景面板（宽900高400像素，原面积4倍）
+            self._status_frame = DirectFrame(
+                parent=base.pixel2d,
+                pos=(12, 0, -12),
+                frameSize=(0, 500, -300, 0),
+                frameColor=(0.0, 0.0, 0.0, 0.9),
+                relief=1,
+                borderWidth=(1, 1),
+                color=(60/255, 68/255, 86/255, 1.0)
+            )
+            # 面板内的文本控件，兼容原有更新逻辑
+            self._status_panel = OnscreenText(
+                parent=base.pixel2d,
+                pos=(30, -70),
+                align=TextNode.ALeft,
+                scale=28,
+                fg=(1.0, 1.0, 1.0, 1.0),
+                wordwrap=65,
+                text="""
+                ----------------------------
+                ----------------------------
+                frame: 0
+                tracking: idle
+                pinch: idle
+                confidence: 0.00
+                pinch_distance: 0.000
+                wrist: (+0.00, +0.00, +0.00)
+                fps: 0.0""",
+                mayChange=True
+            )
             # Create scene root node
             self._scene_root = NodePath("scene_root")
             self._scene_root.reparentTo(self._window_adapter.get_base().render)
@@ -325,6 +368,22 @@ class RenderingServiceImpl(RenderOutputPort):
         """Advance the Panda3D event/render loop without leaving the app's main loop."""
         if not self._window_adapter.is_initialized():
             return
+
+        # 计算FPS
+        import time
+        current_time = time.time()
+        self._frame_times.append(current_time)
+        # 移除1秒前的时间
+        self._frame_times = [t for t in self._frame_times if current_time - t < self._frame_time_window]
+        # 计算FPS
+        if len(self._frame_times) > 1:
+            self._last_fps = (len(self._frame_times) - 1) / (current_time - self._frame_times[0])
+        else:
+            self._last_fps = 0.0
+
+        # 更新数据面板
+        if hasattr(self, "_status_panel") and self._status_panel is not None:
+            self.update_runtime_status(self._last_gesture_packet, self._last_fps)
 
         if hasattr(self._window_adapter, "step"):
             self._window_adapter.step()
@@ -520,6 +579,10 @@ class RenderingServiceImpl(RenderOutputPort):
             obj_np.setHpr(*clipped_hpr)
             self._metrics.pose_updates += 1
             self._metrics.commands_applied += 1
+            
+            # 保存坐标数据用于显示
+            self._last_world_norm_pos = tuple(clipped_pos)
+            self._last_scene_pos = scene_pos
             
             # 8. Logging
             if tuple(clipped_pos) != tuple(pos_float):
@@ -929,6 +992,51 @@ class RenderingServiceImpl(RenderOutputPort):
         payload.setdefault("timestamp", int(time.time() * 1000))
         self._errors.append(payload)
         self._errors = self._errors[-MAX_ERROR_HISTORY:]
+
+    def _update_status_panel(self, *, packet, fps: float) -> None:
+        """更新左上角数据面板"""
+        lines = (
+            f"frame: {packet.frame_id}",
+            f"tracking: {packet.tracking_state}",
+            f"pinch: {packet.pinch_state}",
+            f"confidence: {packet.confidence:.2f}",
+            f"pinch_distance: {0.0 if packet.pinch_distance is None else packet.pinch_distance:.3f}",
+            f"wrist: ({packet.wrist.x:+.2f}, {packet.wrist.y:+.2f}, {packet.wrist.z:+.2f})",
+            f"fps: {fps:.1f}",
+        )
+        self._status_panel.setText("\n".join(lines))
+
+    def update_runtime_status(self, packet=None, fps: float = 0.0) -> None:
+        """外部传入手势数据包和FPS，实时更新左上角数据面板"""
+        if not hasattr(self, "_status_panel") or self._status_panel is None:
+            return
+        if packet is None:
+            lines = (
+                "frame: 0",
+                "tracking: idle",
+                "pinch: idle",
+                "confidence: 0.00",
+                "pinch_distance: 0.000",
+                "wrist: (+0.00, +0.00, +0.00)",
+                f"fps: {fps:.1f}",
+            )
+        else:
+            lines = (
+                f"frame: {getattr(packet, 'frame_id', 0)}",
+                f"tracking: {getattr(packet, 'tracking_state', 'idle')}",
+                f"pinch: {getattr(packet, 'pinch_state', 'idle')}",
+                f"confidence: {getattr(packet, 'confidence', 0.0):.2f}",
+                f"pinch_distance: {0.0 if getattr(packet, 'pinch_distance', None) is None else packet.pinch_distance:.3f}",
+                f"wrist: ({getattr(packet.wrist, 'x', 0.0):+.2f}, {getattr(packet.wrist, 'y', 0.0):+.2f}, {getattr(packet.wrist, 'z', 0.0):+.2f})",
+                f"fps: {fps:.1f}",
+                f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
+                f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
+            )
+        self._status_panel.setText("\n".join(lines))
+    
+    def update_gesture_data(self, packet) -> None:
+        """更新手势数据"""
+        self._last_gesture_packet = packet
 
     def _log_pose_update(
         self,

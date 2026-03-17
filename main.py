@@ -74,6 +74,9 @@ class App:
 
             packet = self.gesture_input.poll()
             if packet is not None:
+                # 直接传递原始手势数据给rendering模块
+                self.render_output.update_gesture_data(packet)
+                # 处理手势数据生成命令
                 commands = self.bridge.process(packet)
                 for command in commands:
                     self.render_output.push(command)
