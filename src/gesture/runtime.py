@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-from typing import Any
 
 import cv2
 import numpy as np

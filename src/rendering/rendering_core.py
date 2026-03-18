@@ -54,7 +54,7 @@ class RenderingCoreManager:
             lens.setNearFar(0.1, 100.0)  # Use a more practical near/far clip range.
             self._base.cam.node().setLens(lens)
             
-            # Position the camera with a shallow 10-degree俯角 view of the objects.
+            # Position the camera with a shallow 10-degree downward-tilt view of the objects.
             self._base.cam.setPos(0.0, 5.0, 0.9)  # Low angle view (≈10 degrees)
             self._base.cam.lookAt(0.0, 0.0, 0.0)  # Look at the origin.
             logger.info("Camera configured, using perspective camera for 3D scene")

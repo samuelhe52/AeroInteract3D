@@ -150,8 +150,8 @@ class GestureServiceImpl(GestureInputPort):
             self.lifecycle_state = LIFECYCLE_DEGRADED
 
         self._last_packet = packet
-        self._last_frame = frame  
-        self._last_observation = observation  
+        self._last_frame = frame
+        self._last_observation = observation
         self._record_packet_metrics(packet)
         self._maybe_render_preview(frame, observation, packet)
 

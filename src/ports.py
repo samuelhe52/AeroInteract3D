@@ -38,7 +38,7 @@ class RenderOutputPort(ABC):
 
     @abstractmethod
     def update_gesture_data(self, packet: Optional[GesturePacket]) -> None:
-        """更新手势数据到渲染窗口的实时面板"""
+        """Update gesture data to the rendering window's real-time panel."""
         ...
 
 

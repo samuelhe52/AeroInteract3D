@@ -25,7 +25,7 @@ class Vec3:
 
 @dataclass(slots=True)
 class CameraFrame:
-    """摄像头帧数据，用于在模块间传递摄像头画面"""
+    """Camera frame data for passing camera images between modules."""
     frame_id: int
     timestamp_ms: int
     width: int

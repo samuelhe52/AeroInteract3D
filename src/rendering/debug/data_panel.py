@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Any
+from typing import Optional
 
 from panda3d.core import TextNode
 from direct.gui.OnscreenText import OnscreenText

@@ -86,7 +86,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._last_fps = 0.0
         # FPS calculation related
         self._frame_times = []
-        self._frame_time_window = 1.0  # 1秒窗口
+        self._frame_time_window = 1.0  # 1-second window
         # Camera preview related
         self._last_camera_update_time = 0
         self._camera_update_interval = 0.033  # 30fps
@@ -157,12 +157,12 @@ class RenderingServiceImpl(RenderOutputPort):
         self._rendering_core = self._window_adapter
         
         try:
-            # 初始化窗口/相机/灯光（原有逻辑保留）
+            # Initialize window/camera/lights
             self._rendering_core.init_window()
             self._rendering_core.config_camera_for_world_norm()
             self._rendering_core.create_base_lights()
             
-            # 初始化子模块（依赖注入）
+            # Initialize submodules (dependency injection)
             self._auto_scaling = AutoScalingManager(self._rendering_core)
             self._auto_scaling.set_scale_callback(self._handle_scale_change)
             if self._supports_debug_overlay(self._rendering_core):
@@ -656,7 +656,7 @@ class RenderingServiceImpl(RenderOutputPort):
             )
     
     def _handle_init_scene(self, command: SceneCommand) -> None:
-        """处理init_scene命令"""
+        """Handle init_scene command."""
         try:
             self._metrics.init_scene_commands += 1
             self._metrics.commands_applied += 1
