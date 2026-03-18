@@ -35,7 +35,7 @@ RUN_CONFIG_KEYS = frozenset(
         "target_fps",
         "frame_width",
         "frame_height",
-        "live_preview",
+        "debug_stats",
         "motion_preset",
         "aggressive_release_guard",
     }
@@ -50,7 +50,7 @@ class AppConfig:
     target_fps: int = DEFAULT_TARGET_FPS
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
-    live_preview: bool = True
+    debug_stats: bool = False
     motion_preset: str = GESTURE_MOTION_PRESET
     aggressive_release_guard: bool = False
 
@@ -62,7 +62,7 @@ def _built_in_run_defaults() -> dict[str, object]:
         "target_fps": DEFAULT_TARGET_FPS,
         "frame_width": DEFAULT_FRAME_WIDTH,
         "frame_height": DEFAULT_FRAME_HEIGHT,
-        "live_preview": False,
+        "debug_stats": False,
         "motion_preset": GESTURE_MOTION_PRESET,
         "aggressive_release_guard": False,
     }
@@ -99,7 +99,7 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
             validated[key] = value
             continue
 
-        if key in {"live_preview", "aggressive_release_guard"}:
+        if key in {"debug_stats", "aggressive_release_guard"}:
             if not isinstance(value, bool):
                 raise ValueError(f"Run config {path} field '{key}' must be a boolean")
             validated[key] = value
@@ -249,19 +249,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Disable the stricter pinch release guard even if it is enabled in .run.yaml.",
     )
     parser.add_argument(
-        "--live-preview",
-        dest="live_preview",
+        "--debug-stats",
+        dest="debug_stats",
         action="store_true",
-        help="Show the current camera stream in an OpenCV preview window alongside Panda3D.",
+        help="Show gesture statistics alongside the in-window camera preview.",
     )
     parser.add_argument(
-        "--no-live-preview",
-        dest="live_preview",
+        "--no-debug-stats",
+        dest="debug_stats",
         action="store_false",
-        help="Disable the OpenCV live preview window to reduce CPU/GPU overhead.",
+        help="Hide the gesture statistics overlay and keep only the in-window camera preview.",
     )
     parser.set_defaults(
-        live_preview=defaults["live_preview"],
+        debug_stats=defaults["debug_stats"],
         aggressive_release_guard=defaults["aggressive_release_guard"],
     )
     return parser.parse_args(argv)
@@ -282,7 +282,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         target_fps=args.target_fps,
         frame_width=args.frame_width,
         frame_height=args.frame_height,
-        live_preview=args.live_preview,
+        debug_stats=args.debug_stats,
         motion_preset=args.motion_preset,
         aggressive_release_guard=args.aggressive_release_guard,
     )
@@ -294,13 +294,16 @@ def build_app(config: AppConfig) -> App:
         target_fps=float(config.target_fps),
         frame_width=config.frame_width,
         frame_height=config.frame_height,
-        preview_enabled=config.live_preview,
+        preview_enabled=False,
         motion_preset=config.motion_preset,
         aggressive_release_guard=config.aggressive_release_guard,
     )
     bridge = BridgeServiceImpl()
-    render_output = RenderingServiceImpl()
-    return App(config, gesture_input, bridge, render_output)
+    render_output = RenderingServiceImpl(debug_stats_enabled=config.debug_stats)
+    app = App(config, gesture_input, bridge, render_output)
+    if hasattr(render_output, "set_quit_callback"):
+        render_output.set_quit_callback(app.request_stop)
+    return app
 
 
 def main(argv: list[str] | None = None) -> int:

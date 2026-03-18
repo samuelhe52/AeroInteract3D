@@ -26,4 +26,10 @@ live preview 当前显示的是预览主循环实际测得的 FPS，而不是仅
 - 目标 FPS 请求：`30`
 - 请求采集分辨率：`1280x960`
 
+主应用预览行为：
+
+- Panda3D 主窗口现在直接承载摄像头预览画面
+- 使用 `--debug-stats` 可显示手势/运行时统计面板
+- 主入口旧的 `--live-preview` 路径已经彻底移除
+
 开发环境配置请参考：[DEVELOPMENT.md](DEVELOPMENT.md)。

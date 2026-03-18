@@ -18,7 +18,11 @@ class AutoScalingManager:
         """Initialize auto scaling manager (dependency injection: rendering_core)"""
         self._rendering_core: RenderingCoreManager = rendering_core
         self._last_window_size = (0, 0)  # Record last main window size
-        self._base_window_size = (2560, 1440)  # Base size (original logic preserved)
+        reference_size = getattr(rendering_core, "reference_window_size", None)
+        if callable(reference_size):
+            self._base_window_size = reference_size()
+        else:
+            self._base_window_size = RenderingCoreManager.reference_window_size()
         self._ui_scale = 1.0  # Exposed property
         self._scale_callback: Optional[Callable[[float], None]] = None
     

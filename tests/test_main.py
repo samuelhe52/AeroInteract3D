@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import main
+import pytest
 
 from main import App, AppConfig, LIFECYCLE_RUNNING, build_config, parse_args
 from src.gesture.constants import DEFAULT_TARGET_FPS
@@ -42,6 +43,7 @@ class FakeBridge:
 class FakeRenderOutput:
     def __init__(self) -> None:
         self.step_calls = 0
+        self.quit_callback = None
 
     def start(self) -> None:
         return None
@@ -57,6 +59,9 @@ class FakeRenderOutput:
 
     def stop(self) -> None:
         return None
+
+    def set_quit_callback(self, callback) -> None:
+        self.quit_callback = callback
 
 
 def test_app_run_steps_render_output_every_loop_iteration() -> None:
@@ -74,28 +79,28 @@ def test_app_run_steps_render_output_every_loop_iteration() -> None:
     assert render_output.step_calls == 1
 
 
-def test_parse_args_enables_live_preview_flag() -> None:
-    args = parse_args(["--live-preview"])
+def test_parse_args_enables_debug_stats_flag() -> None:
+    args = parse_args(["--debug-stats"])
 
     config = build_config(args)
 
-    assert config.live_preview is True
+    assert config.debug_stats is True
 
 
 def test_build_config_uses_default_target_fps() -> None:
-    config = build_config(parse_args([]))
+    config = build_config(parse_args(["--no-run-config"]))
 
     assert config.target_fps == DEFAULT_TARGET_FPS
     assert config.motion_preset == "medium"
     assert config.aggressive_release_guard is False
 
 
-def test_parse_args_disables_live_preview_by_default() -> None:
-    args = parse_args([])
+def test_parse_args_disables_debug_stats_by_default() -> None:
+    args = parse_args(["--no-run-config"])
 
     config = build_config(args)
 
-    assert config.live_preview is False
+    assert config.debug_stats is False
 
 
 def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
@@ -108,7 +113,7 @@ def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
                 "target_fps: 55",
                 "frame_width: 960",
                 "frame_height: 540",
-                "live_preview: true",
+                "debug_stats: true",
                 "motion_preset: low",
                 "aggressive_release_guard: true",
             ]
@@ -122,9 +127,25 @@ def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
     assert config.target_fps == 55
     assert config.frame_width == 960
     assert config.frame_height == 540
-    assert config.live_preview is True
+    assert config.debug_stats is True
     assert config.motion_preset == "low"
     assert config.aggressive_release_guard is True
+
+
+def test_parse_args_rejects_removed_live_preview_run_config_key(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".run.yaml").write_text(
+        "\n".join(
+            [
+                "target_fps: 55",
+                "live_preview: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit):
+        parse_args([])
 
 
 def test_cli_flags_override_run_config_defaults(tmp_path, monkeypatch) -> None:
@@ -133,7 +154,7 @@ def test_cli_flags_override_run_config_defaults(tmp_path, monkeypatch) -> None:
         "\n".join(
             [
                 "target_fps: 55",
-                "live_preview: true",
+                "debug_stats: true",
                 "aggressive_release_guard: true",
             ]
         ),
@@ -145,14 +166,14 @@ def test_cli_flags_override_run_config_defaults(tmp_path, monkeypatch) -> None:
             [
                 "--target-fps",
                 "24",
-                "--no-live-preview",
+                "--no-debug-stats",
                 "--no-aggressive-release-guard",
             ]
         )
     )
 
     assert config.target_fps == 24
-    assert config.live_preview is False
+    assert config.debug_stats is False
     assert config.aggressive_release_guard is False
 
 
@@ -165,36 +186,47 @@ def test_no_run_config_ignores_local_file(tmp_path, monkeypatch) -> None:
     assert config.target_fps == DEFAULT_TARGET_FPS
 
 
-def test_parse_args_disables_live_preview_flag() -> None:
-    args = parse_args(["--no-live-preview"])
+def test_parse_args_disables_debug_stats_flag() -> None:
+    args = parse_args(["--no-debug-stats"])
 
     config = build_config(args)
 
-    assert config.live_preview is False
+    assert config.debug_stats is False
 
 
-def test_build_app_passes_live_preview_to_gesture_service(monkeypatch) -> None:
-    captured_kwargs: dict[str, object] = {}
+def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(monkeypatch) -> None:
+    captured_gesture_kwargs: dict[str, object] = {}
+    captured_render_kwargs: dict[str, object] = {}
     fake_bridge = object()
     fake_render = object()
 
     class FakeGestureService:
         def __init__(self, **kwargs) -> None:
-            captured_kwargs.update(kwargs)
+            captured_gesture_kwargs.update(kwargs)
+
+    class FakeRenderingService:
+        def __init__(self, **kwargs) -> None:
+            captured_render_kwargs.update(kwargs)
+            self.quit_callback = None
+
+        def set_quit_callback(self, callback) -> None:
+            self.quit_callback = callback
 
     monkeypatch.setattr(main, "GestureServiceImpl", FakeGestureService)
     monkeypatch.setattr(main, "BridgeServiceImpl", lambda: fake_bridge)
-    monkeypatch.setattr(main, "RenderingServiceImpl", lambda: fake_render)
+    monkeypatch.setattr(main, "RenderingServiceImpl", FakeRenderingService)
 
-    app = main.build_app(AppConfig(live_preview=True))
+    app = main.build_app(AppConfig(debug_stats=True))
 
-    assert captured_kwargs["preview_enabled"] is True
-    assert captured_kwargs["motion_preset"] == "medium"
-    assert captured_kwargs["aggressive_release_guard"] is False
+    assert captured_gesture_kwargs["preview_enabled"] is False
+    assert captured_gesture_kwargs["motion_preset"] == "medium"
+    assert captured_gesture_kwargs["aggressive_release_guard"] is False
+    assert captured_render_kwargs["debug_stats_enabled"] is True
     assert isinstance(app, App)
     assert app.gesture_input is not None
     assert app.bridge is fake_bridge
-    assert app.render_output is fake_render
+    assert app.render_output is not None
+    assert callable(app.render_output.quit_callback)
 
 
 def test_parse_args_accepts_motion_preset() -> None:

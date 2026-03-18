@@ -60,12 +60,19 @@ class RenderingMetrics:
 class RenderingServiceImpl(RenderOutputPort):
     """Core RenderOutputPort implementation for rendering SceneCommand stream (integrates all submodules)"""
     
-    def __init__(self, window_adapter_factory: Callable[[], RenderingCoreManager] | None = None):
+    def __init__(
+        self,
+        window_adapter_factory: Callable[[], RenderingCoreManager] | None = None,
+        *,
+        debug_stats_enabled: bool = False,
+    ):
         super().__init__()
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
         self._window_adapter_factory = window_adapter_factory or RenderingCoreManager
         self._window_adapter = self._window_adapter_factory()
         self._rendering_core: Optional[RenderingCoreManager] = self._window_adapter
+        self._debug_stats_enabled = debug_stats_enabled
+        self._quit_callback: Callable[[], None] | None = None
         # Material cache keyed by interaction state.
         self._material_cache: Dict[str, Material] = self._init_materials()
         self._status: str = LIFECYCLE_STOPPED
@@ -155,6 +162,8 @@ class RenderingServiceImpl(RenderOutputPort):
         self._metrics = RenderingMetrics()
         self._window_adapter = self._window_adapter_factory()
         self._rendering_core = self._window_adapter
+        if self._quit_callback is not None:
+            self._rendering_core.set_quit_handler(self._quit_callback)
         
         try:
             # Initialize window/camera/lights
@@ -166,8 +175,18 @@ class RenderingServiceImpl(RenderOutputPort):
             self._auto_scaling = AutoScalingManager(self._rendering_core)
             self._auto_scaling.set_scale_callback(self._handle_scale_change)
             if self._supports_debug_overlay(self._rendering_core):
-                self._data_panel = DataPanelManager(self._auto_scaling)
-                self._camera_preview = CameraPreviewManager(self._auto_scaling)
+                if self._debug_stats_enabled:
+                    self._data_panel = DataPanelManager(self._auto_scaling)
+                camera_top_margin = (
+                    DataPanelManager.camera_preview_top_margin()
+                    if self._debug_stats_enabled
+                    else CameraPreviewManager.PREVIEW_MARGIN
+                )
+                self._camera_preview = CameraPreviewManager(
+                    self._auto_scaling,
+                    top_margin=camera_top_margin,
+                    show_debug_chrome=self._debug_stats_enabled,
+                )
             else:
                 logger.info("Rendering adapter does not expose pixel2d; skipping debug overlay initialization")
             
@@ -268,6 +287,11 @@ class RenderingServiceImpl(RenderOutputPort):
                 logger.error(f"Command processing failed, module switched to DEGRADED: {details_msg}")
             else:
                 logger.warning(f"Command processing failed: {details_msg}")
+
+    def set_quit_callback(self, callback: Callable[[], None] | None) -> None:
+        self._quit_callback = callback
+        if self._rendering_core is not None:
+            self._rendering_core.set_quit_handler(callback)
 
     def step(self) -> None:
         """Advance Panda3D event/rendering loop without leaving application main loop (original logic preserved)"""

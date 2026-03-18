@@ -102,8 +102,9 @@ If `.run.yaml` exists at the repository root, `make run` and direct `uv run pyth
 invocations automatically use it as the default source for these options. Command-line flags
 still win over file values. The real `.run.yaml` is gitignored; start from `.run.example.yaml`
 and adjust it per machine. Use `--no-run-config` to ignore the local file for one run.
-Use `--no-live-preview` or `--no-aggressive-release-guard` when you need to override a boolean
-enabled in the local file.
+Use `--no-debug-stats` or `--no-aggressive-release-guard` when you need to override a boolean
+enabled in the local file. The main entrypoint no longer supports the old `live_preview` key or a
+separate OpenCV preview window.
 
 The gesture live preview uses the same capture configuration shape through `GesturePreviewConfig` in `src/gesture/debug/live_preview.py`.
 

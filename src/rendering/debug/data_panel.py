@@ -16,6 +16,14 @@ logger = logging.getLogger("data_panel")
 
 class DataPanelManager:
     """Data panel manager, responsible for data panel frame+text initialization, gesture data updates, and scaling adaptation"""
+
+    PANEL_WIDTH = 384
+    PANEL_HEIGHT = 180
+    PANEL_MARGIN = 12
+    PANEL_GAP = 12
+    TEXT_OFFSET_X = 18
+    TEXT_OFFSET_Y = 40
+    TEXT_SCALE = 18
     
     def __init__(self, auto_scaling: AutoScalingManager):
         """Initialize data panel manager (dependency injection: auto_scaling)"""
@@ -27,6 +35,10 @@ class DataPanelManager:
         self._last_world_norm_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self.init_panel()
+
+    @classmethod
+    def camera_preview_top_margin(cls) -> int:
+        return cls.PANEL_MARGIN + cls.PANEL_HEIGHT + cls.PANEL_GAP
     
     def init_panel(self) -> None:
         """Initialize data panel (original logic preserved)"""
@@ -34,8 +46,8 @@ class DataPanelManager:
             # Create status frame
             self._status_frame = DirectFrame(
                 parent=self._pixel2d,
-                pos=(12 * self._ui_scale, 0, -12 * self._ui_scale),  # Position (original logic preserved)
-                frameSize=(0, 512 * self._ui_scale, -288 * self._ui_scale, 0),  # Width 500, height 300 (original logic preserved)
+                pos=(self.PANEL_MARGIN * self._ui_scale, 0, -self.PANEL_MARGIN * self._ui_scale),
+                frameSize=(0, self.PANEL_WIDTH * self._ui_scale, -self.PANEL_HEIGHT * self._ui_scale, 0),
                 frameColor=(0.0, 0.0, 0.0, 0.9),  # Black semi-transparent background (original logic preserved)
                 relief=1,
                 borderWidth=(1, 1),
@@ -45,11 +57,11 @@ class DataPanelManager:
             # Create status text panel
             self._status_panel = OnscreenText(
                 parent=self._pixel2d,
-                pos=(30 * self._ui_scale, -70 * self._ui_scale),
+                pos=(self.TEXT_OFFSET_X * self._ui_scale, -self.TEXT_OFFSET_Y * self._ui_scale),
                 align=TextNode.ALeft,
-                scale=28 * self._ui_scale,  # Font size 28 (original logic preserved)
+                scale=self.TEXT_SCALE * self._ui_scale,
                 fg=(1.0, 1.0, 1.0, 1.0),  # White text (original logic preserved)
-                wordwrap=65,
+                wordwrap=34,
                 text="""
                 ----------------------------
                 ----------------------------
@@ -109,8 +121,8 @@ class DataPanelManager:
         # Scale data panel
         if self._status_frame:
             # Original position and size
-            original_pos = (12, 0, -12)
-            original_size = (0, 512, -288, 0)  # 512x288 updated size
+            original_pos = (self.PANEL_MARGIN, 0, -self.PANEL_MARGIN)
+            original_size = (0, self.PANEL_WIDTH, -self.PANEL_HEIGHT, 0)
             # Calculate new position and size
             new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
             new_size = (original_size[0], original_size[1] * scale, original_size[2] * scale, original_size[3])
@@ -119,8 +131,8 @@ class DataPanelManager:
         
         # Scale data text
         if self._status_panel:
-            original_pos = (30, -70)
-            original_scale = 28  # Font size 28 (original logic preserved)
+            original_pos = (self.TEXT_OFFSET_X, -self.TEXT_OFFSET_Y)
+            original_scale = self.TEXT_SCALE
             new_pos = (original_pos[0] * scale, original_pos[1] * scale)
             new_scale = original_scale * scale
             self._status_panel['pos'] = new_pos

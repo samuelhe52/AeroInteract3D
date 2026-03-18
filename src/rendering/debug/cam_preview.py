@@ -19,12 +19,27 @@ logger = logging.getLogger("cam_preview")
 
 class CameraPreviewManager:
     """Camera preview manager, responsible for camera texture initialization, frame updates, GPU flipping, and position adaptation"""
+
+    PREVIEW_WIDTH = 384
+    PREVIEW_HEIGHT = 216
+    PREVIEW_MARGIN = 12
+    TITLE_OFFSET_X = 18
+    TITLE_OFFSET_Y = 20
+    STATUS_OFFSET_Y = 40
     
-    def __init__(self, auto_scaling: AutoScalingManager):
+    def __init__(
+        self,
+        auto_scaling: AutoScalingManager,
+        *,
+        top_margin: int = PREVIEW_MARGIN,
+        show_debug_chrome: bool = False,
+    ):
         """Initialize camera preview manager (dependency injection: auto_scaling)"""
         self._auto_scaling: AutoScalingManager = auto_scaling
         self._pixel2d = auto_scaling._rendering_core.get_pixel2d()
         self._ui_scale: float = auto_scaling.get_ui_scale()
+        self._top_margin = top_margin
+        self._show_debug_chrome = show_debug_chrome
         self._camera_frame: Optional[np.ndarray] = None
         self._last_observation: Optional[RawHandObservation] = None
         self._camera_texture: Optional[Texture] = None
@@ -41,50 +56,51 @@ class CameraPreviewManager:
     def init_preview(self, data_panel_raw_params=None) -> None:
         """Initialize camera preview window (original logic preserved)"""
         try:
-            # Create camera preview background panel (placed below the data panel)
-            self._camera_preview_frame = DirectFrame(
-                parent=self._pixel2d,
-                pos=(12 * self._ui_scale, 0, -300 * self._ui_scale),  # Moved up by 20 units
-                frameSize=(0, 512 * self._ui_scale, -288 * self._ui_scale, 0),  # 512x288 updated size
-                frameColor=(0.0, 0.0, 0.9, 0.9),
-                relief=1,
-                borderWidth=(1, 1),
-                color=(20/255, 24/255, 32/255, 1.0)
-            )
-            
-            # Create camera preview title
-            self._camera_preview_title = OnscreenText(
-                parent=self._pixel2d,
-                pos=(30 * self._ui_scale, -310 * self._ui_scale),  # Moved up by 20 units
-                align=TextNode.ALeft,
-                scale=20 * self._ui_scale,
-                fg=(1.0, 1.0, 1.0, 1.0),
-                text="Camera Preview",
-                mayChange=False
-            )
-            
-            # Create camera preview status text
-            self._camera_preview_status = OnscreenText(
-                parent=self._pixel2d,
-                pos=(30 * self._ui_scale, -330 * self._ui_scale),  # Moved up by 20 units
-                align=TextNode.ALeft,
-                scale=16 * self._ui_scale,
-                fg=(0.8, 0.8, 0.8, 1.0),
-                text="Camera: Not Connected",
-                mayChange=True
-            )
+            if self._show_debug_chrome:
+                self._camera_preview_frame = DirectFrame(
+                    parent=self._pixel2d,
+                    pos=(self.PREVIEW_MARGIN * self._ui_scale, 0, -self._top_margin * self._ui_scale),
+                    frameSize=(0, self.PREVIEW_WIDTH * self._ui_scale, -self.PREVIEW_HEIGHT * self._ui_scale, 0),
+                    frameColor=(0.08, 0.09, 0.13, 0.96),
+                    relief=1,
+                    borderWidth=(1, 1),
+                    color=(20 / 255, 24 / 255, 32 / 255, 1.0),
+                )
+
+                self._camera_preview_title = OnscreenText(
+                    parent=self._pixel2d,
+                    pos=((self.PREVIEW_MARGIN + self.TITLE_OFFSET_X) * self._ui_scale, -(self._top_margin + self.TITLE_OFFSET_Y) * self._ui_scale),
+                    align=TextNode.ALeft,
+                    scale=16 * self._ui_scale,
+                    fg=(1.0, 1.0, 1.0, 1.0),
+                    text="Camera Preview",
+                    mayChange=False,
+                )
+
+                self._camera_preview_status = OnscreenText(
+                    parent=self._pixel2d,
+                    pos=((self.PREVIEW_MARGIN + self.TITLE_OFFSET_X) * self._ui_scale, -(self._top_margin + self.STATUS_OFFSET_Y) * self._ui_scale),
+                    align=TextNode.ALeft,
+                    scale=12 * self._ui_scale,
+                    fg=(0.8, 0.8, 0.8, 1.0),
+                    text="Camera: Not Connected",
+                    mayChange=True,
+                )
             
             # Create camera preview texture and node
             self._camera_texture = Texture("camera_preview")
-            self._camera_texture.setup2dTexture(512, 288, Texture.T_unsigned_byte, Texture.F_rgb)  # 512x288 updated size
+            self._camera_texture.setup2dTexture(
+                self.PREVIEW_WIDTH,
+                self.PREVIEW_HEIGHT,
+                Texture.T_unsigned_byte,
+                Texture.F_rgb,
+            )
             
             card_maker = CardMaker("camera_preview_card")
-            card_maker.setFrame(0, 512, -288, 0)  # 512x288 updated size
+            card_maker.setFrame(0, self.PREVIEW_WIDTH, -self.PREVIEW_HEIGHT, 0)
             
             self._camera_preview_node = self._pixel2d.attachNewNode(card_maker.generate())
-            # GPU flipping (original logic preserved)
-            self._camera_preview_node.setScale(-self._ui_scale, 1, -self._ui_scale)  # scale(-1,1,-1)
-            self._camera_preview_node.setPos((12 + 512) * self._ui_scale, 0, (-300 - 288) * self._ui_scale)  # Moved up by 20 units
+            self._apply_preview_node_transform()
             
             # Apply texture
             self._camera_preview_node.setTexture(self._camera_texture)
@@ -116,18 +132,17 @@ class CameraPreviewManager:
             return
             
         try:
-            # Resize image with INTER_NEAREST interpolation for performance optimization
-            frame = cv2.resize(self._camera_frame, (512, 288), interpolation=cv2.INTER_NEAREST)  # 512x288 updated size
+            frame = cv2.resize(
+                self._camera_frame,
+                (self.PREVIEW_WIDTH, self.PREVIEW_HEIGHT),
+                interpolation=cv2.INTER_LINEAR,
+            )
             
             # If there is gesture data, draw hand skeleton (reuse live_preview logic)
             if self._last_observation is not None:
                 frame = self._draw_hand_skeleton(frame, self._last_observation)
             
-            # Convert BGR to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Update texture
-            self._camera_texture.setRamImage(frame_rgb)
+            self._camera_texture.setRamImageAs(np.ascontiguousarray(frame), "BGR")
             
             # Update status text
             if self._camera_preview_status:
@@ -166,8 +181,8 @@ class CameraPreviewManager:
         
         # Scale camera preview window
         if self._camera_preview_frame:
-            original_pos = (12, 0, -300)  # Moved up by 20 units
-            original_size = (0, 512, -288, 0)  # 512x288 original size (original logic preserved)
+            original_pos = (self.PREVIEW_MARGIN, 0, -self._top_margin)
+            original_size = (0, self.PREVIEW_WIDTH, -self.PREVIEW_HEIGHT, 0)
             new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
             new_size = (original_size[0], original_size[1] * scale, original_size[2] * scale, original_size[3])
             self._camera_preview_frame.setPos(*new_pos)
@@ -176,8 +191,8 @@ class CameraPreviewManager:
         # Scale camera preview title
         if self._camera_preview_title:
             try:
-                original_pos = (30, -310)
-                original_scale = 20
+                original_pos = (self.PREVIEW_MARGIN + self.TITLE_OFFSET_X, -(self._top_margin + self.TITLE_OFFSET_Y))
+                original_scale = 16
                 new_pos = (original_pos[0] * scale, original_pos[1] * scale)
                 new_scale = original_scale * scale
                 self._camera_preview_title['pos'] = (new_pos[0], 0, new_pos[1])
@@ -188,25 +203,33 @@ class CameraPreviewManager:
         # Scale camera preview node
         if self._camera_preview_node:
             try:
-                original_pos = (12 + 512, 0, -300 - 288)  # Moved up by 20 units
-                new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
-                self._camera_preview_node.setPos(*new_pos)
-                # GPU flipping (original logic preserved)
-                self._camera_preview_node.setScale(-scale, 1, -scale)  # scale(-1,1,-1)
+                self._apply_preview_node_transform(scale)
             except Exception as e:
                 logger.warning(f"Failed to scale camera preview node: {e}")
         
         # Scale camera preview status text
         if self._camera_preview_status:
             try:
-                original_pos = (30, -330)
-                original_scale = 16
+                original_pos = (self.PREVIEW_MARGIN + self.TITLE_OFFSET_X, -(self._top_margin + self.STATUS_OFFSET_Y))
+                original_scale = 12
                 new_pos = (original_pos[0] * scale, original_pos[1] * scale)
                 new_scale = original_scale * scale
                 self._camera_preview_status['pos'] = (new_pos[0], 0, new_pos[1])
                 self._camera_preview_status['scale'] = new_scale
             except Exception as e:
                 logger.warning(f"Failed to scale camera preview status: {e}")
+
+    def _apply_preview_node_transform(self, scale: float | None = None) -> None:
+        if self._camera_preview_node is None:
+            return
+
+        active_scale = self._ui_scale if scale is None else scale
+        self._camera_preview_node.setScale(-active_scale, 1, -active_scale)
+        self._camera_preview_node.setPos(
+            (self.PREVIEW_MARGIN + self.PREVIEW_WIDTH) * active_scale,
+            0,
+            -(self._top_margin + self.PREVIEW_HEIGHT) * active_scale,
+        )
     
     def destroy(self) -> None:
         """Clean up camera preview resources"""

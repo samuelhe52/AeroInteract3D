@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from src.contracts import SceneCommand
+from src.rendering.rendering_core import RenderingCoreManager
 from src.rendering import service as rendering_service
 from src.rendering.service import ObjectInitialState, RenderingServiceImpl
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
@@ -41,9 +42,24 @@ class FakeTaskManager:
 class FakeWindow:
     def __init__(self) -> None:
         self.closed = False
+        self.width = 1600
+        self.height = 900
 
     def close(self) -> None:
         self.closed = True
+
+    def getXSize(self) -> int:
+        return self.width
+
+    def getYSize(self) -> int:
+        return self.height
+
+    def requestProperties(self, props) -> None:
+        get_x_size = getattr(props, "getXSize", None)
+        get_y_size = getattr(props, "getYSize", None)
+        if callable(get_x_size) and callable(get_y_size):
+            self.width = int(get_x_size())
+            self.height = int(get_y_size())
 
 
 class FakeBase:
@@ -52,6 +68,10 @@ class FakeBase:
         self.taskMgr = FakeTaskManager()
         self.win = FakeWindow()
         self.destroyed = False
+        self.accepted_events: dict[str, object] = {}
+
+    def accept(self, event_name: str, callback) -> None:
+        self.accepted_events[event_name] = callback
 
     def destroy(self) -> None:
         self.destroyed = True
@@ -61,6 +81,7 @@ class FakeWindowAdapter:
     def __init__(self) -> None:
         self._base = FakeBase()
         self._is_initialized = False
+        self.quit_callback = None
 
     def init_window(self, window_size: tuple = (800, 600), window_title: str = "AeroInteract3D Rendering") -> None:
         self._is_initialized = True
@@ -84,6 +105,9 @@ class FakeWindowAdapter:
 
     def step(self) -> None:
         self._base.taskMgr.step()
+
+    def set_quit_handler(self, callback) -> None:
+        self.quit_callback = callback
 
 
 class FakeNodePath:
@@ -361,3 +385,54 @@ def test_rendering_flushes_suppressed_pose_logs_on_stop(caplog) -> None:
         record.message == "Suppressed 1 repetitive pose update log entries"
         for record in caplog.records
     )
+
+
+def test_rendering_core_window_size_uses_screen_scale_and_aspect_ratio() -> None:
+    width, height = RenderingCoreManager.compute_window_size(screen_size=(1920, 1200))
+
+    assert width == 1536
+    assert height == 864
+
+
+def test_rendering_core_window_size_falls_back_when_display_is_invalid() -> None:
+    width, height = RenderingCoreManager.compute_window_size(screen_size=(0, 0))
+
+    assert (width, height) == RenderingCoreManager.reference_window_size()
+
+
+def test_rendering_core_aspect_lock_prefers_width_when_width_changes_more() -> None:
+    target = RenderingCoreManager.compute_aspect_locked_size(
+        (1200, 720),
+        previous_size=(1000, 560),
+    )
+
+    assert target == (1200, 675)
+
+
+def test_rendering_core_aspect_lock_prefers_height_when_height_changes_more() -> None:
+    target = RenderingCoreManager.compute_aspect_locked_size(
+        (1100, 700),
+        previous_size=(1100, 560),
+    )
+
+    assert target == (1244, 700)
+
+
+def test_rendering_service_registers_quit_callback_with_window_adapter(monkeypatch) -> None:
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.set_quit_callback(lambda: None)
+    service.start()
+
+    assert service._window_adapter.quit_callback is not None
+
+
+def test_rendering_core_registers_quit_shortcuts() -> None:
+    manager = RenderingCoreManager()
+    fake_base = FakeBase()
+    manager._base = fake_base
+
+    manager.set_quit_handler(lambda: None)
+
+    assert set(fake_base.accepted_events) >= {"meta-w", "meta-q", "control-w", "control-q"}
