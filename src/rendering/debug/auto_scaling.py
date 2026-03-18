@@ -5,7 +5,7 @@ from typing import Optional, Callable
 
 from direct.showbase.ShowBase import ShowBase
 
-from .rendering_core import RenderingCoreManager
+from ..rendering_core import RenderingCoreManager
 
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("auto_scaling")

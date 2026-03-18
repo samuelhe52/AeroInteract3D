@@ -19,9 +19,9 @@ from src.utils.runtime import (
 )
 
 from .rendering_core import RenderingCoreManager
-from .auto_scaling import AutoScalingManager
-from .data_panel import DataPanelManager
-from .cam_preview import CameraPreviewManager
+from .debug.auto_scaling import AutoScalingManager
+from .debug.data_panel import DataPanelManager
+from .debug.cam_preview import CameraPreviewManager
 
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
