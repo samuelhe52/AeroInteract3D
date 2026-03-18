@@ -20,6 +20,9 @@ src/rendering/main/
 # 日志文件
 *.log
 
+# Machine-local run defaults
+.run.yaml
+
 # 编译产物
 __pycache__/
 *.pyc

@@ -6,7 +6,7 @@ import time
 
 import cv2
 
-from src.constants import DEBUG_FPS_SAMPLE_WINDOW
+from src.gesture.constants import DEBUG_FPS_SAMPLE_WINDOW
 from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import RawHandObservation
 

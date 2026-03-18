@@ -3,7 +3,7 @@ from __future__ import annotations
 import main
 
 from main import App, AppConfig, LIFECYCLE_RUNNING, build_config, parse_args
-from src.constants import DEFAULT_TARGET_FPS
+from src.gesture.constants import DEFAULT_TARGET_FPS
 
 
 class FakeGestureInput:
@@ -86,7 +86,8 @@ def test_build_config_uses_default_target_fps() -> None:
     config = build_config(parse_args([]))
 
     assert config.target_fps == DEFAULT_TARGET_FPS
-    assert config.smoothing_preset == "medium"
+    assert config.motion_preset == "medium"
+    assert config.aggressive_release_guard is False
 
 
 def test_parse_args_disables_live_preview_by_default() -> None:
@@ -95,6 +96,73 @@ def test_parse_args_disables_live_preview_by_default() -> None:
     config = build_config(args)
 
     assert config.live_preview is False
+
+
+def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    run_config = tmp_path / ".run.yaml"
+    run_config.write_text(
+        "\n".join(
+            [
+                "camera_index: 2",
+                "target_fps: 55",
+                "frame_width: 960",
+                "frame_height: 540",
+                "live_preview: true",
+                "motion_preset: low",
+                "aggressive_release_guard: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = build_config(parse_args([]))
+
+    assert config.camera_index == 2
+    assert config.target_fps == 55
+    assert config.frame_width == 960
+    assert config.frame_height == 540
+    assert config.live_preview is True
+    assert config.motion_preset == "low"
+    assert config.aggressive_release_guard is True
+
+
+def test_cli_flags_override_run_config_defaults(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".run.yaml").write_text(
+        "\n".join(
+            [
+                "target_fps: 55",
+                "live_preview: true",
+                "aggressive_release_guard: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = build_config(
+        parse_args(
+            [
+                "--target-fps",
+                "24",
+                "--no-live-preview",
+                "--no-aggressive-release-guard",
+            ]
+        )
+    )
+
+    assert config.target_fps == 24
+    assert config.live_preview is False
+    assert config.aggressive_release_guard is False
+
+
+def test_no_run_config_ignores_local_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".run.yaml").write_text("target_fps: 55\n", encoding="utf-8")
+
+    config = build_config(parse_args(["--no-run-config"]))
+
+    assert config.target_fps == DEFAULT_TARGET_FPS
 
 
 def test_parse_args_disables_live_preview_flag() -> None:
@@ -121,16 +189,25 @@ def test_build_app_passes_live_preview_to_gesture_service(monkeypatch) -> None:
     app = main.build_app(AppConfig(live_preview=True))
 
     assert captured_kwargs["preview_enabled"] is True
-    assert captured_kwargs["smoothing_preset"] == "medium"
+    assert captured_kwargs["motion_preset"] == "medium"
+    assert captured_kwargs["aggressive_release_guard"] is False
     assert isinstance(app, App)
     assert app.gesture_input is not None
     assert app.bridge is fake_bridge
     assert app.render_output is fake_render
 
 
-def test_parse_args_accepts_smoothing_preset() -> None:
-    args = parse_args(["--smoothing-preset", "low"])
+def test_parse_args_accepts_motion_preset() -> None:
+    args = parse_args(["--motion-preset", "low"])
 
     config = build_config(args)
 
-    assert config.smoothing_preset == "low"
+    assert config.motion_preset == "low"
+
+
+def test_parse_args_enables_aggressive_release_guard() -> None:
+    args = parse_args(["--aggressive-release-guard"])
+
+    config = build_config(args)
+
+    assert config.aggressive_release_guard is True
