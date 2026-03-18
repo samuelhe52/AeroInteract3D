@@ -91,7 +91,7 @@ class RenderingCoreManager:
         """Get pixel2d node (dependency injection)"""
         if not self._is_initialized or self._base is None:
             return None
-        return self._base.pixel2d
+        return getattr(self._base, "pixel2d", None)
     
     def is_initialized(self) -> bool:
         """Check if initialized"""

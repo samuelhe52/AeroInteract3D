@@ -31,6 +31,8 @@ class AutoScalingManager:
         base: Optional[ShowBase] = self._rendering_core.get_base()
         if base is None or base.win is None:
             return
+        if not hasattr(base.win, "getXSize") or not hasattr(base.win, "getYSize"):
+            return
         
         # Get current main window size
         current_size = (base.win.getXSize(), base.win.getYSize())

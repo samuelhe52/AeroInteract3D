@@ -65,6 +65,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
         self._window_adapter_factory = window_adapter_factory or RenderingCoreManager
         self._window_adapter = self._window_adapter_factory()
+        self._rendering_core: Optional[RenderingCoreManager] = self._window_adapter
         # Material cache keyed by interaction state.
         self._material_cache: Dict[str, Material] = self._init_materials()
         self._status: str = LIFECYCLE_STOPPED
@@ -93,7 +94,8 @@ class RenderingServiceImpl(RenderOutputPort):
         self._data_panel: Optional[DataPanelManager] = None
         self._camera_preview: Optional[CameraPreviewManager] = None
         self._auto_scaling: Optional[AutoScalingManager] = None
-        self._rendering_core: Optional[RenderingCoreManager] = None
+        self._last_world_norm_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     
     def _init_materials(self) -> Dict[str, Material]:
         """Initialize materials for each interaction state."""
@@ -139,10 +141,8 @@ class RenderingServiceImpl(RenderOutputPort):
         - y: forward/depth
         - z: up
         """
-        # Adjust scale factor to match hand gesture movement range
-        scale_factor = 4.0
         x, y, z = (float(value) for value in position)
-        return (x * scale_factor, z * scale_factor, y * scale_factor)
+        return (x, z, y)
     
     def start(self) -> None:
         """Start module and initialize environment to RUNNING or DEGRADED (original logic preserved)"""
@@ -153,7 +153,8 @@ class RenderingServiceImpl(RenderOutputPort):
         self._reset_runtime_state()
         self._errors = []
         self._metrics = RenderingMetrics()
-        self._rendering_core = self._window_adapter_factory()
+        self._window_adapter = self._window_adapter_factory()
+        self._rendering_core = self._window_adapter
         
         try:
             # 初始化窗口/相机/灯光（原有逻辑保留）
@@ -164,8 +165,11 @@ class RenderingServiceImpl(RenderOutputPort):
             # 初始化子模块（依赖注入）
             self._auto_scaling = AutoScalingManager(self._rendering_core)
             self._auto_scaling.set_scale_callback(self._handle_scale_change)
-            self._data_panel = DataPanelManager(self._auto_scaling)
-            self._camera_preview = CameraPreviewManager(self._auto_scaling)
+            if self._supports_debug_overlay(self._rendering_core):
+                self._data_panel = DataPanelManager(self._auto_scaling)
+                self._camera_preview = CameraPreviewManager(self._auto_scaling)
+            else:
+                logger.info("Rendering adapter does not expose pixel2d; skipping debug overlay initialization")
             
             # Create scene root node
             self._scene_root = NodePath("scene_root")
@@ -351,7 +355,8 @@ class RenderingServiceImpl(RenderOutputPort):
             base.win.close()
             base.destroy()
         
-        self._rendering_core = self._window_adapter_factory()
+        self._window_adapter = self._window_adapter_factory()
+        self._rendering_core = self._window_adapter
         self._reset_runtime_state()
         # Reset submodules
         self._data_panel = None
@@ -505,6 +510,8 @@ class RenderingServiceImpl(RenderOutputPort):
             # Save coordinate data for display
             if self._data_panel:
                 self._data_panel.update_coordinate_data(tuple(clipped_pos), scene_pos)
+            self._last_world_norm_pos = tuple(clipped_pos)
+            self._last_scene_pos = scene_pos
             
             # 8. Logging
             if tuple(clipped_pos) != tuple(pos_float):
@@ -911,6 +918,13 @@ class RenderingServiceImpl(RenderOutputPort):
         self._last_gesture_packet = None
         self._last_fps = 0.0
         self._frame_times = []
+        self._last_world_norm_pos = (0.0, 0.0, 0.0)
+        self._last_scene_pos = (0.0, 0.0, 0.0)
+
+    @staticmethod
+    def _supports_debug_overlay(rendering_core: RenderingCoreManager) -> bool:
+        get_pixel2d = getattr(rendering_core, "get_pixel2d", None)
+        return callable(get_pixel2d)
 
     def _record_error(self, error: Dict[str, Any]) -> None:
         payload = dict(error)
@@ -982,21 +996,6 @@ class RenderingServiceImpl(RenderOutputPort):
         if elapsed_ms < RENDER_POSE_LOG_DEBOUNCE_MS:
             self._suppressed_pose_logs += 1
             return
-    
-    def _flush_pose_log_summary(self) -> None:
-        """Flush pose log summary."""
-        if self._suppressed_pose_logs > 0:
-            logger.info(f"Suppressed {self._suppressed_pose_logs} pose update logs to reduce verbosity")
-            self._suppressed_pose_logs = 0
-    
-    def _clip_coordinate(self, coord: list[float], rotation: bool = False) -> list[float]:
-        """Clip coordinate to world_norm range [-1.0, 1.0]."""
-        if rotation:
-            # For rotation, just ensure they are floats
-            return [float(v) for v in coord]
-        else:
-            # For position, clip to [-1.0, 1.0]
-            return [max(-1.0, min(1.0, float(v))) for v in coord]
 
         suppressed_count = self._suppressed_pose_logs
         self._suppressed_pose_logs = 0
@@ -1013,7 +1012,7 @@ class RenderingServiceImpl(RenderOutputPort):
         logger.info(f"Suppressed {self._suppressed_pose_logs} repetitive pose update log entries")
         self._suppressed_pose_logs = 0
     
-    def _clip_coordinate(self, coord: list, rotation: bool = False) -> list:
+    def _clip_coordinate(self, coord: list[float], rotation: bool = False) -> list[float]:
         """Clip coordinates automatically when they exceed world_norm [-1.0, 1.0]."""
         if rotation:
             # Rotation values are converted to float but not clipped.
