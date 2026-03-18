@@ -30,8 +30,8 @@ class CameraFrame:
     timestamp_ms: int
     width: int
     height: int
-    data: Optional[Any] = None   
-    preview_data: Optional[Any] = None  
+    data: Optional[Any] = None
+    preview_data: Optional[Any] = None
 
 
 @dataclass(slots=True)
@@ -51,7 +51,7 @@ class GesturePacket:
     velocity: Vec3 | None = None
     smoothing_hint: dict[str, Any] | None = None
     debug: dict[str, Any] | None = None
-    camera_frame: Optional[CameraFrame] = None  
+    camera_frame: Optional[CameraFrame] = None
 
 
 @dataclass(slots=True)

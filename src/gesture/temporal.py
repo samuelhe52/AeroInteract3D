@@ -119,10 +119,9 @@ class TemporalReducer:
     ) -> GesturePacket:
         self._missing_frames = 0
         previous_wrist = self._last_wrist
-        index_tip = self._smooth(self._last_index_tip, observation.index_tip, xy_alpha=TEMPORAL_XY_SMOOTHING_ALPHA)
+        index_tip = self._smooth(self._last_index_tip, observation.index_tip, xy_alpha=self.tuning.xy_smoothing_alpha)
         thumb_tip = self._smooth(self._last_thumb_tip, observation.thumb_tip, xy_alpha=self.tuning.xy_smoothing_alpha)
         wrist = self._smooth(self._last_wrist, observation.wrist, xy_alpha=self.tuning.xy_smoothing_alpha)
-        index_tip = self._smooth(self._last_index_tip, observation.index_tip, xy_alpha=self.tuning.xy_smoothing_alpha)
         velocity = self._compute_velocity(previous_wrist, wrist, timestamp_ms=timestamp_ms)
         pinch_distance = self._normalized_camera_pinch_distance(index_tip, thumb_tip, hand_scale=observation.hand_scale)
         pinch_state = self._update_pinch_state(observation.raw_pinch_distance)
