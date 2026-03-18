@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 
 TrackingState = Literal["tracked", "temporarily_lost", "not_detected"]
@@ -24,6 +24,17 @@ class Vec3:
 
 
 @dataclass(slots=True)
+class CameraFrame:
+    """Camera frame data for passing camera images between modules."""
+    frame_id: int
+    timestamp_ms: int
+    width: int
+    height: int
+    data: Optional[Any] = None
+    preview_data: Optional[Any] = None
+
+
+@dataclass(slots=True)
 class GesturePacket:
     contract_version: str
     frame_id: int
@@ -40,6 +51,7 @@ class GesturePacket:
     velocity: Vec3 | None = None
     smoothing_hint: dict[str, Any] | None = None
     debug: dict[str, Any] | None = None
+    camera_frame: Optional[CameraFrame] = None
 
 
 @dataclass(slots=True)
@@ -54,6 +66,7 @@ class SceneCommand:
 
 
 __all__ = [
+    "CameraFrame",
     "CoordinateSpace",
     "GesturePacket",
     "PinchState",

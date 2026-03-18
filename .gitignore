@@ -26,3 +26,6 @@ src/rendering/main/
 # 编译产物
 __pycache__/
 *.pyc
+
+# Local runtime overrides
+.run.yaml

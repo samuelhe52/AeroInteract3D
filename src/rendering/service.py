@@ -6,10 +6,8 @@ import logging
 from typing import List, Dict, Optional, Set, Any, Callable
 
 from panda3d.core import (
-    WindowProperties, Material, AmbientLight, DirectionalLight,
-    PerspectiveLens, Vec4, NodePath
+    Material, Vec4, NodePath
 )
-from direct.showbase.ShowBase import ShowBase
 
 from src.constants import MAX_ERROR_HISTORY, RENDER_POSE_LOG_DEBOUNCE_MS
 from src.contracts import SceneCommand
@@ -19,6 +17,11 @@ from src.utils.runtime import (
     LIFECYCLE_INITIALIZING, LIFECYCLE_RUNNING, LIFECYCLE_DEGRADED, LIFECYCLE_STOPPED,
     build_health, classify_frame, error_entry
 )
+
+from .rendering_core import RenderingCoreManager
+from .debug.auto_scaling import AutoScalingManager
+from .debug.data_panel import DataPanelManager
+from .debug.cam_preview import CameraPreviewManager
 
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
@@ -54,99 +57,15 @@ class RenderingMetrics:
     render_steps: int = 0
 
 
-class Panda3DWindowAdapter:
-    """Panda3D window adapter for window, camera, and light lifecycle management."""
-    
-    def __init__(self):
-        self._base: Optional[ShowBase] = None
-        self._is_initialized: bool = False
-    
-    def init_window(self, window_size: tuple = (800, 600), window_title: str = "AeroInteract3D Rendering") -> None:
-        """Initialize the rendering window."""
-        if self._is_initialized:
-            logger.info(f"Window already initialized ({window_size}), skipping duplicate creation")
-            return
-        try:
-            window_props = WindowProperties()
-            window_props.setSize(*window_size)
-            window_props.setTitle(window_title)
-            # Use correct way to set window properties
-            self._base = ShowBase()
-            self._base.win.requestProperties(window_props)
-            self._is_initialized = True
-            logger.info(f"Window initialized successfully: size={window_size}, title={window_title}")
-        except Exception as e:
-            logger.error(f"Window initialization failed: {str(e)}")
-            raise RuntimeError(f"Window initialization failed: {str(e)}") from e
-    
-    def config_camera_for_world_norm(self) -> None:
-        """Configure the camera for the world_norm coordinate space."""
-        if not self._is_initialized:
-            raise RuntimeError("Window is not initialized; cannot configure the camera")
-        try:
-            # A perspective camera gives a clearer 3D view than an orthographic one.
-            lens = PerspectiveLens()
-            lens.setFov(60)  # Set the field of view.
-            lens.setNearFar(0.1, 100.0)  # Use a more practical near/far clip range.
-            self._base.cam.node().setLens(lens)
-            
-            # Position the camera for a useful angled view of the objects.
-            self._base.cam.setPos(0.0, 3.0, 2.0)  # View from above and at an angle.
-            self._base.cam.lookAt(0.0, 0.0, 0.0)  # Look at the origin.
-            logger.info("Camera configured, using perspective camera for 3D scene")
-        except Exception as e:
-            logger.error(f"Camera configuration failed: {str(e)}")
-            raise RuntimeError(f"Camera configuration failed: {str(e)}") from e
-    
-    def create_base_lights(self) -> None:
-        """Create the base lighting setup."""
-        if not self._is_initialized:
-            raise RuntimeError("Window is not initialized; cannot create lights")
-        try:
-            # Ambient light.
-            amb_light = AmbientLight("ambient_light")
-            amb_light.setColor((0.2, 0.2, 0.2, 1.0))
-            amb_light_np = self._base.render.attachNewNode(amb_light)
-            self._base.render.setLight(amb_light_np)
-            # Directional light.
-            dir_light = DirectionalLight("directional_light")
-            dir_light.setColor((0.8, 0.8, 0.8, 1.0))
-            dir_light_np = self._base.render.attachNewNode(dir_light)
-            dir_light_np.setHpr(45, -45, 0)
-            self._base.render.setLight(dir_light_np)
-            logger.info("Basic lights created successfully")
-        except Exception as e:
-            logger.error(f"Light creation failed: {str(e)}")
-            raise RuntimeError(f"Light creation failed: {str(e)}") from e
-    
-    def get_base(self) -> Optional[ShowBase]:
-        return self._base
-    
-    def is_initialized(self) -> bool:
-        return self._is_initialized
-    
-    def reset_scene(self, scene_root: NodePath) -> None:
-        """Reset the scene graph."""
-        if not self._is_initialized:
-            raise RuntimeError("Window is not initialized; cannot reset the scene")
-        scene_root.removeChildren()
-        logger.info("Scene reset safely (window/camera/lights preserved)")
-
-    def step(self) -> None:
-        """Advance Panda3D by one frame to process window events and present the scene."""
-        if not self._is_initialized or self._base is None:
-            return
-        self._base.taskMgr.step()
-
-
 class RenderingServiceImpl(RenderOutputPort):
-    """Core RenderOutputPort implementation for rendering SceneCommand streams."""
+    """Core RenderOutputPort implementation for rendering SceneCommand stream (integrates all submodules)"""
     
-    def __init__(self, window_adapter_factory: Callable[[], Panda3DWindowAdapter] | None = None):
+    def __init__(self, window_adapter_factory: Callable[[], RenderingCoreManager] | None = None):
         super().__init__()
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
-        self._window_adapter_factory = window_adapter_factory or Panda3DWindowAdapter
+        self._window_adapter_factory = window_adapter_factory or RenderingCoreManager
         self._window_adapter = self._window_adapter_factory()
+        self._rendering_core: Optional[RenderingCoreManager] = self._window_adapter
         # Material cache keyed by interaction state.
         self._material_cache: Dict[str, Material] = self._init_materials()
         self._status: str = LIFECYCLE_STOPPED
@@ -162,6 +81,21 @@ class RenderingServiceImpl(RenderOutputPort):
         self._last_pose_log_ts: Optional[int] = None
         self._suppressed_pose_logs: int = 0
         self._metrics = RenderingMetrics()
+        # For storing gesture data
+        self._last_gesture_packet = None
+        self._last_fps = 0.0
+        # FPS calculation related
+        self._frame_times = []
+        self._frame_time_window = 1.0  # 1-second window
+        # Camera preview related
+        self._last_camera_update_time = 0
+        self._camera_update_interval = 0.033  # 30fps
+        # Submodules
+        self._data_panel: Optional[DataPanelManager] = None
+        self._camera_preview: Optional[CameraPreviewManager] = None
+        self._auto_scaling: Optional[AutoScalingManager] = None
+        self._last_world_norm_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
     
     def _init_materials(self) -> Dict[str, Material]:
         """Initialize materials for each interaction state."""
@@ -211,7 +145,7 @@ class RenderingServiceImpl(RenderOutputPort):
         return (x, z, y)
     
     def start(self) -> None:
-        """Start the module and initialize the environment into RUNNING or DEGRADED."""
+        """Start module and initialize environment to RUNNING or DEGRADED (original logic preserved)"""
         if self._status == LIFECYCLE_RUNNING:
             return None
         
@@ -220,15 +154,26 @@ class RenderingServiceImpl(RenderOutputPort):
         self._errors = []
         self._metrics = RenderingMetrics()
         self._window_adapter = self._window_adapter_factory()
+        self._rendering_core = self._window_adapter
         
         try:
             # Initialize window/camera/lights
-            self._window_adapter.init_window()
-            self._window_adapter.config_camera_for_world_norm()
-            self._window_adapter.create_base_lights()
+            self._rendering_core.init_window()
+            self._rendering_core.config_camera_for_world_norm()
+            self._rendering_core.create_base_lights()
+            
+            # Initialize submodules (dependency injection)
+            self._auto_scaling = AutoScalingManager(self._rendering_core)
+            self._auto_scaling.set_scale_callback(self._handle_scale_change)
+            if self._supports_debug_overlay(self._rendering_core):
+                self._data_panel = DataPanelManager(self._auto_scaling)
+                self._camera_preview = CameraPreviewManager(self._auto_scaling)
+            else:
+                logger.info("Rendering adapter does not expose pixel2d; skipping debug overlay initialization")
+            
             # Create scene root node
             self._scene_root = NodePath("scene_root")
-            self._scene_root.reparentTo(self._window_adapter.get_base().render)
+            self._scene_root.reparentTo(self._rendering_core.get_base().render)
             # Switch state to RUNNING
             self._status = LIFECYCLE_RUNNING
             logger.info("Rendering module started successfully, state switched to RUNNING")
@@ -245,6 +190,13 @@ class RenderingServiceImpl(RenderOutputPort):
             self._record_error(error)
             logger.error(f"Module startup failed: {error['message']} (code: {error['code']})")
             raise RuntimeError(f"Module startup failed: {error['message']} (code: {error['code']})") from e
+    
+    def _handle_scale_change(self, scale: float) -> None:
+        """Handle UI scale changes"""
+        if self._data_panel:
+            self._data_panel.set_ui_scale(scale)
+        if self._camera_preview:
+            self._camera_preview.set_ui_scale(scale)
     
     def push(self, command: SceneCommand) -> None:
         """Push a command through the main entry point with fault-tolerant handling."""
@@ -318,21 +270,46 @@ class RenderingServiceImpl(RenderOutputPort):
                 logger.warning(f"Command processing failed: {details_msg}")
 
     def step(self) -> None:
-        """Advance the Panda3D event/render loop without leaving the app's main loop."""
-        if not self._window_adapter.is_initialized():
+        """Advance Panda3D event/rendering loop without leaving application main loop (original logic preserved)"""
+        if not self._rendering_core or not self._rendering_core.is_initialized():
             return
 
-        if hasattr(self._window_adapter, "step"):
-            self._window_adapter.step()
+        # Calculate FPS
+        current_time = time.time()
+        self._frame_times.append(current_time)
+        # Remove times older than 1 second
+        self._frame_times = [t for t in self._frame_times if current_time - t < self._frame_time_window]
+        if len(self._frame_times) > 1:
+            self._last_fps = (len(self._frame_times) - 1) / (current_time - self._frame_times[0])
         else:
-            base = self._window_adapter.get_base()
+            self._last_fps = 0.0
+
+        # Update data panel
+        if self._data_panel:
+            self._data_panel.update_data(self._last_gesture_packet, self._last_fps)
+
+        # Update camera preview
+        if self._camera_preview and current_time - self._last_camera_update_time > self._camera_update_interval:
+            self._camera_preview.update_preview()
+            self._last_camera_update_time = current_time
+
+        # Main window size monitoring + auto-scaling logic
+        if self._auto_scaling:
+            self._auto_scaling.update_window_scale()
+
+        if hasattr(self._rendering_core, "step"):
+            self._rendering_core.step()
+        else:
+            base = self._rendering_core.get_base()
             if base is None:
                 return
             base.taskMgr.step()
         self._metrics.render_steps += 1
     
+
+    
     def health(self) -> Dict[str, Any]:
-        """Return structured health information, including logging-related state."""
+        """Return structured health information, including log-related status"""
         return build_health(
             component="rendering",
             lifecycle_state=self._status,
@@ -350,7 +327,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 "heartbeats_received": self._metrics.heartbeats_received,
                 "render_steps": self._metrics.render_steps,
                 "last_command_ts": self._last_command_ts,
-                "window_initialized": self._window_adapter.is_initialized(),
+                "window_initialized": self._rendering_core.is_initialized() if self._rendering_core else False,
                 "executed_command_count": len(self._executed_command_ids),
                 "latest_frame_id": self._latest_frame_id,
                 "pending_commands_count": len(self._pending_commands)
@@ -358,25 +335,38 @@ class RenderingServiceImpl(RenderOutputPort):
         )
     
     def stop(self) -> None:
-        """Stop the module, release resources, and switch to STOPPED."""
+        """Stop the module, release resources, and switch to STOPPED state (original logic preserved)"""
         if self._status == LIFECYCLE_STOPPED:
             logger.info("Module already stopped, no need for repeated operation")
             return None
 
         self._flush_pose_log_summary()
         
+        # Clean up submodules
+        if self._camera_preview:
+            self._camera_preview.destroy()
+        if self._data_panel:
+            self._data_panel.destroy()
+        
         # Stop task loop, release window
-        if self._window_adapter.is_initialized():
-            base = self._window_adapter.get_base()
+        if self._rendering_core and self._rendering_core.is_initialized():
+            base = self._rendering_core.get_base()
             base.taskMgr.stop()
             base.win.close()
             base.destroy()
         
         self._window_adapter = self._window_adapter_factory()
+        self._rendering_core = self._window_adapter
         self._reset_runtime_state()
+        # Reset submodules
+        self._data_panel = None
+        self._camera_preview = None
+        self._auto_scaling = None
         self._status = LIFECYCLE_STOPPED
         logger.info("Rendering module stopped, all resources released")
         return None
+    
+
     
     def _handle_set_object_pose(self, command: SceneCommand) -> None:
         """Handle a set_object_pose command."""
@@ -516,6 +506,12 @@ class RenderingServiceImpl(RenderOutputPort):
             obj_np.setHpr(*clipped_hpr)
             self._metrics.pose_updates += 1
             self._metrics.commands_applied += 1
+            
+            # Save coordinate data for display
+            if self._data_panel:
+                self._data_panel.update_coordinate_data(tuple(clipped_pos), scene_pos)
+            self._last_world_norm_pos = tuple(clipped_pos)
+            self._last_scene_pos = scene_pos
             
             # 8. Logging
             if tuple(clipped_pos) != tuple(pos_float):
@@ -660,22 +656,26 @@ class RenderingServiceImpl(RenderOutputPort):
             )
     
     def _handle_init_scene(self, command: SceneCommand) -> None:
-        """Handle an init_scene command."""
+        """Handle init_scene command."""
         try:
             self._metrics.init_scene_commands += 1
             self._metrics.commands_applied += 1
             # Reset scene
             if self._scene_root is not None and not self._scene_root.isEmpty():
-                self._window_adapter.reset_scene(self._scene_root)
+                self._rendering_core.reset_scene(self._scene_root)
                 self._object_cache.clear()
                 self._object_initial_states.clear()
                 logger.info("Duplicate init_scene received, scene cache reset")
             
             # Load cube model
-            base = self._window_adapter.get_base()
+            base = self._rendering_core.get_base()
             cube_model = base.loader.loadModel("box")
             if cube_model.isEmpty():
                 raise RuntimeError("Failed to load cube model")
+            # Forcefully disable all textures to eliminate noise completely
+            cube_model.setTextureOff(1)
+            # Set solid color to match idle material
+            cube_model.setColor(0.5, 0.5, 0.5, 1.0)
             
             # Parse objects from payload
             objects = command.payload.get("objects", [])
@@ -915,12 +915,66 @@ class RenderingServiceImpl(RenderOutputPort):
         self._is_resetting = False
         self._last_pose_log_ts = None
         self._suppressed_pose_logs = 0
+        self._last_gesture_packet = None
+        self._last_fps = 0.0
+        self._frame_times = []
+        self._last_world_norm_pos = (0.0, 0.0, 0.0)
+        self._last_scene_pos = (0.0, 0.0, 0.0)
+
+    @staticmethod
+    def _supports_debug_overlay(rendering_core: RenderingCoreManager) -> bool:
+        get_pixel2d = getattr(rendering_core, "get_pixel2d", None)
+        return callable(get_pixel2d)
 
     def _record_error(self, error: Dict[str, Any]) -> None:
         payload = dict(error)
         payload.setdefault("timestamp", int(time.time() * 1000))
         self._errors.append(payload)
         self._errors = self._errors[-MAX_ERROR_HISTORY:]
+
+
+
+    def update_runtime_status(self, packet=None, fps: float = 0.0) -> None:
+        """Update the top-left data panel with externally passed gesture data packets and FPS"""
+        if not hasattr(self, "_status_panel") or self._status_panel is None:
+            return
+        if packet is None:
+            lines = (
+                "frame: 0",
+                "tracking: idle",
+                "pinch: idle",
+                "confidence: 0.00",
+                "pinch_distance: 0.000",
+                "wrist: (+0.00, +0.00, +0.00)",
+                f"fps: {fps:.1f}",
+            )
+        else:
+            lines = (
+                f"frame: {getattr(packet, 'frame_id', 0)}",
+                f"tracking: {getattr(packet, 'tracking_state', 'idle')}",
+                f"pinch: {getattr(packet, 'pinch_state', 'idle')}",
+                f"confidence: {getattr(packet, 'confidence', 0.0):.2f}",
+                f"pinch_distance: {0.0 if getattr(packet, 'pinch_distance', None) is None else packet.pinch_distance:.3f}",
+                f"wrist: ({getattr(packet.wrist, 'x', 0.0):+.2f}, {getattr(packet.wrist, 'y', 0.0):+.2f}, {getattr(packet.wrist, 'z', 0.0):+.2f})",
+                f"fps: {fps:.1f}",
+                f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
+                f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
+            )
+        self._status_panel.setText("\n".join(lines))
+    
+    def update_gesture_data(self, packet) -> None:
+        """Update gesture data"""
+        self._last_gesture_packet = packet
+    
+    def update_camera_frame(self, frame, observation=None, packet=None) -> None:
+        """Update camera frame data"""
+        if self._camera_preview:
+            self._camera_preview.update_frame(frame, observation)
+
+    def enable_camera_preview(self, enabled: bool = True) -> None:
+        """Enable or disable camera preview"""
+        if self._camera_preview:
+            self._camera_preview.enable_preview(enabled)
 
     def _log_pose_update(
         self,
@@ -958,7 +1012,7 @@ class RenderingServiceImpl(RenderOutputPort):
         logger.info(f"Suppressed {self._suppressed_pose_logs} repetitive pose update log entries")
         self._suppressed_pose_logs = 0
     
-    def _clip_coordinate(self, coord: list, rotation: bool = False) -> list:
+    def _clip_coordinate(self, coord: list[float], rotation: bool = False) -> list[float]:
         """Clip coordinates automatically when they exceed world_norm [-1.0, 1.0]."""
         if rotation:
             # Rotation values are converted to float but not clipped.

@@ -175,7 +175,6 @@ def test_parse_args_disables_live_preview_flag() -> None:
 
 def test_build_app_passes_live_preview_to_gesture_service(monkeypatch) -> None:
     captured_kwargs: dict[str, object] = {}
-    fake_gesture = object()
     fake_bridge = object()
     fake_render = object()
 

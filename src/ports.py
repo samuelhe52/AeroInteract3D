@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from src.contracts import GesturePacket, SceneCommand
 
@@ -34,6 +35,11 @@ class RenderOutputPort(ABC):
 
     @abstractmethod
     def stop(self) -> None: ...
+
+    @abstractmethod
+    def update_gesture_data(self, packet: Optional[GesturePacket]) -> None:
+        """Update gesture data to the rendering window's real-time panel."""
+        ...
 
 
 class BridgeService(ABC):

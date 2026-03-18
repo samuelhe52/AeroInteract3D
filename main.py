@@ -179,6 +179,13 @@ class App:
 
             packet = self.gesture_input.poll()
             if packet is not None:
+                self.render_output.update_gesture_data(packet)
+                
+                if hasattr(self.gesture_input, 'get_camera_data'):
+                    camera_frame, observation = self.gesture_input.get_camera_data()
+                    if camera_frame is not None:
+                        self.render_output.update_camera_frame(camera_frame, observation, packet)
+                
                 commands = self.bridge.process(packet)
                 for command in commands:
                     self.render_output.push(command)
