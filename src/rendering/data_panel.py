@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, Any
 
 from panda3d.core import TextNode
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectFrame import DirectFrame
+
+from .auto_scaling import AutoScalingManager
+from src.contracts import GesturePacket
 
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("data_panel")
@@ -14,15 +17,15 @@ logger = logging.getLogger("data_panel")
 class DataPanelManager:
     """Data panel manager, responsible for data panel frame+text initialization, gesture data updates, and scaling adaptation"""
     
-    def __init__(self, auto_scaling):
+    def __init__(self, auto_scaling: AutoScalingManager):
         """Initialize data panel manager (dependency injection: auto_scaling)"""
-        self._auto_scaling = auto_scaling
+        self._auto_scaling: AutoScalingManager = auto_scaling
         self._pixel2d = auto_scaling._rendering_core.get_pixel2d()
-        self._ui_scale = auto_scaling.get_ui_scale()
-        self._status_frame = None
-        self._status_panel = None
-        self._last_world_norm_pos = (0.0, 0.0, 0.0)
-        self._last_scene_pos = (0.0, 0.0, 0.0)
+        self._ui_scale: float = auto_scaling.get_ui_scale()
+        self._status_frame: Optional[DirectFrame] = None
+        self._status_panel: Optional[OnscreenText] = None
+        self._last_world_norm_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self.init_panel()
     
     def init_panel(self) -> None:
@@ -64,7 +67,7 @@ class DataPanelManager:
             logger.error(f"Data panel initialization failed: {str(e)}")
             raise
     
-    def update_data(self, packet=None, fps: float = 0.0) -> None:
+    def update_data(self, packet: Optional[GesturePacket] = None, fps: float = 0.0) -> None:
         """Update data panel display (original logic preserved)"""
         if not self._status_panel:
             return
@@ -81,12 +84,12 @@ class DataPanelManager:
             )
         else:
             lines = (
-                f"frame: {getattr(packet, 'frame_id', 0)}",
-                f"tracking: {getattr(packet, 'tracking_state', 'idle')}",
-                f"pinch: {getattr(packet, 'pinch_state', 'idle')}",
-                f"confidence: {getattr(packet, 'confidence', 0.0):.2f}",
-                f"pinch_distance: {0.0 if getattr(packet, 'pinch_distance', None) is None else packet.pinch_distance:.3f}",
-                f"wrist: ({getattr(packet.wrist, 'x', 0.0):+.2f}, {getattr(packet.wrist, 'y', 0.0):+.2f}, {getattr(packet.wrist, 'z', 0.0):+.2f})",
+                f"frame: {packet.frame_id}",
+                f"tracking: {packet.tracking_state}",
+                f"pinch: {packet.pinch_state}",
+                f"confidence: {packet.confidence:.2f}",
+                f"pinch_distance: {0.0 if packet.pinch_distance is None else packet.pinch_distance:.3f}",
+                f"wrist: ({packet.wrist.x:+.2f}, {packet.wrist.y:+.2f}, {packet.wrist.z:+.2f})",
                 f"fps: {fps:.1f}",
                 f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
                 f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
@@ -120,7 +123,7 @@ class DataPanelManager:
             original_scale = 28  # Font size 28 (original logic preserved)
             new_pos = (original_pos[0] * scale, original_pos[1] * scale)
             new_scale = original_scale * scale
-            self._status_panel.setPos(*new_pos)
+            self._status_panel['pos'] = new_pos
             self._status_panel['scale'] = new_scale
     
     def destroy(self) -> None:

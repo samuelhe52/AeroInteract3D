@@ -3,12 +3,14 @@ from __future__ import annotations
 import logging
 import cv2
 import numpy as np
-from typing import Optional
+from typing import Optional, Any, Tuple
 
-from panda3d.core import Texture, CardMaker, TextNode
+from panda3d.core import Texture, CardMaker, TextNode, NodePath
 from direct.gui.OnscreenText import OnscreenText
 from direct.gui.DirectFrame import DirectFrame
 
+from .auto_scaling import AutoScalingManager
+from src.gesture.runtime import RawHandObservation
 from src.gesture.debug.live_preview_runtime import HAND_CONNECTIONS, OverlayColors
 
 # Logger configuration should be completed at the application entry point.
@@ -18,21 +20,21 @@ logger = logging.getLogger("cam_preview")
 class CameraPreviewManager:
     """Camera preview manager, responsible for camera texture initialization, frame updates, GPU flipping, and position adaptation"""
     
-    def __init__(self, auto_scaling):
+    def __init__(self, auto_scaling: AutoScalingManager):
         """Initialize camera preview manager (dependency injection: auto_scaling)"""
-        self._auto_scaling = auto_scaling
+        self._auto_scaling: AutoScalingManager = auto_scaling
         self._pixel2d = auto_scaling._rendering_core.get_pixel2d()
-        self._ui_scale = auto_scaling.get_ui_scale()
-        self._camera_frame = None
-        self._last_observation = None
-        self._camera_texture = None
-        self._camera_preview_node = None
-        self._camera_preview_frame = None
-        self._camera_preview_title = None
-        self._camera_preview_status = None
-        self._camera_preview_enabled = False
-        self._last_camera_update_time = 0
-        self._camera_update_interval = 0.033  # 30fps
+        self._ui_scale: float = auto_scaling.get_ui_scale()
+        self._camera_frame: Optional[np.ndarray] = None
+        self._last_observation: Optional[RawHandObservation] = None
+        self._camera_texture: Optional[Texture] = None
+        self._camera_preview_node: Optional[NodePath] = None
+        self._camera_preview_frame: Optional[DirectFrame] = None
+        self._camera_preview_title: Optional[OnscreenText] = None
+        self._camera_preview_status: Optional[OnscreenText] = None
+        self._camera_preview_enabled: bool = False
+        self._last_camera_update_time: float = 0
+        self._camera_update_interval: float = 0.033  # 30fps
         self._colors = OverlayColors()
         self.init_preview()
     
@@ -95,7 +97,7 @@ class CameraPreviewManager:
             logger.warning(f"Camera preview initialization failed: {str(e)}")
             self._camera_preview_enabled = False
     
-    def update_frame(self, frame_bgr, observation=None) -> None:
+    def update_frame(self, frame_bgr: Optional[np.ndarray], observation: Optional[RawHandObservation] = None) -> None:
         """Update camera frame data"""
         if frame_bgr is not None and self._camera_preview_enabled:
             self._camera_frame = frame_bgr
@@ -136,7 +138,7 @@ class CameraPreviewManager:
             if self._camera_preview_status:
                 self._camera_preview_status.setText("Camera: Error")
     
-    def _draw_hand_skeleton(self, frame, observation) -> np.ndarray:
+    def _draw_hand_skeleton(self, frame: np.ndarray, observation: RawHandObservation) -> np.ndarray:
         """Draw hand skeleton (reuse live_preview logic)"""
         height, width = frame.shape[:2]
         
@@ -154,7 +156,7 @@ class CameraPreviewManager:
         
         return frame
     
-    def _landmark_to_pixel(self, landmark, width, height) -> tuple[int, int]:
+    def _landmark_to_pixel(self, landmark: Any, width: int, height: int) -> Tuple[int, int]:
         """Convert landmarks coordinates to pixel coordinates"""
         return (int(landmark.x * width), int(landmark.y * height))
     
@@ -178,7 +180,7 @@ class CameraPreviewManager:
                 original_scale = 20
                 new_pos = (original_pos[0] * scale, original_pos[1] * scale)
                 new_scale = original_scale * scale
-                self._camera_preview_title.setPos(*new_pos)
+                self._camera_preview_title['pos'] = (new_pos[0], 0, new_pos[1])
                 self._camera_preview_title['scale'] = new_scale
             except Exception as e:
                 logger.warning(f"Failed to scale camera preview title: {e}")
@@ -201,7 +203,7 @@ class CameraPreviewManager:
                 original_scale = 16
                 new_pos = (original_pos[0] * scale, original_pos[1] * scale)
                 new_scale = original_scale * scale
-                self._camera_preview_status.setPos(*new_pos)
+                self._camera_preview_status['pos'] = (new_pos[0], 0, new_pos[1])
                 self._camera_preview_status['scale'] = new_scale
             except Exception as e:
                 logger.warning(f"Failed to scale camera preview status: {e}")

@@ -5,7 +5,7 @@ from typing import Optional
 
 from panda3d.core import (
     WindowProperties, AmbientLight, DirectionalLight,
-    PerspectiveLens, NodePath
+    PerspectiveLens, NodePath, GraphicsWindow
 )
 from direct.showbase.ShowBase import ShowBase
 
@@ -32,9 +32,12 @@ class RenderingCoreManager:
             # Use correct way to set window properties
             self._base = ShowBase()
             # Set window background to white (original logic preserved)
-            self._base.setBackgroundColor(1, 1, 1, 1)
-            self._base.win.requestProperties(window_props)
-            self._is_initialized = True
+            if self._base:
+                self._base.setBackgroundColor(1, 1, 1, 1)
+                win: Optional[GraphicsWindow] = self._base.win
+                if win:
+                    win.requestProperties(window_props)
+                    self._is_initialized = True
             logger.info(f"Window initialized successfully: size={window_size}, title={window_title}")
         except Exception as e:
             logger.error(f"Window initialization failed: {str(e)}")
@@ -84,7 +87,7 @@ class RenderingCoreManager:
         """Get ShowBase instance (dependency injection)"""
         return self._base
     
-    def get_pixel2d(self):
+    def get_pixel2d(self) -> Optional[NodePath]:
         """Get pixel2d node (dependency injection)"""
         if not self._is_initialized or self._base is None:
             return None

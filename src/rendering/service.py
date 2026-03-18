@@ -58,7 +58,7 @@ class RenderingMetrics:
 
 
 class RenderingServiceImpl(RenderOutputPort):
-    """核心RenderOutputPort实现，用于渲染SceneCommand流（整合所有子模块）"""
+    """Core RenderOutputPort implementation for rendering SceneCommand stream (integrates all submodules)"""
     
     def __init__(self, window_adapter_factory: Callable[[], RenderingCoreManager] | None = None):
         super().__init__()
@@ -145,7 +145,7 @@ class RenderingServiceImpl(RenderOutputPort):
         return (x * scale_factor, z * scale_factor, y * scale_factor)
     
     def start(self) -> None:
-        """启动模块并初始化环境为RUNNING或DEGRADED（原有逻辑保留）"""
+        """Start module and initialize environment to RUNNING or DEGRADED (original logic preserved)"""
         if self._status == LIFECYCLE_RUNNING:
             return None
         
@@ -188,7 +188,7 @@ class RenderingServiceImpl(RenderOutputPort):
             raise RuntimeError(f"Module startup failed: {error['message']} (code: {error['code']})") from e
     
     def _handle_scale_change(self, scale: float) -> None:
-        """处理UI缩放变化"""
+        """Handle UI scale changes"""
         if self._data_panel:
             self._data_panel.set_ui_scale(scale)
         if self._camera_preview:
@@ -266,7 +266,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 logger.warning(f"Command processing failed: {details_msg}")
 
     def step(self) -> None:
-        """推进Panda3D事件/渲染循环，不离开应用主循环（原有逻辑保留）"""
+        """Advance Panda3D event/rendering loop without leaving application main loop (original logic preserved)"""
         if not self._rendering_core or not self._rendering_core.is_initialized():
             return
 
@@ -305,7 +305,7 @@ class RenderingServiceImpl(RenderOutputPort):
 
     
     def health(self) -> Dict[str, Any]:
-        """返回结构化健康信息，包括日志相关状态"""
+        """Return structured health information, including log-related status"""
         return build_health(
             component="rendering",
             lifecycle_state=self._status,
@@ -502,7 +502,7 @@ class RenderingServiceImpl(RenderOutputPort):
             self._metrics.pose_updates += 1
             self._metrics.commands_applied += 1
             
-            # 保存坐标数据用于显示
+            # Save coordinate data for display
             if self._data_panel:
                 self._data_panel.update_coordinate_data(tuple(clipped_pos), scene_pos)
             

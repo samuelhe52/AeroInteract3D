@@ -3,6 +3,10 @@ from __future__ import annotations
 import logging
 from typing import Optional, Callable
 
+from direct.showbase.ShowBase import ShowBase
+
+from .rendering_core import RenderingCoreManager
+
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("auto_scaling")
 
@@ -10,9 +14,9 @@ logger = logging.getLogger("auto_scaling")
 class AutoScalingManager:
     """Auto scaling manager, responsible for scaling factor calculation, main window size monitoring, and scaling range limits"""
     
-    def __init__(self, rendering_core):
+    def __init__(self, rendering_core: RenderingCoreManager):
         """Initialize auto scaling manager (dependency injection: rendering_core)"""
-        self._rendering_core = rendering_core
+        self._rendering_core: RenderingCoreManager = rendering_core
         self._last_window_size = (0, 0)  # Record last main window size
         self._base_window_size = (2560, 1440)  # Base size (original logic preserved)
         self._ui_scale = 1.0  # Exposed property
@@ -24,7 +28,7 @@ class AutoScalingManager:
     
     def update_window_scale(self) -> None:
         """Update scaling based on window size changes (original logic preserved)"""
-        base = self._rendering_core.get_base()
+        base: Optional[ShowBase] = self._rendering_core.get_base()
         if base is None or base.win is None:
             return
         
