@@ -91,6 +91,7 @@ def test_build_config_uses_default_target_fps() -> None:
     config = build_config(parse_args(["--no-run-config"]))
 
     assert config.target_fps == DEFAULT_TARGET_FPS
+    assert config.render_position_sensitivity == 1.0
     assert config.motion_preset == "medium"
     assert config.aggressive_release_guard is False
 
@@ -114,6 +115,7 @@ def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
                 "frame_width: 960",
                 "frame_height: 540",
                 "debug_stats: true",
+                "render_position_sensitivity: 1.5",
                 "motion_preset: low",
                 "aggressive_release_guard: true",
             ]
@@ -128,6 +130,7 @@ def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
     assert config.frame_width == 960
     assert config.frame_height == 540
     assert config.debug_stats is True
+    assert config.render_position_sensitivity == 1.5
     assert config.motion_preset == "low"
     assert config.aggressive_release_guard is True
 
@@ -194,6 +197,14 @@ def test_parse_args_disables_debug_stats_flag() -> None:
     assert config.debug_stats is False
 
 
+def test_parse_args_accepts_render_position_sensitivity() -> None:
+    args = parse_args(["--render-position-sensitivity", "1.75"])
+
+    config = build_config(args)
+
+    assert config.render_position_sensitivity == 1.75
+
+
 def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(monkeypatch) -> None:
     captured_gesture_kwargs: dict[str, object] = {}
     captured_render_kwargs: dict[str, object] = {}
@@ -222,6 +233,7 @@ def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(m
     assert captured_gesture_kwargs["motion_preset"] == "medium"
     assert captured_gesture_kwargs["aggressive_release_guard"] is False
     assert captured_render_kwargs["debug_stats_enabled"] is True
+    assert captured_render_kwargs["position_sensitivity"] == 1.0
     assert isinstance(app, App)
     assert app.gesture_input is not None
     assert app.bridge is fake_bridge

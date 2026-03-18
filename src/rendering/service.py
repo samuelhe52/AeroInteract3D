@@ -65,6 +65,7 @@ class RenderingServiceImpl(RenderOutputPort):
         window_adapter_factory: Callable[[], RenderingCoreManager] | None = None,
         *,
         debug_stats_enabled: bool = False,
+        position_sensitivity: float = 1.0,
     ):
         super().__init__()
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
@@ -72,6 +73,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._window_adapter = self._window_adapter_factory()
         self._rendering_core: Optional[RenderingCoreManager] = self._window_adapter
         self._debug_stats_enabled = debug_stats_enabled
+        self._position_sensitivity = max(float(position_sensitivity), 0.001)
         self._quit_callback: Callable[[], None] | None = None
         # Material cache keyed by interaction state.
         self._material_cache: Dict[str, Material] = self._init_materials()
@@ -150,6 +152,12 @@ class RenderingServiceImpl(RenderOutputPort):
         """
         x, y, z = (float(value) for value in position)
         return (x, z, y)
+
+    def _scale_world_norm_position(
+        self,
+        position: tuple[float, float, float] | list[float],
+    ) -> tuple[float, float, float]:
+        return tuple(float(value) * self._position_sensitivity for value in position)
     
     def start(self) -> None:
         """Start module and initialize environment to RUNNING or DEGRADED (original logic preserved)"""
@@ -522,7 +530,8 @@ class RenderingServiceImpl(RenderOutputPort):
             # 6. Validate coordinate ranges and clip to world_norm [-1.0, 1.0].
             clipped_pos = self._clip_coordinate(pos_float)
             clipped_hpr = self._clip_coordinate(hpr_float, rotation=True)  # Rotation is type-checked only and not range-limited.
-            scene_pos = self._world_norm_to_scene_pos(clipped_pos)
+            scaled_pos = self._scale_world_norm_position(clipped_pos)
+            scene_pos = self._world_norm_to_scene_pos(scaled_pos)
             
             # 7. Update the object transform.
             obj_np = self._object_cache[object_id]

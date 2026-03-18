@@ -325,6 +325,25 @@ def test_rendering_applies_pose_updates_with_axis_remap() -> None:
     assert obj.hpr == (0.0, 0.0, 0.0)
 
 
+def test_rendering_applies_position_sensitivity_to_pose_updates() -> None:
+    service = RenderingServiceImpl(position_sensitivity=1.5)
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="pose-scale-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={"position": {"x": 0.2, "y": 0.7, "z": -0.3}, "hpr": [0.0, 0.0, 0.0]},
+        )
+    )
+
+    assert obj.pos == (0.30000000000000004, -0.44999999999999996, 1.0499999999999998)
+
+
 def test_rendering_reset_restores_cached_scene_pose() -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING

@@ -36,6 +36,7 @@ RUN_CONFIG_KEYS = frozenset(
         "frame_width",
         "frame_height",
         "debug_stats",
+        "render_position_sensitivity",
         "motion_preset",
         "aggressive_release_guard",
     }
@@ -51,6 +52,7 @@ class AppConfig:
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
     debug_stats: bool = False
+    render_position_sensitivity: float = 1.0
     motion_preset: str = GESTURE_MOTION_PRESET
     aggressive_release_guard: bool = False
 
@@ -63,6 +65,7 @@ def _built_in_run_defaults() -> dict[str, object]:
         "frame_width": DEFAULT_FRAME_WIDTH,
         "frame_height": DEFAULT_FRAME_HEIGHT,
         "debug_stats": False,
+        "render_position_sensitivity": 1.0,
         "motion_preset": GESTURE_MOTION_PRESET,
         "aggressive_release_guard": False,
     }
@@ -97,6 +100,14 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
             if not isinstance(value, int) or isinstance(value, bool):
                 raise ValueError(f"Run config {path} field '{key}' must be an integer")
             validated[key] = value
+            continue
+
+        if key == "render_position_sensitivity":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise ValueError(f"Run config {path} field '{key}' must be a number")
+            if float(value) <= 0.0:
+                raise ValueError(f"Run config {path} field '{key}' must be greater than zero")
+            validated[key] = float(value)
             continue
 
         if key in {"debug_stats", "aggressive_release_guard"}:
@@ -231,6 +242,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--frame-width", type=int, default=defaults["frame_width"])
     parser.add_argument("--frame-height", type=int, default=defaults["frame_height"])
     parser.add_argument(
+        "--render-position-sensitivity",
+        type=float,
+        default=defaults["render_position_sensitivity"],
+        help="Sensitivity multiplier applied to object translation in the rendering module.",
+    )
+    parser.add_argument(
         "--motion-preset",
         choices=["high", "medium", "low"],
         default=defaults["motion_preset"],
@@ -283,6 +300,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         frame_width=args.frame_width,
         frame_height=args.frame_height,
         debug_stats=args.debug_stats,
+        render_position_sensitivity=args.render_position_sensitivity,
         motion_preset=args.motion_preset,
         aggressive_release_guard=args.aggressive_release_guard,
     )
@@ -299,7 +317,10 @@ def build_app(config: AppConfig) -> App:
         aggressive_release_guard=config.aggressive_release_guard,
     )
     bridge = BridgeServiceImpl()
-    render_output = RenderingServiceImpl(debug_stats_enabled=config.debug_stats)
+    render_output = RenderingServiceImpl(
+        debug_stats_enabled=config.debug_stats,
+        position_sensitivity=config.render_position_sensitivity,
+    )
     app = App(config, gesture_input, bridge, render_output)
     if hasattr(render_output, "set_quit_callback"):
         render_output.set_quit_callback(app.request_stop)
