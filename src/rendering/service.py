@@ -6,7 +6,7 @@ import logging
 from typing import List, Dict, Optional, Set, Any, Callable
 
 from panda3d.core import (
-    Material, Vec4, NodePath
+    Material, Vec4, NodePath, Vec3 as PandaVec3
 )
 
 from src.constants import MAX_ERROR_HISTORY, RENDER_POSE_LOG_DEBOUNCE_MS
@@ -22,6 +22,7 @@ from .rendering_core import RenderingCoreManager
 from .debug.auto_scaling import AutoScalingManager
 from .debug.data_panel import DataPanelManager
 from .debug.cam_preview import CameraPreviewManager
+from .interaction import VirtualHand
 
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
@@ -90,6 +91,20 @@ class RenderingServiceImpl(RenderOutputPort):
         self._metrics = RenderingMetrics()
         # For storing gesture data
         self._last_gesture_packet = None
+        self._last_observation = None
+        # Hand data stability counter for debouncing
+        self._hand_data_stable_count = 0
+        self._HAND_STABLE_THRESHOLD = 3  # 连续3帧有数据才显示
+        # Hand data stability counter for debouncing
+        self._hand_data_stable_count = 0
+        self._HAND_STABLE_THRESHOLD = 3  # 连续3帧有数据才显示
+        # Hand data stability counter for debouncing
+        self._hand_data_stable_count = 0
+        self._HAND_STABLE_THRESHOLD = 3  # 连续3帧有数据才显示
+        # Hand data stability counter for debouncing
+        self._hand_data_stable_count = 0
+        self._HAND_STABLE_THRESHOLD = 3  # 连续3帧有数据才显示
+        self._last_observation = None
         self._last_fps = 0.0
         # FPS calculation related
         self._frame_times = []
@@ -193,6 +208,13 @@ class RenderingServiceImpl(RenderOutputPort):
             # Create scene root node
             self._scene_root = NodePath("scene_root")
             self._scene_root.reparentTo(self._rendering_core.get_base().render)
+            
+            # Initialize virtual hand
+            base = self._rendering_core.get_base()
+            # 使用base.render作为父节点，确保虚拟手在正确的渲染层级
+            self._virtual_hand = VirtualHand(base=base, root_np=base.render)
+            logger.info("Virtual hand initialized successfully with base.render as parent")
+            
             # Switch state to RUNNING
             self._status = LIFECYCLE_RUNNING
             logger.info("Rendering module started successfully, state switched to RUNNING")
@@ -316,6 +338,33 @@ class RenderingServiceImpl(RenderOutputPort):
         if self._camera_preview and current_time - self._last_camera_update_time > self._camera_update_interval:
             self._camera_preview.update_preview()
             self._last_camera_update_time = current_time
+        
+        # Update virtual hand
+        if hasattr(self, '_virtual_hand'):
+            # 复用cam_preview验证过的RawHandObservation数据源
+            if self._last_observation is not None and hasattr(self._last_observation, 'landmarks'):
+                landmarks = self._last_observation.landmarks
+                # 核心：把自定义Vec3转为Panda3D能识别的Vec3
+                converted_landmarks = []
+                for lm in landmarks:
+                    # 逐个提取x/y/z值，创建Panda3D的Vec3
+                    panda_lm = PandaVec3(lm.x, lm.y, lm.z)
+                    converted_landmarks.append(panda_lm)
+                # 替换原有的landmarks变量
+                landmarks = converted_landmarks
+                
+                # 只有拿到21个有效关键点才更新
+                if landmarks and len(landmarks) == 21:
+                    self._hand_data_stable_count += 1
+                    if self._hand_data_stable_count >= self._HAND_STABLE_THRESHOLD:
+                        self._virtual_hand.update(landmarks)
+                else:
+                    self._hand_data_stable_count = 0
+                    self._virtual_hand.update(None)
+            else:
+                # 无有效数据，隐藏虚拟手
+                self._hand_data_stable_count = 0
+                self._virtual_hand.update(None)
 
         # Main window size monitoring + auto-scaling logic
         if self._auto_scaling:
@@ -376,8 +425,7 @@ class RenderingServiceImpl(RenderOutputPort):
         if self._rendering_core and self._rendering_core.is_initialized():
             base = self._rendering_core.get_base()
             base.taskMgr.stop()
-            base.win.close()
-            base.destroy()
+            base.userExit()
         
         self._window_adapter = self._window_adapter_factory()
         self._rendering_core = self._window_adapter
@@ -386,6 +434,10 @@ class RenderingServiceImpl(RenderOutputPort):
         self._data_panel = None
         self._camera_preview = None
         self._auto_scaling = None
+        # Clean up virtual hand
+        if hasattr(self, '_virtual_hand') and self._virtual_hand:
+            self._virtual_hand.root.removeNode()
+            self._virtual_hand = None
         self._status = LIFECYCLE_STOPPED
         logger.info("Rendering module stopped, all resources released")
         return None
@@ -994,6 +1046,8 @@ class RenderingServiceImpl(RenderOutputPort):
         """Update camera frame data"""
         if self._camera_preview:
             self._camera_preview.update_frame(frame, observation)
+        # Store observation for virtual hand
+        self._last_observation = observation
 
     def enable_camera_preview(self, enabled: bool = True) -> None:
         """Enable or disable camera preview"""
