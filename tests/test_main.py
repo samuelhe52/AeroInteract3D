@@ -90,6 +90,7 @@ def test_parse_args_enables_debug_stats_flag() -> None:
 def test_build_config_uses_default_target_fps() -> None:
     config = build_config(parse_args(["--no-run-config"]))
 
+    assert config.flip_camera is True
     assert config.target_fps == DEFAULT_TARGET_FPS
     assert config.render_position_sensitivity == 1.0
     assert config.motion_preset == "medium"
@@ -111,6 +112,7 @@ def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
         "\n".join(
             [
                 "camera_index: 2",
+                "flip_camera: false",
                 "target_fps: 55",
                 "frame_width: 960",
                 "frame_height: 540",
@@ -126,6 +128,7 @@ def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
     config = build_config(parse_args([]))
 
     assert config.camera_index == 2
+    assert config.flip_camera is False
     assert config.target_fps == 55
     assert config.frame_width == 960
     assert config.frame_height == 540
@@ -197,6 +200,14 @@ def test_parse_args_disables_debug_stats_flag() -> None:
     assert config.debug_stats is False
 
 
+def test_parse_args_disables_camera_flip() -> None:
+    args = parse_args(["--no-flip-camera"])
+
+    config = build_config(args)
+
+    assert config.flip_camera is False
+
+
 def test_parse_args_accepts_render_position_sensitivity() -> None:
     args = parse_args(["--render-position-sensitivity", "1.75"])
 
@@ -230,6 +241,7 @@ def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(m
     app = main.build_app(AppConfig(debug_stats=True))
 
     assert captured_gesture_kwargs["preview_enabled"] is False
+    assert captured_gesture_kwargs["flip_camera"] is True
     assert captured_gesture_kwargs["motion_preset"] == "medium"
     assert captured_gesture_kwargs["aggressive_release_guard"] is False
     assert captured_render_kwargs["debug_stats_enabled"] is True

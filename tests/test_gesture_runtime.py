@@ -7,7 +7,53 @@ import numpy as np
 import pytest
 
 from src.contracts import Vec3
-from src.gesture.runtime import HandLandmarkerRuntime, landmark_to_camera_vec3
+from src.gesture.runtime import CaptureRuntime, HandLandmarkerRuntime, landmark_to_camera_vec3
+
+
+class FakeVideoCapture:
+    def __init__(self, camera_index: int) -> None:
+        self.camera_index = camera_index
+        self.frame = np.arange(12, dtype=np.uint8).reshape((2, 2, 3))
+        self.settings: dict[int, float] = {}
+        self.released = False
+
+    def isOpened(self) -> bool:
+        return True
+
+    def set(self, key: int, value: float) -> None:
+        self.settings[key] = value
+
+    def read(self) -> tuple[bool, np.ndarray]:
+        return True, self.frame.copy()
+
+    def release(self) -> None:
+        self.released = True
+
+
+def test_capture_runtime_flips_frames_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cv2, "VideoCapture", FakeVideoCapture)
+
+    runtime = CaptureRuntime(camera_index=0, frame_width=640, frame_height=480, target_fps=30.0)
+    frame = runtime.read()
+
+    assert frame is not None
+    assert np.array_equal(frame, np.flip(FakeVideoCapture(0).frame, axis=1))
+
+
+def test_capture_runtime_can_leave_frames_unflipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cv2, "VideoCapture", FakeVideoCapture)
+
+    runtime = CaptureRuntime(
+        camera_index=0,
+        frame_width=640,
+        frame_height=480,
+        target_fps=30.0,
+        flip_horizontal=False,
+    )
+    frame = runtime.read()
+
+    assert frame is not None
+    assert np.array_equal(frame, FakeVideoCapture(0).frame)
 
 
 def test_landmark_to_camera_vec3_preserves_negative_xy_coordinates() -> None:

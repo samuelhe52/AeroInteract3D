@@ -32,6 +32,7 @@ RUN_CONFIG_KEYS = frozenset(
     {
         "log_level",
         "camera_index",
+        "flip_camera",
         "target_fps",
         "frame_width",
         "frame_height",
@@ -48,6 +49,7 @@ class AppConfig:
     contract_version: str = "0.1.0"
     log_level: str = "INFO"
     camera_index: int = DEFAULT_CAMERA_INDEX
+    flip_camera: bool = True
     target_fps: int = DEFAULT_TARGET_FPS
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
@@ -61,6 +63,7 @@ def _built_in_run_defaults() -> dict[str, object]:
     return {
         "log_level": "INFO",
         "camera_index": DEFAULT_CAMERA_INDEX,
+        "flip_camera": True,
         "target_fps": DEFAULT_TARGET_FPS,
         "frame_width": DEFAULT_FRAME_WIDTH,
         "frame_height": DEFAULT_FRAME_HEIGHT,
@@ -88,6 +91,12 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
         if key in {"log_level", "motion_preset"}:
             if not isinstance(value, str):
                 raise ValueError(f"Run config {path} field '{key}' must be a string")
+            validated[key] = value
+            continue
+
+        if key == "flip_camera":
+            if not isinstance(value, bool):
+                raise ValueError(f"Run config {path} field '{key}' must be a boolean")
             validated[key] = value
             continue
 
@@ -238,6 +247,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--log-level", default=defaults["log_level"])
     parser.add_argument("--camera-index", type=int, default=defaults["camera_index"])
+    parser.add_argument(
+        "--flip-camera",
+        dest="flip_camera",
+        action="store_true",
+        help="Mirror the camera input horizontally.",
+    )
+    parser.add_argument(
+        "--no-flip-camera",
+        dest="flip_camera",
+        action="store_false",
+        help="Keep the camera input unmirrored.",
+    )
     parser.add_argument("--target-fps", type=int, default=defaults["target_fps"])
     parser.add_argument("--frame-width", type=int, default=defaults["frame_width"])
     parser.add_argument("--frame-height", type=int, default=defaults["frame_height"])
@@ -278,6 +299,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Hide the gesture statistics overlay and keep only the in-window camera preview.",
     )
     parser.set_defaults(
+        flip_camera=defaults["flip_camera"],
         debug_stats=defaults["debug_stats"],
         aggressive_release_guard=defaults["aggressive_release_guard"],
     )
@@ -296,6 +318,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
     return AppConfig(
         log_level=args.log_level.upper(),
         camera_index=args.camera_index,
+        flip_camera=args.flip_camera,
         target_fps=args.target_fps,
         frame_width=args.frame_width,
         frame_height=args.frame_height,
@@ -309,6 +332,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
 def build_app(config: AppConfig) -> App:
     gesture_input = GestureServiceImpl(
         camera_index=config.camera_index,
+        flip_camera=config.flip_camera,
         target_fps=float(config.target_fps),
         frame_width=config.frame_width,
         frame_height=config.frame_height,

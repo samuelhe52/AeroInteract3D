@@ -92,6 +92,7 @@ The main app entrypoint in `main.py` currently supports:
 - `--run-config`
 - `--no-run-config`
 - `--camera-index`
+- `--flip-camera`
 - `--target-fps`
 - `--frame-width`
 - `--frame-height`

@@ -63,10 +63,12 @@ class CaptureRuntime:
         frame_width: int,
         frame_height: int,
         target_fps: float,
+        flip_horizontal: bool = True,
     ) -> None:
         self._capture = cv2.VideoCapture(camera_index)
         if not self._capture.isOpened():
             raise RuntimeError(f"Unable to open camera index {camera_index}")
+        self._flip_horizontal = flip_horizontal
 
         self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
@@ -76,7 +78,9 @@ class CaptureRuntime:
         ok, frame = self._capture.read()
         if not ok:
             return None
-        return cv2.flip(frame, 1)
+        if self._flip_horizontal:
+            return cv2.flip(frame, 1)
+        return frame
 
     def close(self) -> None:
         self._capture.release()
