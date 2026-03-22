@@ -66,6 +66,7 @@ class RenderingServiceImpl(RenderOutputPort):
         window_adapter_factory: Callable[[], RenderingCoreManager] | None = None,
         *,
         debug_stats_enabled: bool = False,
+        virtual_hand_config: dict | None = None,
     ):
         super().__init__()
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
@@ -92,9 +93,11 @@ class RenderingServiceImpl(RenderOutputPort):
         # For storing gesture data
         self._last_gesture_packet = None
         self._last_observation = None
+        # Virtual hand configuration
+        self._virtual_hand_config = virtual_hand_config or {}
         # Hand data stability counter for debouncing
         self._hand_data_stable_count = 0
-        self._HAND_STABLE_THRESHOLD = 3  # 连续3帧有数据才显示
+        self._HAND_STABLE_THRESHOLD = self._virtual_hand_config.get("stable_threshold", 3)
         # Hand data stability counter for debouncing
         self._hand_data_stable_count = 0
         self._HAND_STABLE_THRESHOLD = 3  # 连续3帧有数据才显示
@@ -212,7 +215,11 @@ class RenderingServiceImpl(RenderOutputPort):
             # Initialize virtual hand
             base = self._rendering_core.get_base()
             # 使用base.render作为父节点，确保虚拟手在正确的渲染层级
-            self._virtual_hand = VirtualHand(base=base, root_np=base.render)
+            self._virtual_hand = VirtualHand(
+                base=base, 
+                root_np=base.render,
+                config=self._virtual_hand_config
+            )
             logger.info("Virtual hand initialized successfully with base.render as parent")
             
             # Switch state to RUNNING

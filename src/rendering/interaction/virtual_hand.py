@@ -1,14 +1,21 @@
 """Virtual hand rendering with collision detection"""
 
-from panda3d.core import NodePath, CollisionSphere, CollisionNode, Vec3, LineSegs
-from src.gesture.debug.live_preview_runtime import HAND_CONNECTIONS
 from typing import List, Optional
+from panda3d.core import LineSegs, Vec3, NodePath, CollisionSphere, CollisionNode
+from src.gesture.debug.live_preview_runtime import HAND_CONNECTIONS
 
 
 class VirtualHand:
-    def __init__(self, base, root_np: NodePath):
+    def __init__(self, base, root_np: NodePath, config: dict | None = None):
         self.base = base
         self.root = root_np.attachNewNode("virtual_hand")
+        
+        # 配置参数
+        self.config = config or {}
+        self.SCALE = self.config.get("scale", 4.0)
+        self.DEPTH_SCALE = self.config.get("depth_scale", 8.0)
+        self.BONE_COLOR = self.config.get("bone_color", [1.0, 0.5, 0.0])
+        self.BONE_WIDTH = self.config.get("bone_width", 2.0)
         
         # 21个关键点小球
         self.landmark_spheres: List[NodePath] = []
@@ -66,8 +73,8 @@ class VirtualHand:
         for start_idx, end_idx in HAND_CONNECTIONS:
             # 创建线段
             segs = LineSegs()
-            segs.setColor(1, 0.5, 0, 1)  # 橙色，和左上角预览一致
-            segs.setThickness(2)  # 线宽
+            segs.setColor(*self.BONE_COLOR, 1)  # 从配置读取颜色
+            segs.setThickness(self.BONE_WIDTH)  # 从配置读取线宽
             segs.moveTo(0, 0, 0)  # 临时位置
             segs.drawTo(0, 0, 0)  # 临时位置
             # 创建节点并添加到root
@@ -85,13 +92,11 @@ class VirtualHand:
         self.root.show()
         
         # 【核心】正确的坐标转换，禁止乱改
-        SCALE = 3.0  # 调整缩放系数
-        DEPTH_SCALE = 4.0  # 调整深度缩放
         converted = []
         for lm in landmarks:
-            x = -(lm.x - 0.5) * SCALE  # 左右
-            y = -lm.z * DEPTH_SCALE     # 前后深度（负号确保在相机前方）
-            z = (0.5 - lm.y) * SCALE    # 上下
+            x = -(lm.x - 0.5) * self.SCALE  # 左右
+            y = -lm.z * self.DEPTH_SCALE     # 前后深度（负号确保在相机前方）
+            z = (0.5 - lm.y) * self.SCALE    # 上下
             converted.append(Vec3(x, y, z))
         
         # 更新关键点
@@ -105,18 +110,24 @@ class VirtualHand:
         if len(converted) >= 5:
             self.thumb_collider.setPos(converted[4])
         
-        # 更新骨骼连线
+        # 更新骨骼连线（修复版）
         for i, (start_idx, end_idx) in enumerate(HAND_CONNECTIONS):
             if i < len(self.bone_lines) and start_idx < len(converted) and end_idx < len(converted):
                 start_pos = converted[start_idx]
                 end_pos = converted[end_idx]
-                # 重新创建线段
+                
+                # 1. 先移除旧的线段节点
+                self.bone_lines[i].removeNode()
+                
+                # 2. 创建新的线段
                 segs = LineSegs()
-                segs.setColor(1, 0.5, 0, 1)  # 橙色
-                segs.setThickness(2)  # 线宽
+                segs.setColor(*self.BONE_COLOR, 1.0)
+                segs.setThickness(self.BONE_WIDTH)
                 segs.moveTo(start_pos)
                 segs.drawTo(end_pos)
-                # 更新线段
-                line_node = segs.create()
-                self.bone_lines[i].removeNode()
-                self.bone_lines[i] = self.root.attachNewNode(line_node)
+                
+                # 3. 生成新节点并挂载
+                new_line_np = self.root.attachNewNode(segs.create())
+                
+                # 4. 更新列表里的引用
+                self.bone_lines[i] = new_line_np

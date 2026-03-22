@@ -38,6 +38,7 @@ RUN_CONFIG_KEYS = frozenset(
         "debug_stats",
         "motion_preset",
         "aggressive_release_guard",
+        "virtual_hand",
     }
 )
 
@@ -53,6 +54,7 @@ class AppConfig:
     debug_stats: bool = False
     motion_preset: str = GESTURE_MOTION_PRESET
     aggressive_release_guard: bool = False
+    virtual_hand: dict | None = None
 
 
 def _built_in_run_defaults() -> dict[str, object]:
@@ -65,6 +67,13 @@ def _built_in_run_defaults() -> dict[str, object]:
         "debug_stats": False,
         "motion_preset": GESTURE_MOTION_PRESET,
         "aggressive_release_guard": False,
+        "virtual_hand": {
+            "scale": 4.0,
+            "depth_scale": 8.0,
+            "stable_threshold": 3,
+            "bone_color": [1.0, 0.5, 0.0],
+            "bone_width": 2.0,
+        },
     }
 
 
@@ -102,6 +111,23 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
         if key in {"debug_stats", "aggressive_release_guard"}:
             if not isinstance(value, bool):
                 raise ValueError(f"Run config {path} field '{key}' must be a boolean")
+            validated[key] = value
+            continue
+
+        if key == "virtual_hand":
+            if not isinstance(value, dict):
+                raise ValueError(f"Run config {path} field '{key}' must be a dictionary")
+            # Validate virtual_hand subfields
+            if "scale" in value and not isinstance(value["scale"], (int, float)):
+                raise ValueError(f"Run config {path} field 'virtual_hand.scale' must be a number")
+            if "depth_scale" in value and not isinstance(value["depth_scale"], (int, float)):
+                raise ValueError(f"Run config {path} field 'virtual_hand.depth_scale' must be a number")
+            if "stable_threshold" in value and not (isinstance(value["stable_threshold"], int) and value["stable_threshold"] > 0):
+                raise ValueError(f"Run config {path} field 'virtual_hand.stable_threshold' must be a positive integer")
+            if "bone_color" in value and not (isinstance(value["bone_color"], list) and len(value["bone_color"]) == 3):
+                raise ValueError(f"Run config {path} field 'virtual_hand.bone_color' must be a list of 3 numbers")
+            if "bone_width" in value and not isinstance(value["bone_width"], (int, float)):
+                raise ValueError(f"Run config {path} field 'virtual_hand.bone_width' must be a number")
             validated[key] = value
             continue
 
@@ -276,6 +302,14 @@ def setup_logging(level: str) -> None:
 
 
 def build_config(args: argparse.Namespace) -> AppConfig:
+    # Get virtual hand config from defaults
+    import sys
+    from pathlib import Path
+    
+    # Load run config to get virtual_hand settings
+    defaults, _ = _resolve_run_defaults(sys.argv[1:])
+    virtual_hand_config = defaults.get("virtual_hand", {})
+    
     return AppConfig(
         log_level=args.log_level.upper(),
         camera_index=args.camera_index,
@@ -285,6 +319,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         debug_stats=args.debug_stats,
         motion_preset=args.motion_preset,
         aggressive_release_guard=args.aggressive_release_guard,
+        virtual_hand=virtual_hand_config,
     )
 
 
@@ -299,7 +334,10 @@ def build_app(config: AppConfig) -> App:
         aggressive_release_guard=config.aggressive_release_guard,
     )
     bridge = BridgeServiceImpl()
-    render_output = RenderingServiceImpl(debug_stats_enabled=config.debug_stats)
+    render_output = RenderingServiceImpl(
+        debug_stats_enabled=config.debug_stats,
+        virtual_hand_config=config.virtual_hand,
+    )
     app = App(config, gesture_input, bridge, render_output)
     if hasattr(render_output, "set_quit_callback"):
         render_output.set_quit_callback(app.request_stop)
