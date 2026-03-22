@@ -5,4 +5,4 @@ frame_width: 1280
 frame_height: 960
 debug_stats: false
 motion_preset: medium
-aggressive_release_guard: false
+aggressive_release_guard: true

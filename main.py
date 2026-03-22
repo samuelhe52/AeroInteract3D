@@ -6,16 +6,12 @@ import signal
 import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
-import yaml
-
-from src.gesture.constants import (
+from src.constants import (
     DEFAULT_CAMERA_INDEX,
     DEFAULT_FRAME_HEIGHT,
     DEFAULT_FRAME_WIDTH,
     DEFAULT_TARGET_FPS,
-    GESTURE_MOTION_PRESET,
 )
 from src.bridge.service import BridgeServiceImpl
 from src.gesture.service import GestureServiceImpl
@@ -26,20 +22,6 @@ from src.rendering.service import RenderingServiceImpl
 LIFECYCLE_INITIALIZING = "INITIALIZING"
 LIFECYCLE_RUNNING = "RUNNING"
 LIFECYCLE_STOPPED = "STOPPED"
-DEFAULT_RUN_CONFIG_PATH = Path(".run.yaml")
-RUN_CONFIG_HELP = "Path to a YAML file with machine-local default run options."
-RUN_CONFIG_KEYS = frozenset(
-    {
-        "log_level",
-        "camera_index",
-        "target_fps",
-        "frame_width",
-        "frame_height",
-        "debug_stats",
-        "motion_preset",
-        "aggressive_release_guard",
-    }
-)
 
 
 @dataclass(slots=True)
@@ -50,96 +32,7 @@ class AppConfig:
     target_fps: int = DEFAULT_TARGET_FPS
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
-    debug_stats: bool = False
-    motion_preset: str = GESTURE_MOTION_PRESET
-    aggressive_release_guard: bool = False
-
-
-def _built_in_run_defaults() -> dict[str, object]:
-    return {
-        "log_level": "INFO",
-        "camera_index": DEFAULT_CAMERA_INDEX,
-        "target_fps": DEFAULT_TARGET_FPS,
-        "frame_width": DEFAULT_FRAME_WIDTH,
-        "frame_height": DEFAULT_FRAME_HEIGHT,
-        "debug_stats": False,
-        "motion_preset": GESTURE_MOTION_PRESET,
-        "aggressive_release_guard": False,
-    }
-
-
-def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
-    if config_data is None:
-        return {}
-    if not isinstance(config_data, dict):
-        raise ValueError(f"Run config {path} must contain a top-level mapping")
-
-    unknown_keys = sorted(set(config_data) - RUN_CONFIG_KEYS)
-    if unknown_keys:
-        joined_keys = ", ".join(unknown_keys)
-        raise ValueError(f"Run config {path} contains unsupported keys: {joined_keys}")
-
-    validated: dict[str, object] = {}
-
-    for key, value in config_data.items():
-        if key in {"log_level", "motion_preset"}:
-            if not isinstance(value, str):
-                raise ValueError(f"Run config {path} field '{key}' must be a string")
-            validated[key] = value
-            continue
-
-        if key in {
-            "camera_index",
-            "target_fps",
-            "frame_width",
-            "frame_height",
-        }:
-            if not isinstance(value, int) or isinstance(value, bool):
-                raise ValueError(f"Run config {path} field '{key}' must be an integer")
-            validated[key] = value
-            continue
-
-        if key in {"debug_stats", "aggressive_release_guard"}:
-            if not isinstance(value, bool):
-                raise ValueError(f"Run config {path} field '{key}' must be a boolean")
-            validated[key] = value
-            continue
-
-    motion_preset = validated.get("motion_preset")
-    if motion_preset is not None and motion_preset not in {"high", "medium", "low"}:
-        raise ValueError(
-            f"Run config {path} field 'motion_preset' must be one of: high, medium, low"
-        )
-
-    return validated
-
-
-def load_run_config(path: Path | None) -> dict[str, object]:
-    if path is None or not path.is_file():
-        return {}
-
-    with path.open("r", encoding="utf-8") as handle:
-        return _validate_run_config(yaml.safe_load(handle), path)
-
-
-def _resolve_run_defaults(argv: list[str] | None) -> tuple[dict[str, object], Path | None]:
-    bootstrap_parser = argparse.ArgumentParser(add_help=False)
-    bootstrap_parser.add_argument("--run-config", default=str(DEFAULT_RUN_CONFIG_PATH))
-    bootstrap_parser.add_argument("--no-run-config", action="store_true")
-    bootstrap_args, _ = bootstrap_parser.parse_known_args(argv)
-
-    if bootstrap_args.no_run_config:
-        return _built_in_run_defaults(), None
-
-    run_config_path = Path(bootstrap_args.run_config)
-    try:
-        run_defaults = load_run_config(run_config_path)
-    except ValueError as exc:
-        bootstrap_parser.error(str(exc))
-
-    defaults = _built_in_run_defaults()
-    defaults.update(run_defaults)
-    return defaults, run_config_path
+    live_preview: bool = True
 
 
 class App:
@@ -156,6 +49,7 @@ class App:
         self.render_output = render_output
         self.lifecycle_state = LIFECYCLE_INITIALIZING
         self._running = False
+        self._rotation_log_counter = 0
 
     def initialize(self) -> None:
         logging.info("Initializing application")
@@ -180,12 +74,26 @@ class App:
             packet = self.gesture_input.poll()
             if packet is not None:
                 self.render_output.update_gesture_data(packet)
-                
-                if hasattr(self.gesture_input, 'get_camera_data'):
+
+                rotation = packet.debug.get("rotation") if isinstance(packet.debug, dict) else None
+                if isinstance(rotation, dict):
+                    self._rotation_log_counter += 1
+                    if self._rotation_log_counter >= 6:
+                        self._rotation_log_counter = 0
+                        logging.info(
+                            "rotation enabled=%s rotating=%s slot=%s/%s src=%s",
+                            bool(rotation.get("enabled", False)),
+                            bool(rotation.get("rotating", False)),
+                            int(rotation.get("slot", 0)),
+                            int(rotation.get("slot_count", 0)),
+                            str(rotation.get("source", "none")),
+                        )
+
+                if hasattr(self.gesture_input, "get_camera_data"):
                     camera_frame, observation = self.gesture_input.get_camera_data()
                     if camera_frame is not None:
                         self.render_output.update_camera_frame(camera_frame, observation, packet)
-                
+
                 commands = self.bridge.process(packet)
                 for command in commands:
                     self.render_output.push(command)
@@ -217,53 +125,25 @@ class App:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    defaults, run_config_path = _resolve_run_defaults(argv)
     parser = argparse.ArgumentParser(description="AeroInteract3D bootstrap entrypoint")
-    parser.add_argument("--run-config", default=None if run_config_path is None else str(run_config_path), help=RUN_CONFIG_HELP)
+    parser.add_argument("--log-level", default="INFO")
+    parser.add_argument("--camera-index", type=int, default=DEFAULT_CAMERA_INDEX)
+    parser.add_argument("--target-fps", type=int, default=DEFAULT_TARGET_FPS)
+    parser.add_argument("--frame-width", type=int, default=DEFAULT_FRAME_WIDTH)
+    parser.add_argument("--frame-height", type=int, default=DEFAULT_FRAME_HEIGHT)
     parser.add_argument(
-        "--no-run-config",
+        "--live-preview",
+        dest="live_preview",
         action="store_true",
-        help="Ignore .run.yaml and use built-in defaults unless CLI flags override them.",
-    )
-    parser.add_argument("--log-level", default=defaults["log_level"])
-    parser.add_argument("--camera-index", type=int, default=defaults["camera_index"])
-    parser.add_argument("--target-fps", type=int, default=defaults["target_fps"])
-    parser.add_argument("--frame-width", type=int, default=defaults["frame_width"])
-    parser.add_argument("--frame-height", type=int, default=defaults["frame_height"])
-    parser.add_argument(
-        "--motion-preset",
-        choices=["high", "medium", "low"],
-        default=defaults["motion_preset"],
-        help="Motion response preset for gesture smoothing and loss prediction.",
+        help="Show the current camera stream in an OpenCV preview window alongside Panda3D.",
     )
     parser.add_argument(
-        "--aggressive-release-guard",
-        dest="aggressive_release_guard",
-        action="store_true",
-        help="Require higher-quality observations before pinch release is accepted.",
-    )
-    parser.add_argument(
-        "--no-aggressive-release-guard",
-        dest="aggressive_release_guard",
+        "--no-live-preview",
+        dest="live_preview",
         action="store_false",
-        help="Disable the stricter pinch release guard even if it is enabled in .run.yaml.",
+        help="Disable the OpenCV live preview window to reduce CPU/GPU overhead.",
     )
-    parser.add_argument(
-        "--debug-stats",
-        dest="debug_stats",
-        action="store_true",
-        help="Show gesture statistics alongside the in-window camera preview.",
-    )
-    parser.add_argument(
-        "--no-debug-stats",
-        dest="debug_stats",
-        action="store_false",
-        help="Hide the gesture statistics overlay and keep only the in-window camera preview.",
-    )
-    parser.set_defaults(
-        debug_stats=defaults["debug_stats"],
-        aggressive_release_guard=defaults["aggressive_release_guard"],
-    )
+    parser.set_defaults(live_preview=False)
     return parser.parse_args(argv)
 
 
@@ -282,9 +162,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         target_fps=args.target_fps,
         frame_width=args.frame_width,
         frame_height=args.frame_height,
-        debug_stats=args.debug_stats,
-        motion_preset=args.motion_preset,
-        aggressive_release_guard=args.aggressive_release_guard,
+        live_preview=args.live_preview,
     )
 
 
@@ -294,16 +172,11 @@ def build_app(config: AppConfig) -> App:
         target_fps=float(config.target_fps),
         frame_width=config.frame_width,
         frame_height=config.frame_height,
-        preview_enabled=False,
-        motion_preset=config.motion_preset,
-        aggressive_release_guard=config.aggressive_release_guard,
+        preview_enabled=config.live_preview,
     )
     bridge = BridgeServiceImpl()
-    render_output = RenderingServiceImpl(debug_stats_enabled=config.debug_stats)
-    app = App(config, gesture_input, bridge, render_output)
-    if hasattr(render_output, "set_quit_callback"):
-        render_output.set_quit_callback(app.request_stop)
-    return app
+    render_output = RenderingServiceImpl()
+    return App(config, gesture_input, bridge, render_output)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -335,4 +208,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    raise SystemExit(main(sys.argv[1:])) 
