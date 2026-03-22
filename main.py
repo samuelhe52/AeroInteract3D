@@ -176,6 +176,7 @@ class App:
         self.render_output = render_output
         self.lifecycle_state = LIFECYCLE_INITIALIZING
         self._running = False
+        self._rotation_log_counter = 0
 
     def initialize(self) -> None:
         logging.info("Initializing application")
@@ -200,12 +201,26 @@ class App:
             packet = self.gesture_input.poll()
             if packet is not None:
                 self.render_output.update_gesture_data(packet)
-                
-                if hasattr(self.gesture_input, 'get_camera_data'):
+
+                rotation = packet.debug.get("rotation") if isinstance(packet.debug, dict) else None
+                if isinstance(rotation, dict):
+                    self._rotation_log_counter += 1
+                    if self._rotation_log_counter >= 6:
+                        self._rotation_log_counter = 0
+                        logging.info(
+                            "rotation enabled=%s rotating=%s slot=%s/%s src=%s",
+                            bool(rotation.get("enabled", False)),
+                            bool(rotation.get("rotating", False)),
+                            int(rotation.get("slot", 0)),
+                            int(rotation.get("slot_count", 0)),
+                            str(rotation.get("source", "none")),
+                        )
+
+                if hasattr(self.gesture_input, "get_camera_data"):
                     camera_frame, observation = self.gesture_input.get_camera_data()
                     if camera_frame is not None:
                         self.render_output.update_camera_frame(camera_frame, observation, packet)
-                
+
                 commands = self.bridge.process(packet)
                 for command in commands:
                     self.render_output.push(command)
@@ -239,7 +254,11 @@ class App:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     defaults, run_config_path = _resolve_run_defaults(argv)
     parser = argparse.ArgumentParser(description="AeroInteract3D bootstrap entrypoint")
-    parser.add_argument("--run-config", default=None if run_config_path is None else str(run_config_path), help=RUN_CONFIG_HELP)
+    parser.add_argument(
+        "--run-config",
+        default=None if run_config_path is None else str(run_config_path),
+        help=RUN_CONFIG_HELP,
+    )
     parser.add_argument(
         "--no-run-config",
         action="store_true",

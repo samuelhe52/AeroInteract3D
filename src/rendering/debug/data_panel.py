@@ -18,7 +18,7 @@ class DataPanelManager:
     """Data panel manager, responsible for data panel frame+text initialization, gesture data updates, and scaling adaptation"""
 
     PANEL_WIDTH = 384
-    PANEL_HEIGHT = 180
+    PANEL_HEIGHT = 220
     PANEL_MARGIN = 12
     PANEL_GAP = 12
     TEXT_OFFSET_X = 18
@@ -105,9 +105,40 @@ class DataPanelManager:
                 f"fps: {fps:.1f}",
                 f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
                 f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
-            )
-        
+            ) + self._rotation_lines(packet)
+
         self._status_panel.setText("\n".join(lines))
+
+    @staticmethod
+    def _rotation_lines(packet: GesturePacket) -> tuple[str, ...]:
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return ()
+
+        rotation = debug_payload.get("rotation")
+        if not isinstance(rotation, dict):
+            return ()
+
+        slot = int(rotation.get("slot", 0))
+        slot_count = int(rotation.get("slot_count", 0))
+        slot_x = int(rotation.get("slot_x", slot))
+        slot_y = int(rotation.get("slot_y", slot))
+        slot_z = int(rotation.get("slot_z", slot))
+        deg_x = float(rotation.get("deg_x", 0.0))
+        deg_y = float(rotation.get("deg_y", 0.0))
+        deg_z = float(rotation.get("deg_z", 0.0))
+        enabled = bool(rotation.get("enabled", False))
+        rotating = bool(rotation.get("rotating", False))
+        mode_name = str(rotation.get("mode_name", "MOVE_ONLY"))
+        gate_count = int(rotation.get("gate_count", 0))
+        source = str(rotation.get("source", "none"))
+
+        return (
+            f"rotation: {mode_name} enabled={enabled} rotating={rotating}",
+            f"rot_slot xyz: ({slot_x:02d}, {slot_y:02d}, {slot_z:02d})/{slot_count:02d}",
+            f"rot_deg xyz: ({deg_x:+05.1f}, {deg_y:+05.1f}, {deg_z:+05.1f})",
+            f"rot_gate: {gate_count} source: {source}",
+        )
     
     def update_coordinate_data(self, world_norm_pos: tuple, scene_pos: tuple) -> None:
         """Update coordinate data for display"""
