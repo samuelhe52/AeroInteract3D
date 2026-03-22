@@ -33,28 +33,31 @@ from src.gesture.constants import (
     RELAXED_OPEN_MARGIN_MIN,
     RELAXED_QUALITY_CONFIDENCE,
     RELAXED_RELEASE_CONFIRM_FRAMES,
+    ROT_EQ_ACTIVE_MIN_DEG,
+    ROT_EQ_DEADZONE_X,
+    ROT_EQ_DEADZONE_Y,
+    ROT_EQ_DEADZONE_Z,
+    ROT_EQ_GAIN_X,
+    ROT_EQ_GAIN_Y,
+    ROT_EQ_GAIN_Z,
+    ROT_EQ_STEP_THRESHOLD_X,
+    ROT_EQ_STEP_THRESHOLD_Y,
+    ROT_EQ_STEP_THRESHOLD_Z,
     ROT_DELTA_CLAMP_DEG,
     ROT_DELTA_NOISE_DEG,
-    ROT_GAIN,
     ROT_GATE_FRAMES,
     ROT_GATE_RELEASE_FRAMES,
-    ROT_MODE_ACTIVATE_CYCLES,
-    ROT_MODE_PINCH_MAX_FRAMES,
-    ROT_MODE_PINCH_MIN_FRAMES,
-    ROT_MODE_WINDOW_FRAMES,
+    ROT_HAND_GRAB_TIP_SPREAD_MAX,
+    ROT_MODE_GRAB_MIN_FRAMES,
+    ROT_MODE_OPEN_MIN_FRAMES,
+    ROT_MODE_TOGGLE_COOLDOWN_MS,
+    ROT_MODE_TIMEOUT_FRAMES,
     ROT_OPPOSITE_JITTER_SUPPRESS_DEG,
-    ROT_PINCH_ANGULAR_ACTIVE_DEG,
-    ROT_PINCH_ANGULAR_STILL_DEG,
     ROT_SLOT_COUNT,
     ROT_SLOT_STEP_DEG,
     ROT_STEP_ACCUM_MIN_DEG,
-    ROT_TRANSLATION_BLOCK_COS,
-    ROT_TRANSLATION_BLOCK_MAG_DIFF,
-    ROT_TRANSLATION_BLOCK_MIN_MOVE,
     ROT_STACK_CLEAR_IDLE_FRAMES,
     ROT_TREND_MIN_DEG,
-    ROT_WRIST_MOVE_SPEED,
-    ROT_WRIST_STILL_SPEED,
     RELEASE_CONFIRM_FRAMES,
     RELEASE_THRESHOLD,
     TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES,
@@ -128,21 +131,33 @@ class TemporalReducer:
     _grace_frames_used: int = field(init=False, default=0)
     _reacquire_blend_remaining: int = field(init=False, default=0)
     _last_source: str = field(init=False, default="none")
-    _rotation_slot: int = field(init=False, default=0)
-    _rotation_step_buffer_deg: float = field(init=False, default=0.0)
-    _rotation_last_theta: float | None = field(init=False, default=None)
-    _rotation_last_pinch_midpoint: Vec3 | None = field(init=False, default=None)
+    _rotation_slot_x: int = field(init=False, default=0)
+    _rotation_slot_y: int = field(init=False, default=0)
+    _rotation_slot_z: int = field(init=False, default=0)
+    _rotation_step_buffer_x_deg: float = field(init=False, default=0.0)
+    _rotation_step_buffer_y_deg: float = field(init=False, default=0.0)
+    _rotation_step_buffer_z_deg: float = field(init=False, default=0.0)
+    _rotation_last_midpoint: Vec3 | None = field(init=False, default=None)
     _rotation_source: str = field(init=False, default="none")
     _rotation_gate_count: int = field(init=False, default=0)
-    _rotation_last_delta_deg: float = field(init=False, default=0.0)
+    _rotation_last_delta_x_deg: float = field(init=False, default=0.0)
+    _rotation_last_delta_y_deg: float = field(init=False, default=0.0)
+    _rotation_last_delta_z_deg: float = field(init=False, default=0.0)
     _rotation_mode_progress: int = field(init=False, default=0)
-    _rotation_mode_window_frames: int = field(init=False, default=0)
-    _rotation_mode_pinched_frames: int = field(init=False, default=0)
-    _rotation_mode_pending_cycle_valid: bool = field(init=False, default=False)
-    _rotation_mode_prev_pinch_state: PinchState = field(init=False, default="open")
+    _rotation_mode_stage: str = field(init=False, default="wait_grab")
+    _rotation_mode_stage_frames: int = field(init=False, default=0)
+    _rotation_grab_frames: int = field(init=False, default=0)
+    _rotation_open_frames: int = field(init=False, default=0)
     _rotation_mode_active: bool = field(init=False, default=False)
     _rotation_rotating_smoothed: bool = field(init=False, default=False)
     _rotation_stack_idle_frames: int = field(init=False, default=0)
+    _rotation_last_is_grabbed: bool = field(init=False, default=False)
+    _rotation_last_is_open_hand: bool = field(init=False, default=False)
+    _rotation_last_tip_spread: float = field(init=False, default=0.0)
+    _rotation_last_tip_min_dist: float = field(init=False, default=0.0)
+    _rotation_last_tip_max_dist: float = field(init=False, default=0.0)
+    _rotation_last_fist_curl: float = field(init=False, default=0.0)
+    _rotation_mode_cooldown_until_ms: int = field(init=False, default=0)
 
     def __post_init__(self) -> None:
         self.reset()
@@ -162,21 +177,33 @@ class TemporalReducer:
         self._grace_frames_used = 0
         self._reacquire_blend_remaining = 0
         self._last_source = "none"
-        self._rotation_slot = 0
-        self._rotation_step_buffer_deg = 0.0
-        self._rotation_last_theta = None
-        self._rotation_last_pinch_midpoint = None
+        self._rotation_slot_x = 0
+        self._rotation_slot_y = 0
+        self._rotation_slot_z = 0
+        self._rotation_step_buffer_x_deg = 0.0
+        self._rotation_step_buffer_y_deg = 0.0
+        self._rotation_step_buffer_z_deg = 0.0
+        self._rotation_last_midpoint = None
         self._rotation_source = "none"
         self._rotation_gate_count = 0
-        self._rotation_last_delta_deg = 0.0
+        self._rotation_last_delta_x_deg = 0.0
+        self._rotation_last_delta_y_deg = 0.0
+        self._rotation_last_delta_z_deg = 0.0
         self._rotation_mode_progress = 0
-        self._rotation_mode_window_frames = 0
-        self._rotation_mode_pinched_frames = 0
-        self._rotation_mode_pending_cycle_valid = False
-        self._rotation_mode_prev_pinch_state = "open"
+        self._rotation_mode_stage = "wait_grab"
+        self._rotation_mode_stage_frames = 0
+        self._rotation_grab_frames = 0
+        self._rotation_open_frames = 0
         self._rotation_mode_active = False
         self._rotation_rotating_smoothed = False
         self._rotation_stack_idle_frames = 0
+        self._rotation_last_is_grabbed = False
+        self._rotation_last_is_open_hand = False
+        self._rotation_last_tip_spread = 0.0
+        self._rotation_last_tip_min_dist = 0.0
+        self._rotation_last_tip_max_dist = 0.0
+        self._rotation_last_fist_curl = 0.0
+        self._rotation_mode_cooldown_until_ms = 0
 
     def reduce(
         self,
@@ -295,9 +322,9 @@ class TemporalReducer:
             pinch_state=pinch_state,
             index_tip=index_tip,
             thumb_tip=thumb_tip,
-            previous_wrist=previous_wrist,
             wrist=wrist,
-            wrist_speed=wrist_speed,
+            landmarks=observation.landmarks,
+            timestamp_ms=timestamp_ms,
         )
 
         confidence = self._tracked_confidence(
@@ -391,9 +418,6 @@ class TemporalReducer:
         rotation_debug = self._rotation_debug_payload(
             enabled=False,
             rotating=False,
-            wrist_speed=self._vec_magnitude(velocity),
-            pinch_motion_deg=0.0,
-            translation_block=False,
         )
 
         self._last_index_tip = predicted_index_tip
@@ -758,68 +782,75 @@ class TemporalReducer:
         pinch_state: PinchState,
         index_tip: Vec3,
         thumb_tip: Vec3,
-        previous_wrist: Vec3,
         wrist: Vec3,
-        wrist_speed: float,
+        landmarks: list[Vec3],
+        timestamp_ms: int,
     ) -> dict[str, Any]:
-        self._update_rotation_mode_gate(tracking_state=tracking_state, pinch_state=pinch_state)
-
-        enabled = (
-            tracking_state == "tracked"
-            and self._rotation_mode_active
-            and pinch_state in {"pinched", "release_candidate"}
+        is_grabbed = self._is_hand_grabbed(landmarks=landmarks, wrist=wrist)
+        is_open_hand = self._is_hand_open(landmarks=landmarks, wrist=wrist)
+        self._rotation_last_is_grabbed = is_grabbed
+        self._rotation_last_is_open_hand = is_open_hand
+        self._update_rotation_mode_gate(
+            tracking_state=tracking_state,
+            is_grabbed=is_grabbed,
+            is_open_hand=is_open_hand,
+            timestamp_ms=timestamp_ms,
         )
+
+        enabled = tracking_state == "tracked" and self._rotation_mode_active
         if not enabled:
-            self._rotation_last_theta = None
-            self._rotation_last_pinch_midpoint = None
+            self._rotation_last_midpoint = None
             self._rotation_source = "none"
             self._rotation_gate_count = 0
             self._rotation_rotating_smoothed = False
-            self._rotation_last_delta_deg = 0.0
-            self._rotation_step_buffer_deg = 0.0
+            self._rotation_last_delta_x_deg = 0.0
+            self._rotation_last_delta_y_deg = 0.0
+            self._rotation_last_delta_z_deg = 0.0
+            self._rotation_step_buffer_x_deg = 0.0
+            self._rotation_step_buffer_y_deg = 0.0
+            self._rotation_step_buffer_z_deg = 0.0
             self._rotation_stack_idle_frames = 0
             return self._rotation_debug_payload(
                 enabled=False,
                 rotating=False,
-                wrist_speed=wrist_speed,
-                pinch_motion_deg=0.0,
-                translation_block=False,
             )
 
-        pinch_theta = math.atan2(index_tip.y - thumb_tip.y, index_tip.x - thumb_tip.x)
-        pinch_mid_x = (index_tip.x + thumb_tip.x) * 0.5
-        pinch_mid_y = (index_tip.y + thumb_tip.y) * 0.5
-        pinch_mid = Vec3(pinch_mid_x, pinch_mid_y, 0.0)
-        wrist_theta = math.atan2(wrist.y - pinch_mid_y, wrist.x - pinch_mid_x)
+        pinch_mid = Vec3(
+            (index_tip.x + thumb_tip.x) * 0.5,
+            (index_tip.y + thumb_tip.y) * 0.5,
+            (index_tip.z + thumb_tip.z) * 0.5,
+        )
 
-        pinch_motion_deg = 0.0
-        raw_pinch_delta_theta = 0.0
-        if self._rotation_last_theta is not None:
-            raw_pinch_delta_theta = self._unwrap_angle_delta(pinch_theta - self._rotation_last_theta)
-            pinch_motion_deg = abs(math.degrees(raw_pinch_delta_theta))
-
-        wrist_delta = Vec3(wrist.x - previous_wrist.x, wrist.y - previous_wrist.y, 0.0)
-        if self._rotation_last_pinch_midpoint is None:
-            pinch_mid_delta = ZERO_VEC3
+        if self._rotation_last_midpoint is None:
+            mid_dx = 0.0
+            mid_dy = 0.0
+            mid_dz = 0.0
         else:
-            pinch_mid_delta = Vec3(
-                pinch_mid.x - self._rotation_last_pinch_midpoint.x,
-                pinch_mid.y - self._rotation_last_pinch_midpoint.y,
-                0.0,
-            )
-        translation_block = self._is_translation_comotion_block(
-            wrist_delta=wrist_delta,
-            pinch_mid_delta=pinch_mid_delta,
+            mid_dx = pinch_mid.x - self._rotation_last_midpoint.x
+            mid_dy = pinch_mid.y - self._rotation_last_midpoint.y
+            mid_dz = pinch_mid.z - self._rotation_last_midpoint.z
+
+        delta_x_deg = self._scaled_axis_delta(
+            raw_delta=mid_dx,
+            gain=ROT_EQ_GAIN_X,
+            deadzone=ROT_EQ_DEADZONE_X,
+            last_delta=self._rotation_last_delta_x_deg,
+        )
+        delta_y_deg = self._scaled_axis_delta(
+            raw_delta=mid_dy,
+            gain=ROT_EQ_GAIN_Y,
+            deadzone=ROT_EQ_DEADZONE_Y,
+            last_delta=self._rotation_last_delta_y_deg,
+        )
+        delta_z_deg = self._scaled_axis_delta(
+            raw_delta=mid_dz,
+            gain=ROT_EQ_GAIN_Z,
+            deadzone=ROT_EQ_DEADZONE_Z,
+            last_delta=self._rotation_last_delta_z_deg,
         )
 
-        # Buffered gate: rotation starts only after stable evidence frames.
-        wrist_still_pinch_active = (
-            wrist_speed <= ROT_WRIST_STILL_SPEED and pinch_motion_deg >= ROT_PINCH_ANGULAR_ACTIVE_DEG
-        )
-        pinch_still_wrist_active = (
-            pinch_motion_deg <= ROT_PINCH_ANGULAR_STILL_DEG and wrist_speed >= ROT_WRIST_MOVE_SPEED
-        )
-        gate_hit = (wrist_still_pinch_active or pinch_still_wrist_active) and (not translation_block)
+        active_mag = max(abs(delta_x_deg), abs(delta_y_deg), abs(delta_z_deg))
+        gate_hit = active_mag >= ROT_EQ_ACTIVE_MIN_DEG
         if gate_hit:
             self._rotation_gate_count = min(self._rotation_gate_count + 1, ROT_GATE_FRAMES)
         else:
@@ -830,169 +861,257 @@ class TemporalReducer:
         elif self._rotation_rotating_smoothed and self._rotation_gate_count <= ROT_GATE_RELEASE_FRAMES:
             self._rotation_rotating_smoothed = False
         rotating = self._rotation_rotating_smoothed
-        source = "wrist" if pinch_still_wrist_active else "pinch"
-        theta = wrist_theta if source == "wrist" else pinch_theta
 
-        delta_theta = 0.0
-        if self._rotation_last_theta is not None and self._rotation_source == source:
-            delta_theta = self._unwrap_angle_delta(theta - self._rotation_last_theta)
-
-        has_delta = self._rotation_last_theta is not None and self._rotation_source == source
+        has_delta = self._rotation_last_midpoint is not None
         if has_delta:
-            delta_deg = self._clamp(
-                math.degrees(delta_theta) * ROT_GAIN,
-                low=-ROT_DELTA_CLAMP_DEG,
-                high=ROT_DELTA_CLAMP_DEG,
-            )
-            if abs(delta_deg) <= ROT_DELTA_NOISE_DEG:
-                delta_deg = 0.0
-            if (
-                abs(self._rotation_last_delta_deg) >= ROT_TREND_MIN_DEG
-                and (delta_deg * self._rotation_last_delta_deg) < 0.0
-                and abs(delta_deg) <= ROT_OPPOSITE_JITTER_SUPPRESS_DEG
-            ):
-                # Ignore tiny opposite-direction spikes that cause visible positive-angle drops.
-                delta_deg = 0.0
+            self._accumulate_axis_stack(delta_x_deg, axis="x")
+            self._accumulate_axis_stack(delta_y_deg, axis="y")
+            self._accumulate_axis_stack(delta_z_deg, axis="z")
 
-            if abs(delta_deg) >= ROT_STEP_ACCUM_MIN_DEG:
-                # Stack model: accumulate short-term motion in a buffer.
-                self._rotation_step_buffer_deg += delta_deg
-                self._rotation_stack_idle_frames = 0
-            else:
-                self._rotation_stack_idle_frames += 1
-
-            # On sign reversal, clear stale stack to prevent delayed multi-slot jitter.
-            if self._rotation_step_buffer_deg * delta_deg < 0.0:
-                self._rotation_step_buffer_deg = 0.0
-
-            # When rotating, only clear stack after one slot emission.
             if rotating:
-                if self._rotation_step_buffer_deg >= ROT_SLOT_STEP_DEG:
-                    self._rotation_slot = (self._rotation_slot + 1) % ROT_SLOT_COUNT
-                    self._rotation_step_buffer_deg = 0.0
-                    self._rotation_stack_idle_frames = 0
-                elif self._rotation_step_buffer_deg <= -ROT_SLOT_STEP_DEG:
-                    self._rotation_slot = (self._rotation_slot - 1) % ROT_SLOT_COUNT
-                    self._rotation_step_buffer_deg = 0.0
-                    self._rotation_stack_idle_frames = 0
-            else:
-                # In non-rotation state, keep short-term stack, but clear if stale for too long.
-                if self._rotation_stack_idle_frames >= ROT_STACK_CLEAR_IDLE_FRAMES:
-                    self._rotation_step_buffer_deg = 0.0
-                    self._rotation_stack_idle_frames = 0
+                self._emit_axis_slot_if_needed(axis="x", threshold=ROT_EQ_STEP_THRESHOLD_X)
+                self._emit_axis_slot_if_needed(axis="y", threshold=ROT_EQ_STEP_THRESHOLD_Y)
+                self._emit_axis_slot_if_needed(axis="z", threshold=ROT_EQ_STEP_THRESHOLD_Z)
+            elif self._rotation_stack_idle_frames >= ROT_STACK_CLEAR_IDLE_FRAMES:
+                self._rotation_step_buffer_x_deg = 0.0
+                self._rotation_step_buffer_y_deg = 0.0
+                self._rotation_step_buffer_z_deg = 0.0
+                self._rotation_stack_idle_frames = 0
 
-            self._rotation_last_delta_deg = delta_deg if abs(delta_deg) > 0.0 else (self._rotation_last_delta_deg * 0.65)
+            self._rotation_last_delta_x_deg = delta_x_deg if abs(delta_x_deg) > 0.0 else (self._rotation_last_delta_x_deg * 0.65)
+            self._rotation_last_delta_y_deg = delta_y_deg if abs(delta_y_deg) > 0.0 else (self._rotation_last_delta_y_deg * 0.65)
+            self._rotation_last_delta_z_deg = delta_z_deg if abs(delta_z_deg) > 0.0 else (self._rotation_last_delta_z_deg * 0.65)
         else:
             self._rotation_stack_idle_frames += 1
             if (not rotating) and self._rotation_stack_idle_frames >= ROT_STACK_CLEAR_IDLE_FRAMES:
-                self._rotation_step_buffer_deg = 0.0
+                self._rotation_step_buffer_x_deg = 0.0
+                self._rotation_step_buffer_y_deg = 0.0
+                self._rotation_step_buffer_z_deg = 0.0
                 self._rotation_stack_idle_frames = 0
 
-        self._rotation_last_theta = theta
-        self._rotation_last_pinch_midpoint = pinch_mid
-        self._rotation_source = source
+        self._rotation_last_midpoint = pinch_mid
+        self._rotation_source = "equivalent_xyz"
         return self._rotation_debug_payload(
             enabled=True,
             rotating=rotating,
-            wrist_speed=wrist_speed,
-            pinch_motion_deg=pinch_motion_deg,
-            translation_block=translation_block,
         )
 
-    def _update_rotation_mode_gate(self, *, tracking_state: TrackingState, pinch_state: PinchState) -> None:
-        # Highest-priority active gate: require two valid pinch->open cycles in a short window.
-        if tracking_state != "tracked":
+    def _update_rotation_mode_gate(
+        self,
+        *,
+        tracking_state: TrackingState,
+        is_grabbed: bool,
+        is_open_hand: bool,
+        timestamp_ms: int,
+    ) -> None:
+        # Highest-priority active gate: one valid full-hand grab->open toggles mode.
+        if tracking_state == "not_detected":
             self._reset_rotation_mode_sequence(clear_mode=True)
             return
 
-        if self._rotation_mode_progress > 0:
-            self._rotation_mode_window_frames += 1
-            if self._rotation_mode_window_frames > ROT_MODE_WINDOW_FRAMES:
-                self._reset_rotation_mode_sequence(clear_mode=False)
-
-        if pinch_state == "pinched":
-            self._rotation_mode_pinched_frames += 1
-            self._rotation_mode_prev_pinch_state = pinch_state
+        if tracking_state == "temporarily_lost":
+            # Keep mode alive across brief pinch/track dropouts.
             return
 
-        if self._rotation_mode_prev_pinch_state == "pinched" and pinch_state != "pinched":
-            pinch_frames = self._rotation_mode_pinched_frames
-            self._rotation_mode_pinched_frames = 0
-            self._rotation_mode_pending_cycle_valid = (
-                ROT_MODE_PINCH_MIN_FRAMES <= pinch_frames <= ROT_MODE_PINCH_MAX_FRAMES
-            )
+        if timestamp_ms < self._rotation_mode_cooldown_until_ms:
+            # Lock state changes for a fixed cooldown window after each successful toggle.
+            self._reset_rotation_mode_sequence(clear_mode=False)
+            return
 
-            if not self._rotation_mode_pending_cycle_valid:
-                # Long hold or tiny noise pulses are invalid toggle gestures.
-                self._reset_rotation_mode_sequence(clear_mode=False)
+        self._rotation_mode_stage_frames += 1
+        if self._rotation_mode_stage_frames > ROT_MODE_TIMEOUT_FRAMES:
+            self._reset_rotation_mode_sequence(clear_mode=False)
 
-        if pinch_state == "open" and self._rotation_mode_pending_cycle_valid:
-            self._rotation_mode_pending_cycle_valid = False
+        if self._rotation_mode_stage == "wait_grab":
+            if is_grabbed and (not is_open_hand):
+                self._rotation_grab_frames += 1
+                if self._rotation_grab_frames >= ROT_MODE_GRAB_MIN_FRAMES:
+                    self._rotation_mode_stage = "wait_open"
+                    self._rotation_mode_stage_frames = 0
+                    self._rotation_open_frames = 0
+            else:
+                self._rotation_grab_frames = 0
+            self._rotation_mode_progress = 0
+            return
 
-            if self._rotation_mode_progress == 0:
-                self._rotation_mode_window_frames = 0
-            self._rotation_mode_progress += 1
-            if self._rotation_mode_progress >= ROT_MODE_ACTIVATE_CYCLES:
+        if is_open_hand:
+            self._rotation_open_frames += 1
+            self._rotation_mode_progress = 1
+            if self._rotation_open_frames >= ROT_MODE_OPEN_MIN_FRAMES:
                 self._rotation_mode_active = not self._rotation_mode_active
+                self._rotation_mode_cooldown_until_ms = timestamp_ms + ROT_MODE_TOGGLE_COOLDOWN_MS
                 self._reset_rotation_mode_sequence(clear_mode=False)
-
-        if pinch_state != "pinched":
-            self._rotation_mode_pinched_frames = 0
-
-        self._rotation_mode_prev_pinch_state = pinch_state
+        else:
+            self._rotation_open_frames = 0
 
     def _reset_rotation_mode_sequence(self, *, clear_mode: bool) -> None:
         self._rotation_mode_progress = 0
-        self._rotation_mode_window_frames = 0
-        self._rotation_mode_pinched_frames = 0
-        self._rotation_mode_pending_cycle_valid = False
-        self._rotation_mode_prev_pinch_state = "open"
+        self._rotation_mode_stage = "wait_grab"
+        self._rotation_mode_stage_frames = 0
+        self._rotation_grab_frames = 0
+        self._rotation_open_frames = 0
         if clear_mode:
             self._rotation_mode_active = False
+
+    def _is_hand_grabbed(self, *, landmarks: list[Vec3], wrist: Vec3) -> bool:
+        tip_indices = (4, 8, 12, 16, 20)
+        if len(landmarks) <= 20:
+            return False
+        scale = max(self._last_hand_scale, 1e-6)
+        spread = self._tip_spread(landmarks=landmarks, tip_indices=tip_indices) / scale
+        min_dist, max_dist = self._tip_wrist_dist_range(landmarks=landmarks, wrist=wrist, tip_indices=tip_indices)
+        min_dist /= scale
+        max_dist /= scale
+
+        self._rotation_last_tip_spread = spread
+        self._rotation_last_tip_min_dist = min_dist
+        self._rotation_last_tip_max_dist = max_dist
+        self._rotation_last_fist_curl = 0.0
+
+        # Simplified grab detector: strictly based on tip spread as requested.
+        return spread <= ROT_HAND_GRAB_TIP_SPREAD_MAX
+
+    def _is_hand_open(self, *, landmarks: list[Vec3], wrist: Vec3) -> bool:
+        tip_indices = (4, 8, 12, 16, 20)
+        if len(landmarks) <= max(tip_indices):
+            return False
+        scale = max(self._last_hand_scale, 1e-6)
+        spread = self._tip_spread(landmarks=landmarks, tip_indices=tip_indices) / scale
+        min_dist, max_dist = self._tip_wrist_dist_range(landmarks=landmarks, wrist=wrist, tip_indices=tip_indices)
+        min_dist /= scale
+        max_dist /= scale
+        self._rotation_last_tip_spread = spread
+        self._rotation_last_tip_min_dist = min_dist
+        self._rotation_last_tip_max_dist = max_dist
+
+        # Spread-only release detector. Keep it exclusive from grab.
+        return spread > ROT_HAND_GRAB_TIP_SPREAD_MAX
+
+    def _tip_wrist_dist_range(
+        self,
+        *,
+        landmarks: list[Vec3],
+        wrist: Vec3,
+        tip_indices: tuple[int, ...],
+    ) -> tuple[float, float]:
+        min_dist = 1.0
+        max_dist = 0.0
+        for idx in tip_indices:
+            tip = landmarks[idx]
+            dist = distance_2d(tip, wrist)
+            min_dist = min(min_dist, dist)
+            max_dist = max(max_dist, dist)
+        return min_dist, max_dist
+
+    def _tip_spread(self, *, landmarks: list[Vec3], tip_indices: tuple[int, ...]) -> float:
+        min_x = 1.0
+        max_x = -1.0
+        min_y = 1.0
+        max_y = -1.0
+        for idx in tip_indices:
+            tip = landmarks[idx]
+            min_x = min(min_x, tip.x)
+            max_x = max(max_x, tip.x)
+            min_y = min(min_y, tip.y)
+            max_y = max(max_y, tip.y)
+        return math.sqrt(((max_x - min_x) ** 2) + ((max_y - min_y) ** 2))
+
+    def _scaled_axis_delta(self, *, raw_delta: float, gain: float, deadzone: float, last_delta: float) -> float:
+        delta_deg = self._clamp(raw_delta * gain, low=-ROT_DELTA_CLAMP_DEG, high=ROT_DELTA_CLAMP_DEG)
+        if abs(raw_delta) <= deadzone or abs(delta_deg) <= ROT_DELTA_NOISE_DEG:
+            return 0.0
+        if (
+            abs(last_delta) >= ROT_TREND_MIN_DEG
+            and (delta_deg * last_delta) < 0.0
+            and abs(delta_deg) <= ROT_OPPOSITE_JITTER_SUPPRESS_DEG
+        ):
+            return 0.0
+        return delta_deg
+
+    def _accumulate_axis_stack(self, delta_deg: float, *, axis: str) -> None:
+        if abs(delta_deg) < ROT_STEP_ACCUM_MIN_DEG:
+            self._rotation_stack_idle_frames += 1
+            return
+
+        self._rotation_stack_idle_frames = 0
+        if axis == "x":
+            if self._rotation_step_buffer_x_deg * delta_deg < 0.0:
+                self._rotation_step_buffer_x_deg = 0.0
+            self._rotation_step_buffer_x_deg += delta_deg
+            return
+        if axis == "y":
+            if self._rotation_step_buffer_y_deg * delta_deg < 0.0:
+                self._rotation_step_buffer_y_deg = 0.0
+            self._rotation_step_buffer_y_deg += delta_deg
+            return
+        if self._rotation_step_buffer_z_deg * delta_deg < 0.0:
+            self._rotation_step_buffer_z_deg = 0.0
+        self._rotation_step_buffer_z_deg += delta_deg
+
+    def _emit_axis_slot_if_needed(self, *, axis: str, threshold: float) -> None:
+        if axis == "x":
+            if self._rotation_step_buffer_x_deg >= threshold:
+                self._rotation_slot_x = (self._rotation_slot_x + 1) % ROT_SLOT_COUNT
+                self._rotation_step_buffer_x_deg = 0.0
+            elif self._rotation_step_buffer_x_deg <= -threshold:
+                self._rotation_slot_x = (self._rotation_slot_x - 1) % ROT_SLOT_COUNT
+                self._rotation_step_buffer_x_deg = 0.0
+            return
+        if axis == "y":
+            if self._rotation_step_buffer_y_deg >= threshold:
+                self._rotation_slot_y = (self._rotation_slot_y + 1) % ROT_SLOT_COUNT
+                self._rotation_step_buffer_y_deg = 0.0
+            elif self._rotation_step_buffer_y_deg <= -threshold:
+                self._rotation_slot_y = (self._rotation_slot_y - 1) % ROT_SLOT_COUNT
+                self._rotation_step_buffer_y_deg = 0.0
+            return
+        if self._rotation_step_buffer_z_deg >= threshold:
+            self._rotation_slot_z = (self._rotation_slot_z + 1) % ROT_SLOT_COUNT
+            self._rotation_step_buffer_z_deg = 0.0
+        elif self._rotation_step_buffer_z_deg <= -threshold:
+            self._rotation_slot_z = (self._rotation_slot_z - 1) % ROT_SLOT_COUNT
+            self._rotation_step_buffer_z_deg = 0.0
 
     def _rotation_debug_payload(
         self,
         *,
         enabled: bool,
         rotating: bool,
-        wrist_speed: float,
-        pinch_motion_deg: float,
-        translation_block: bool,
     ) -> dict[str, Any]:
+        deg_x = self._rotation_slot_x * ROT_SLOT_STEP_DEG
+        deg_y = self._rotation_slot_y * ROT_SLOT_STEP_DEG
+        deg_z = self._rotation_slot_z * ROT_SLOT_STEP_DEG
         return {
             "enabled": enabled,
             "rotating": rotating,
-            "slot": self._rotation_slot,
+            # Keep legacy single-slot key for compatibility (mapped to Z axis).
+            "slot": self._rotation_slot_z,
             "slot_count": ROT_SLOT_COUNT,
-            "wrist_speed": wrist_speed,
-            "pinch_motion_deg": pinch_motion_deg,
+            "slot_x": self._rotation_slot_x,
+            "slot_y": self._rotation_slot_y,
+            "slot_z": self._rotation_slot_z,
+            "deg_x": deg_x,
+            "deg_y": deg_y,
+            "deg_z": deg_z,
             "gate_count": self._rotation_gate_count,
             "source": self._rotation_source,
-            "translation_block": translation_block,
             "mode_progress": self._rotation_mode_progress,
-            "mode_target": ROT_MODE_ACTIVATE_CYCLES,
-            "mode_window": self._rotation_mode_window_frames,
+            "mode_target": 1,
+            "mode_stage": self._rotation_mode_stage,
             "mode_active": self._rotation_mode_active,
-            "stack_deg": self._rotation_step_buffer_deg,
+            "mode_cooldown_ms": max(self._rotation_mode_cooldown_until_ms - (self._last_timestamp_ms or 0), 0),
+            "grab_detected": self._rotation_last_is_grabbed,
+            "open_detected": self._rotation_last_is_open_hand,
+            "tip_spread": self._rotation_last_tip_spread,
+            "tip_min_dist": self._rotation_last_tip_min_dist,
+            "tip_max_dist": self._rotation_last_tip_max_dist,
+            "fist_curl": self._rotation_last_fist_curl,
+            "stack_deg": self._rotation_step_buffer_z_deg,
+            "stack_x_deg": self._rotation_step_buffer_x_deg,
+            "stack_y_deg": self._rotation_step_buffer_y_deg,
+            "stack_z_deg": self._rotation_step_buffer_z_deg,
+            "mode_name": "ROTATE_ENABLED" if self._rotation_mode_active else "MOVE_ONLY",
         }
-
-    def _is_translation_comotion_block(self, *, wrist_delta: Vec3, pinch_mid_delta: Vec3) -> bool:
-        wrist_move = self._vec_magnitude(wrist_delta)
-        pinch_move = self._vec_magnitude(pinch_mid_delta)
-        if wrist_move < ROT_TRANSLATION_BLOCK_MIN_MOVE or pinch_move < ROT_TRANSLATION_BLOCK_MIN_MOVE:
-            return False
-
-        dot = (wrist_delta.x * pinch_mid_delta.x) + (wrist_delta.y * pinch_mid_delta.y)
-        cos_sim = dot / max(wrist_move * pinch_move, 1e-6)
-        move_gap = abs(wrist_move - pinch_move)
-        return cos_sim >= ROT_TRANSLATION_BLOCK_COS and move_gap <= ROT_TRANSLATION_BLOCK_MAG_DIFF
-
-    def _unwrap_angle_delta(self, delta: float) -> float:
-        if delta > math.pi:
-            return delta - (2.0 * math.pi)
-        if delta < -math.pi:
-            return delta + (2.0 * math.pi)
-        return delta
 
     def _lerp(self, start: float, end: float, alpha: float) -> float:
         t = self._clamp01(alpha)

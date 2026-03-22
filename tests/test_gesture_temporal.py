@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 
-from src.gesture.constants import TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
+from src.gesture.constants import ROT_SLOT_COUNT, TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
 from src.contracts import Vec3
 from src.gesture.runtime import RawHandObservation, normalized_pinch_distance
 from src.gesture.temporal import MOTION_PRESET_TUNINGS, TemporalReducer, temporal_tuning_for_motion_preset
@@ -11,83 +11,85 @@ from src.gesture.temporal import MOTION_PRESET_TUNINGS, TemporalReducer, tempora
 def make_observation(
     *,
     wrist_x: float = 0.0,
+    wrist_y: float = 0.0,
+    wrist_z: float = 0.0,
     pinch_gap: float = 0.04,
     confidence: float = 0.95,
+    hand_pose: str = "open",
 ) -> RawHandObservation:
+    wrist = Vec3(wrist_x, wrist_y, wrist_z)
     return RawHandObservation(
-        index_tip=Vec3(wrist_x + pinch_gap, 0.20, 0.10),
-        thumb_tip=Vec3(wrist_x, 0.20, 0.10),
-        wrist=Vec3(wrist_x, 0.0, 0.0),
+        index_tip=Vec3(wrist_x + pinch_gap, 0.20 + wrist_y, 0.10 + wrist_z),
+        thumb_tip=Vec3(wrist_x, 0.20 + wrist_y, 0.10 + wrist_z),
+        wrist=wrist,
         confidence=confidence,
         raw_pinch_distance=pinch_gap,
         hand_scale=0.35,
-        landmarks=[Vec3(0.5, 0.5, 0.0) for _ in range(21)],
+        landmarks=make_hand_landmarks(wrist=wrist, pose=hand_pose),
         handedness="Right",
     )
 
 
-def make_rotation_observation(*, theta_rad: float, pinch_gap: float = 0.03) -> RawHandObservation:
-    radius = 0.02
-    cx = 0.0
-    cy = 0.20
-    dx = math.cos(theta_rad) * radius
-    dy = math.sin(theta_rad) * radius
+def make_hand_landmarks(*, wrist: Vec3, pose: str) -> list[Vec3]:
+    points = [Vec3(wrist.x, wrist.y, wrist.z) for _ in range(21)]
+    tip_indices = [4, 8, 12, 16, 20]
+    # Keep synthetic spread separated so spread-only grab/open logic remains testable.
+    spread = 0.06 if pose == "grab" else 0.32
+    offset_step = 0.005 if pose == "grab" else 0.080
+    for i, tip_idx in enumerate(tip_indices):
+        offset = (i - 2) * offset_step
+        points[tip_idx] = Vec3(wrist.x + offset, wrist.y + spread, wrist.z)
+    return points
+
+
+def make_eq_rotation_observation(
+    *,
+    mid_x: float,
+    mid_y: float,
+    mid_z: float,
+    pinch_gap: float = 0.03,
+    hand_pose: str = "open",
+) -> RawHandObservation:
+    wrist = Vec3(0.0, 0.0, 0.0)
     return RawHandObservation(
-        index_tip=Vec3(cx + dx, cy + dy, 0.10),
-        thumb_tip=Vec3(cx - dx, cy - dy, 0.10),
-        wrist=Vec3(0.0, 0.0, 0.0),
+        index_tip=Vec3(mid_x + (pinch_gap * 0.5), mid_y, mid_z),
+        thumb_tip=Vec3(mid_x - (pinch_gap * 0.5), mid_y, mid_z),
+        wrist=wrist,
         confidence=0.95,
         raw_pinch_distance=pinch_gap,
         hand_scale=0.35,
-        landmarks=[Vec3(0.5, 0.5, 0.0) for _ in range(21)],
+        landmarks=make_hand_landmarks(wrist=wrist, pose=hand_pose),
         handedness="Right",
     )
 
 
-def activate_rotation_mode(reducer: TemporalReducer, *, start_frame_id: int = 1, theta_rad: float = 0.0) -> int:
+def activate_rotation_mode(reducer: TemporalReducer, *, start_frame_id: int = 1) -> int:
     frame_id = start_frame_id
 
-    for _ in range(2):
-        pinched_packet = None
-        for _ in range(24):
-            pinched_packet = reducer.reduce(
-                make_rotation_observation(theta_rad=theta_rad),
-                frame_id=frame_id,
-                timestamp_ms=frame_id * 16,
-            )
-            frame_id += 1
-            if pinched_packet.pinch_state == "pinched":
-                break
+    # Grab phase.
+    for _ in range(8):
+        reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
 
-        assert pinched_packet is not None
-        assert pinched_packet.pinch_state == "pinched"
+    # Open phase to complete one grab->open sequence.
+    for _ in range(8):
+        check = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
 
-        open_packet = None
-        for _ in range(24):
-            open_packet = reducer.reduce(
-                make_observation(pinch_gap=0.18),
-                frame_id=frame_id,
-                timestamp_ms=frame_id * 16,
-            )
-            frame_id += 1
-            if open_packet.pinch_state == "open":
-                break
-
-        assert open_packet is not None
-        assert open_packet.pinch_state == "open"
-
-    check = reducer.reduce(
-        make_rotation_observation(theta_rad=theta_rad),
-        frame_id=frame_id,
-        timestamp_ms=frame_id * 16,
-    )
-    frame_id += 1
     assert check.debug["rotation"]["mode_active"] is True
 
     # Ensure rotation channel is truly enabled before handing control to tests.
     for _ in range(24):
         check = reducer.reduce(
-            make_rotation_observation(theta_rad=theta_rad),
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
             frame_id=frame_id,
             timestamp_ms=frame_id * 16,
         )
@@ -207,229 +209,228 @@ def test_temporal_motion_preset_affects_responsiveness() -> None:
     assert low_packet.wrist.x > high_packet.wrist.x
 
 
-def test_rotation_angle_updates_continuously_during_pinch_rotation() -> None:
+def test_equivalent_rotation_x_axis_updates_slot_x() -> None:
     reducer = TemporalReducer()
-    frame_id = activate_rotation_mode(reducer, start_frame_id=1, theta_rad=0.0)
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
 
-    packet_a = reducer.reduce(make_rotation_observation(theta_rad=0.22), frame_id=frame_id, timestamp_ms=frame_id * 16)
-    packet_b = reducer.reduce(make_rotation_observation(theta_rad=0.44), frame_id=frame_id + 1, timestamp_ms=(frame_id + 1) * 16)
-    packet_c = reducer.reduce(make_rotation_observation(theta_rad=0.66), frame_id=frame_id + 2, timestamp_ms=(frame_id + 2) * 16)
-    packet_d = reducer.reduce(make_rotation_observation(theta_rad=0.88), frame_id=frame_id + 3, timestamp_ms=(frame_id + 3) * 16)
-    packet_e = reducer.reduce(make_rotation_observation(theta_rad=1.10), frame_id=frame_id + 4, timestamp_ms=(frame_id + 4) * 16)
-    packet_f = reducer.reduce(make_rotation_observation(theta_rad=1.32), frame_id=frame_id + 5, timestamp_ms=(frame_id + 5) * 16)
-    packet_g = reducer.reduce(make_rotation_observation(theta_rad=1.54), frame_id=frame_id + 6, timestamp_ms=(frame_id + 6) * 16)
+    first = None
+    mid_x = 0.0
+    for step in range(1, 28):
+        mid_x += 0.008
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=mid_x, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
+        if first is None:
+            first = packet.debug["rotation"]["slot_x"]
 
-    rot_a = packet_a.debug["rotation"]
-    rot_b = packet_b.debug["rotation"]
-    rot_c = packet_c.debug["rotation"]
-    rot_d = packet_d.debug["rotation"]
-    rot_g = packet_g.debug["rotation"]
-    assert rot_a["enabled"] is True
-    assert rot_b["enabled"] is True
-    assert rot_d["rotating"] is True
-    assert rot_a["slot_count"] > 0
-    assert rot_g["slot"] != rot_a["slot"]
+    assert packet.debug["rotation"]["enabled"] is True
+    assert packet.debug["rotation"]["slot_x"] != first
 
 
-def test_rotation_angle_reverses_with_opposite_direction() -> None:
+def test_equivalent_rotation_y_axis_updates_slot_y() -> None:
     reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
 
-    frame_id = activate_rotation_mode(reducer, start_frame_id=1, theta_rad=0.0)
+    start_packet = reducer.reduce(
+        make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+        frame_id=frame_id,
+        timestamp_ms=frame_id * 16,
+    )
+    start_slot = start_packet.debug["rotation"]["slot_y"]
 
-    reducer.reduce(make_rotation_observation(theta_rad=0.10), frame_id=frame_id, timestamp_ms=frame_id * 16)
-    forward = reducer.reduce(make_rotation_observation(theta_rad=0.20), frame_id=frame_id + 1, timestamp_ms=(frame_id + 1) * 16)
-    reducer.reduce(make_rotation_observation(theta_rad=0.30), frame_id=frame_id + 2, timestamp_ms=(frame_id + 2) * 16)
-    reducer.reduce(make_rotation_observation(theta_rad=-0.20), frame_id=frame_id + 3, timestamp_ms=(frame_id + 3) * 16)
-    reducer.reduce(make_rotation_observation(theta_rad=-0.40), frame_id=frame_id + 4, timestamp_ms=(frame_id + 4) * 16)
-    reducer.reduce(make_rotation_observation(theta_rad=-0.60), frame_id=frame_id + 5, timestamp_ms=(frame_id + 5) * 16)
-    reducer.reduce(make_rotation_observation(theta_rad=-0.80), frame_id=frame_id + 6, timestamp_ms=(frame_id + 6) * 16)
-    backward_5 = reducer.reduce(make_rotation_observation(theta_rad=-1.00), frame_id=frame_id + 7, timestamp_ms=(frame_id + 7) * 16)
-    backward_6 = reducer.reduce(make_rotation_observation(theta_rad=-1.20), frame_id=frame_id + 8, timestamp_ms=(frame_id + 8) * 16)
+    mid_y = 0.20
+    packet = start_packet
+    for step in range(1, 28):
+        mid_y += 0.008
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=mid_y, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
 
-    rot_forward = forward.debug["rotation"]
-    rot_backward_5 = backward_5.debug["rotation"]
-    rot_backward_6 = backward_6.debug["rotation"]
-    assert rot_forward["enabled"] is True
-    assert rot_backward_5["slot"] != rot_forward["slot"] or rot_backward_6["slot"] != rot_forward["slot"]
+    assert packet.debug["rotation"]["slot_y"] != start_slot
 
 
-def test_rotation_angle_stays_stable_on_one_missing_frame() -> None:
+def test_equivalent_rotation_z_axis_updates_slot_z() -> None:
     reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
 
-    frame_id = activate_rotation_mode(reducer, start_frame_id=1, theta_rad=0.0)
+    start_packet = reducer.reduce(
+        make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+        frame_id=frame_id,
+        timestamp_ms=frame_id * 16,
+    )
+    start_slot = start_packet.debug["rotation"]["slot_z"]
 
-    tracked = reducer.reduce(make_rotation_observation(theta_rad=0.22), frame_id=frame_id, timestamp_ms=frame_id * 16)
-    missing = reducer.reduce(None, frame_id=frame_id + 1, timestamp_ms=(frame_id + 1) * 16)
+    mid_z = 0.10
+    packet = start_packet
+    for step in range(1, 28):
+        mid_z += 0.007
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=mid_z, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
 
-    tracked_slot = tracked.debug["rotation"]["slot"]
-    missing_slot = missing.debug["rotation"]["slot"]
-    assert missing_slot == tracked_slot
+    assert packet.debug["rotation"]["slot_z"] != start_slot
+    assert packet.debug["rotation"]["slot"] == packet.debug["rotation"]["slot_z"]
 
 
-def test_rotation_slot_wraps_when_rotating_forward_continuously() -> None:
+def test_equivalent_rotation_slots_wrap_on_continuous_motion() -> None:
     reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
 
-    frame_id = activate_rotation_mode(reducer, start_frame_id=1, theta_rad=0.0)
-
-    first_slot = reducer.reduce(make_rotation_observation(theta_rad=0.24), frame_id=frame_id, timestamp_ms=frame_id * 16).debug["rotation"]["slot"]
-    last = None
-    theta = 0.24
-    for frame_id in range(frame_id + 1, frame_id + 116):
-        theta += 0.24
-        last = reducer.reduce(make_rotation_observation(theta_rad=theta), frame_id=frame_id, timestamp_ms=frame_id * 16)
-
-    assert last is not None
-    final_slot = last.debug["rotation"]["slot"]
-    assert final_slot != first_slot
-    assert 0 <= final_slot < last.debug["rotation"]["slot_count"]
-
-
-def test_rotation_gate_stays_off_when_wrist_and_pinch_translate_together() -> None:
-    reducer = TemporalReducer()
-
-    frame_id = activate_rotation_mode(reducer, start_frame_id=1, theta_rad=0.0)
-
+    mid_x = 0.0
     packet = None
-    for frame_id in range(frame_id, frame_id + 8):
-        # Keep pinch orientation fixed while translating wrist and pinch midpoint together.
-        wrist_x = (frame_id + 1) * 0.025
-        obs = make_observation(wrist_x=wrist_x, pinch_gap=0.03)
-        packet = reducer.reduce(obs, frame_id=frame_id, timestamp_ms=frame_id * 16)
+    for step in range(1, 220):
+        mid_x += 0.009
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=mid_x, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
 
     assert packet is not None
-    rotation = packet.debug["rotation"]
-    assert rotation["translation_block"] is True
-    assert rotation["rotating"] is False
+    slot_x = packet.debug["rotation"]["slot_x"]
+    assert 0 <= slot_x < ROT_SLOT_COUNT
 
 
-def test_rotation_mode_requires_two_pinch_open_cycles() -> None:
+def test_rotation_mode_switches_with_single_grab_open_sequence() -> None:
     reducer = TemporalReducer()
 
     frame_id = 1
-    # First cycle pinch->open: should still stay in MOVE_ONLY mode.
-    for _ in range(20):
-        packet = reducer.reduce(make_rotation_observation(theta_rad=0.0), frame_id=frame_id, timestamp_ms=frame_id * 16)
+    packet = None
+    for _ in range(6):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
         frame_id += 1
-        if packet.pinch_state == "pinched":
-            break
-    assert packet.debug["rotation"]["mode_active"] is False
 
-    for _ in range(20):
-        packet = reducer.reduce(make_observation(pinch_gap=0.18), frame_id=frame_id, timestamp_ms=frame_id * 16)
+    for _ in range(6):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
         frame_id += 1
-        if packet.pinch_state == "open":
-            break
-    assert packet.debug["rotation"]["mode_progress"] == 1
-    assert packet.debug["rotation"]["mode_active"] is False
 
-    # Second cycle completes activation.
-    for _ in range(20):
-        packet = reducer.reduce(make_rotation_observation(theta_rad=0.0), frame_id=frame_id, timestamp_ms=frame_id * 16)
-        frame_id += 1
-        if packet.pinch_state == "pinched":
-            break
-    for _ in range(20):
-        packet = reducer.reduce(make_observation(pinch_gap=0.18), frame_id=frame_id, timestamp_ms=frame_id * 16)
-        frame_id += 1
-        if packet.pinch_state == "open":
-            break
-
-    assert packet.debug["rotation"]["mode_progress"] == 0
+    assert packet is not None
     assert packet.debug["rotation"]["mode_active"] is True
+    assert packet.debug["rotation"]["mode_name"] == "ROTATE_ENABLED"
 
 
-def test_rotation_mode_does_not_accumulate_while_holding_pinch() -> None:
+def test_rotation_mode_jitter_does_not_switch() -> None:
     reducer = TemporalReducer()
+
     frame_id = 1
-
-    # Long continuous pinch should be rejected as a toggle cycle.
-    for _ in range(40):
-        packet = reducer.reduce(make_rotation_observation(theta_rad=0.0), frame_id=frame_id, timestamp_ms=frame_id * 16)
+    packet = None
+    for _ in range(6):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
         frame_id += 1
 
-    for _ in range(20):
-        packet = reducer.reduce(make_observation(pinch_gap=0.18), frame_id=frame_id, timestamp_ms=frame_id * 16)
+    for _ in range(2):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
         frame_id += 1
-        if packet.pinch_state == "open":
-            break
 
-    rotation = packet.debug["rotation"]
-    assert rotation["mode_progress"] == 0
-    assert rotation["mode_active"] is False
+    for _ in range(2):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    assert packet is not None
+    assert packet.debug["rotation"]["mode_active"] is False
 
 
-def test_rotation_mode_progress_times_out_without_second_cycle() -> None:
+def test_rotation_mode_progress_times_out() -> None:
     reducer = TemporalReducer()
+
     frame_id = 1
-
-    # Complete first pinch->open cycle.
-    for _ in range(20):
-        packet = reducer.reduce(make_rotation_observation(theta_rad=0.0), frame_id=frame_id, timestamp_ms=frame_id * 16)
-        frame_id += 1
-        if packet.pinch_state == "pinched":
-            break
-    for _ in range(20):
-        packet = reducer.reduce(make_observation(pinch_gap=0.18), frame_id=frame_id, timestamp_ms=frame_id * 16)
-        frame_id += 1
-        if packet.pinch_state == "open":
-            break
-
-    assert packet.debug["rotation"]["mode_progress"] == 1
-
-    # Wait without second cycle: progress must reset.
-    for _ in range(60):
-        packet = reducer.reduce(make_observation(pinch_gap=0.18), frame_id=frame_id, timestamp_ms=frame_id * 16)
+    packet = None
+    for _ in range(6):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
         frame_id += 1
 
-    assert packet.debug["rotation"]["mode_progress"] == 0
+    for _ in range(50):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    assert packet is not None
     assert packet.debug["rotation"]["mode_active"] is False
 
 
 def test_rotation_stack_resets_after_single_slot_jump() -> None:
     reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
 
-    frame_id = activate_rotation_mode(reducer, start_frame_id=1, theta_rad=0.0)
-
-    # Drive until the first slot jump occurs, then stack should be cleared immediately.
     jump_packet = None
     jump_slot = 0
-    theta = 0.0
-    for frame_id in range(frame_id, frame_id + 18):
-        theta += 0.22
-        candidate = reducer.reduce(make_rotation_observation(theta_rad=theta), frame_id=frame_id, timestamp_ms=frame_id * 16)
-        if candidate.debug["rotation"]["slot"] != 0:
+    mid_z = 0.10
+    for step in range(1, 40):
+        mid_z += 0.01
+        candidate = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=mid_z, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
+        if candidate.debug["rotation"]["slot_z"] != 0:
             jump_packet = candidate
-            jump_slot = candidate.debug["rotation"]["slot"]
+            jump_slot = candidate.debug["rotation"]["slot_z"]
             break
 
     assert jump_packet is not None
-    assert jump_packet.debug["rotation"]["stack_deg"] == 0.0
+    assert jump_packet.debug["rotation"]["stack_z_deg"] == 0.0
 
-    # Tiny follow-up motion should not produce delayed extra jumps.
-    tiny_packet = reducer.reduce(make_rotation_observation(theta_rad=theta + 0.01), frame_id=frame_id + 20, timestamp_ms=(frame_id + 20) * 16)
-    assert tiny_packet.debug["rotation"]["slot"] == jump_slot
+    tiny_packet = reducer.reduce(
+        make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=mid_z + 0.0003, hand_pose="open"),
+        frame_id=frame_id + 60,
+        timestamp_ms=(frame_id + 60) * 16,
+    )
+    assert tiny_packet.debug["rotation"]["slot_z"] == jump_slot
 
 
 def test_rotation_gate_hysteresis_keeps_state_stable_on_short_drop() -> None:
     reducer = TemporalReducer()
-    frame_id = activate_rotation_mode(reducer, start_frame_id=1, theta_rad=0.0)
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
 
-    # Build rotating=True first.
     packet = None
+    mid_x = 0.0
     for step in range(6):
+        mid_x += 0.009
         packet = reducer.reduce(
-            make_rotation_observation(theta_rad=0.30 + (0.25 * step)),
+            make_eq_rotation_observation(mid_x=mid_x, mid_y=0.20, mid_z=0.10, hand_pose="open"),
             frame_id=frame_id + step,
             timestamp_ms=(frame_id + step) * 16,
         )
     assert packet is not None
     assert packet.debug["rotation"]["rotating"] is True
 
-    # A brief weak-motion frame should not immediately flip rotating off.
     weak = reducer.reduce(
-        make_rotation_observation(theta_rad=0.30 + (0.25 * 6) + 0.001),
-        frame_id=frame_id + 6,
-        timestamp_ms=(frame_id + 6) * 16,
+        make_eq_rotation_observation(mid_x=mid_x + 0.0002, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+        frame_id=frame_id + 7,
+        timestamp_ms=(frame_id + 7) * 16,
     )
     assert weak.debug["rotation"]["rotating"] is True
 

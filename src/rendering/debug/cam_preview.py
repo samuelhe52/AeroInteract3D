@@ -192,33 +192,52 @@ class CameraPreviewManager:
 
     def _draw_rotation_overlay(self, frame: np.ndarray) -> np.ndarray:
         slot = 0
+        slot_x = 0
+        slot_y = 0
+        slot_z = 0
         slot_count = 0
-        enabled = False
+        deg_x = 0.0
+        deg_y = 0.0
+        deg_z = 0.0
         rotating = False
         mode_active = False
         mode_progress = 0
-        mode_target = 2
+        mode_target = 1
+        tip_spread = 0.0
+        grab_detected = False
         packet = self._last_packet
         if packet is not None and isinstance(packet.debug, dict):
             rotation = packet.debug.get("rotation")
             if isinstance(rotation, dict):
                 slot = int(rotation.get("slot", 0))
+                slot_x = int(rotation.get("slot_x", slot))
+                slot_y = int(rotation.get("slot_y", slot))
+                slot_z = int(rotation.get("slot_z", slot))
                 slot_count = int(rotation.get("slot_count", 0))
-                enabled = bool(rotation.get("enabled", False))
+                deg_x = float(rotation.get("deg_x", 0.0))
+                deg_y = float(rotation.get("deg_y", 0.0))
+                deg_z = float(rotation.get("deg_z", 0.0))
                 rotating = bool(rotation.get("rotating", False))
                 mode_active = bool(rotation.get("mode_active", False))
-            mode_progress = int(rotation.get("mode_progress", 0))
-            mode_target = int(rotation.get("mode_target", 2))
+                mode_progress = int(rotation.get("mode_progress", 0))
+                mode_target = int(rotation.get("mode_target", 1))
+                tip_spread = float(rotation.get("tip_spread", 0.0))
+                grab_detected = bool(rotation.get("grab_detected", False))
 
-        text = f"slot: {slot:02d}/{slot_count:02d}" if slot_count > 0 else f"slot: {slot:02d}"
+        text = f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})/{slot_count:02d}" if slot_count > 0 else f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})"
         state = "YES" if rotating else "NO"
-        cv2.rectangle(frame, (10, 12), (224, 72), (18, 22, 30), thickness=-1)
-        cv2.rectangle(frame, (10, 12), (224, 72), (86, 96, 118), thickness=1)
-        cv2.putText(frame, text, (18, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (230, 230, 230), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"rotating: {state}", (18, 43), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (120, 200, 140) if rotating else (140, 140, 140), 1, cv2.LINE_AA)
+        cv2.rectangle(frame, (10, 12), (430, 116), (18, 22, 30), thickness=-1)
+        cv2.rectangle(frame, (10, 12), (430, 116), (86, 96, 118), thickness=1)
+        cv2.putText(frame, text, (18, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (235, 235, 235), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"rotating: {state}", (18, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (90, 220, 140) if rotating else (140, 140, 140), 1, cv2.LINE_AA)
         mode_label = "ROTATE_ENABLED" if mode_active else "MOVE_ONLY"
-        cv2.putText(frame, f"mode: {mode_label} ({mode_progress}/{max(mode_target, 1)})", (18, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (165, 175, 190), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"enabled: {'YES' if enabled else 'NO'}", (18, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (150, 160, 178), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"mode: {mode_label} ({mode_progress}/{max(mode_target, 1)})", (18, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (80, 200, 255) if mode_active else (185, 190, 205), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"X: {deg_x:6.1f} deg", (18, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (70, 70, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Y: {deg_y:6.1f} deg", (126, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (70, 230, 70), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Z: {deg_z:6.1f} deg", (236, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 170, 60), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"grab: {'YES' if grab_detected else 'NO'}", (18, 93), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"spread: {tip_spread:.3f}  (grab < 0.270)", (108, 93), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (220, 220, 120), 1, cv2.LINE_AA)
+        cv2.putText(frame, "For best results, face the camera and hold a standard OK pose.", (18, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (210, 210, 210), 1, cv2.LINE_AA)
         return frame
 
     def _landmark_to_pixel(self, landmark: Any, width: int, height: int) -> Tuple[int, int]:

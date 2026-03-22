@@ -399,4 +399,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+<<<<<<< HEAD
     raise SystemExit(main(sys.argv[1:]))
+=======
+    raise SystemExit(main(sys.argv[1:])) 
+
+
+
+
+>>>>>>> c1311fa (Refine temporal rotation gating)
