@@ -1002,7 +1002,7 @@ class RenderingServiceImpl(RenderOutputPort):
     def update_camera_frame(self, frame, observation=None, packet=None) -> None:
         """Update camera frame data"""
         if self._camera_preview:
-            self._camera_preview.update_frame(frame, observation, packet or self._last_gesture_packet)
+            self._camera_preview.update_frame(frame, observation)
 
     def enable_camera_preview(self, enabled: bool = True) -> None:
         """Enable or disable camera preview"""
