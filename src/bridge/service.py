@@ -338,7 +338,7 @@ class BridgeServiceImpl(BridgeService):
         def clip(v: float) -> float:
             return max(-1.0, min(1.0, v))
         
-        unclipped_world_x = -x
+        unclipped_world_x = x
         unclipped_world_y = y
         unclipped_world_z = z
 

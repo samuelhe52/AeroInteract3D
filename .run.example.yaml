@@ -1,6 +1,6 @@
 log_level: INFO
 camera_index: 0
-flip_camera: true
+flip_camera: false
 target_fps: 30
 frame_width: 1280
 frame_height: 960
