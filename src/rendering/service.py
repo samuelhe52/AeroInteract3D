@@ -23,6 +23,7 @@ from .debug.auto_scaling import AutoScalingManager
 from .debug.data_panel import DataPanelManager
 from .debug.cam_preview import CameraPreviewManager
 from .interaction import VirtualHand
+from src.gesture.runtime import estimate_hand_depth, landmark_to_camera_vec3
 
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
@@ -358,14 +359,13 @@ class RenderingServiceImpl(RenderOutputPort):
         if hasattr(self, '_virtual_hand'):
             # 复用cam_preview验证过的RawHandObservation数据源
             if self._last_observation is not None and hasattr(self._last_observation, 'landmarks'):
-                landmarks = self._last_observation.landmarks
-                # 核心：把自定义Vec3转为Panda3D能识别的Vec3
+                raw_landmarks = self._last_observation.landmarks
+                depth_hint = estimate_hand_depth(raw_landmarks, self._last_observation.hand_scale)
                 converted_landmarks = []
-                for lm in landmarks:
-                    # 逐个提取x/y/z值，创建Panda3D的Vec3
-                    panda_lm = PandaVec3(lm.x, lm.y, lm.z)
+                for lm in raw_landmarks:
+                    camera_lm = landmark_to_camera_vec3(lm, depth_hint=depth_hint)
+                    panda_lm = PandaVec3(camera_lm.x, camera_lm.y, camera_lm.z)
                     converted_landmarks.append(panda_lm)
-                # 替换原有的landmarks变量
                 landmarks = converted_landmarks
                 
                 # 只有拿到21个有效关键点才更新

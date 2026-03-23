@@ -67,9 +67,10 @@ class BridgeMetrics:
 
 
 class BridgeServiceImpl(BridgeService):
-    def __init__(self) -> None:
+    def __init__(self, *, input_mirrored: bool = True) -> None:
         self.lifecycle_state = LIFECYCLE_STOPPED
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
+        self._input_mirrored = bool(input_mirrored)
         self._interaction_state = BRIDGE_STATE_IDLE
         self._last_frame_id: int | None = None
         self._last_timestamp_ms: int | None = None
@@ -304,9 +305,9 @@ class BridgeServiceImpl(BridgeService):
         - +z: toward the user/camera (camera depth)
         
         world_norm definition (renderer-facing scene space after bridge mapping):
-        - +x: right (scene horizontal)
-        - +y: up (scene vertical)
-        - +z: toward the user (scene depth)
+        - +x: user-right in the scene
+        - +y: up
+        - +z: out of the screen toward the user
         
         :param position: Original coordinates in camera_norm (Vec3), None is allowed
         :return: Transformed coordinates in world_norm (Vec3), guaranteed to be within [-1.0, 1.0]
@@ -333,14 +334,18 @@ class BridgeServiceImpl(BridgeService):
         y = position.y if is_valid_num(position.y) else 0.0
         z = position.z if is_valid_num(position.z) else 0.0
         
-        # 3. Current contract keeps camera_norm and world_norm aligned.
-        # Preserve the incoming coordinates and only clip them into world_norm.
+        # 3. Convert from camera-centric coordinates into user-centric scene motion.
+        # The scene camera views the origin from +Y, so world +x appears on the
+        # left side of the screen. Mirrored input therefore needs an x inversion
+        # to preserve user-perceived left/right motion, while unmirrored input
+        # should keep x as-is. Positive camera z means "toward camera", which the
+        # scene should interpret as moving farther into the screen.
         def clip(v: float) -> float:
             return max(-1.0, min(1.0, v))
         
-        unclipped_world_x = x
+        unclipped_world_x = -x if self._input_mirrored else x
         unclipped_world_y = y
-        unclipped_world_z = z
+        unclipped_world_z = -z
 
         final_x = clip(unclipped_world_x)
         final_y = clip(unclipped_world_y)

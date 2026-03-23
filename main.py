@@ -75,7 +75,8 @@ def _built_in_run_defaults() -> dict[str, object]:
         "aggressive_release_guard": False,
         "virtual_hand": {
             "scale": 4.0,
-            "depth_scale": 8.0,
+            "depth_scale": 4.0,
+            "perspective_scale": 0.4,
             "stable_threshold": 3,
             "bone_color": [1.0, 0.5, 0.0],
             "bone_width": 2.0,
@@ -142,6 +143,8 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
                 raise ValueError(f"Run config {path} field 'virtual_hand.scale' must be a number")
             if "depth_scale" in value and not isinstance(value["depth_scale"], (int, float)):
                 raise ValueError(f"Run config {path} field 'virtual_hand.depth_scale' must be a number")
+            if "perspective_scale" in value and not isinstance(value["perspective_scale"], (int, float)):
+                raise ValueError(f"Run config {path} field 'virtual_hand.perspective_scale' must be a number")
             if "stable_threshold" in value and not (isinstance(value["stable_threshold"], int) and value["stable_threshold"] > 0):
                 raise ValueError(f"Run config {path} field 'virtual_hand.stable_threshold' must be a positive integer")
             if "bone_color" in value and not (isinstance(value["bone_color"], list) and len(value["bone_color"]) == 3):
@@ -381,10 +384,11 @@ def build_app(config: AppConfig) -> App:
         motion_preset=config.motion_preset,
         aggressive_release_guard=config.aggressive_release_guard,
     )
-    bridge = BridgeServiceImpl()
+    bridge = BridgeServiceImpl(input_mirrored=config.flip_camera)
     render_output = RenderingServiceImpl(
         debug_stats_enabled=config.debug_stats,
         position_sensitivity=config.render_position_sensitivity,
+        virtual_hand_config=config.virtual_hand,
     )
     app = App(config, gesture_input, bridge, render_output, debug_frame_source=gesture_input)
     if hasattr(render_output, "set_quit_callback"):

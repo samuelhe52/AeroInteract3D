@@ -6,13 +6,15 @@ import tkinter as tk
 from collections.abc import Callable
 
 from panda3d.core import (
-    WindowProperties, AmbientLight, DirectionalLight,
-    PerspectiveLens, NodePath, GraphicsWindow
+    AntialiasAttrib, WindowProperties, AmbientLight, DirectionalLight,
+    PerspectiveLens, NodePath, GraphicsWindow, loadPrcFileData
 )
 from direct.showbase.ShowBase import ShowBase
 
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_core")
+loadPrcFileData("", "framebuffer-multisample 1")
+loadPrcFileData("", "multisamples 4")
 DEFAULT_WINDOW_ASPECT_RATIO = (16, 9)
 DEFAULT_WINDOW_SCREEN_SCALE = 0.8
 REFERENCE_WINDOW_SIZE = (1600, 900)
@@ -142,6 +144,7 @@ class RenderingCoreManager:
             # Set window background to white (original logic preserved)
             if self._base:
                 self._base.setBackgroundColor(1, 1, 1, 1)
+                self._base.render.setAntialias(AntialiasAttrib.MAuto)
                 win: Optional[GraphicsWindow] = self._base.win
                 if win:
                     win.requestProperties(window_props)
@@ -170,8 +173,8 @@ class RenderingCoreManager:
             lens.setNearFar(0.1, 100.0)  # Use a more practical near/far clip range.
             self._base.cam.node().setLens(lens)
             
-            # Position the camera with a 30-degree downward-tilt view of the objects.
-            self._base.cam.setPos(0.0, 5.0, 2.887)  # 30-degree view (z = 5 * tan(30°))
+            # Position the camera with a 15-degree downward-tilt view of the objects.
+            self._base.cam.setPos(0.0, 5.0, 1.340)  # 15-degree view (z = 5 * tan(15°))
             self._base.cam.lookAt(0.0, 0.0, 0.0)  # Look at the origin.
             self._base.cam.setH(180)  # Flip camera horizontally
             logger.info("Camera configured, using perspective camera for 3D scene")
