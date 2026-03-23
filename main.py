@@ -19,7 +19,7 @@ from src.gesture.constants import (
 )
 from src.bridge.service import BridgeServiceImpl
 from src.gesture.service import GestureServiceImpl
-from src.ports import BridgeService, GestureInputPort, RenderOutputPort
+from src.ports import BridgeService, DebugFrameSource, GestureInputPort, RenderOutputPort
 from src.rendering.service import RenderingServiceImpl
 
 
@@ -169,11 +169,13 @@ class App:
         gesture_input: GestureInputPort,
         bridge: BridgeService,
         render_output: RenderOutputPort,
+        debug_frame_source: DebugFrameSource | None = None,
     ) -> None:
         self.config = config
         self.gesture_input = gesture_input
         self.bridge = bridge
         self.render_output = render_output
+        self.debug_frame_source = debug_frame_source
         self.lifecycle_state = LIFECYCLE_INITIALIZING
         self._running = False
 
@@ -200,9 +202,9 @@ class App:
             packet = self.gesture_input.poll()
             if packet is not None:
                 self.render_output.update_gesture_data(packet)
-                
-                if hasattr(self.gesture_input, 'get_camera_data'):
-                    camera_frame, observation = self.gesture_input.get_camera_data()
+
+                if self.debug_frame_source is not None:
+                    camera_frame, observation = self.debug_frame_source.get_camera_data()
                     if camera_frame is not None:
                         self.render_output.update_camera_frame(camera_frame, observation, packet)
                 
@@ -239,7 +241,11 @@ class App:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     defaults, run_config_path = _resolve_run_defaults(argv)
     parser = argparse.ArgumentParser(description="AeroInteract3D bootstrap entrypoint")
-    parser.add_argument("--run-config", default=None if run_config_path is None else str(run_config_path), help=RUN_CONFIG_HELP)
+    parser.add_argument(
+        "--run-config",
+        default=None if run_config_path is None else str(run_config_path),
+        help=RUN_CONFIG_HELP,
+    )
     parser.add_argument(
         "--no-run-config",
         action="store_true",
@@ -345,7 +351,7 @@ def build_app(config: AppConfig) -> App:
         debug_stats_enabled=config.debug_stats,
         position_sensitivity=config.render_position_sensitivity,
     )
-    app = App(config, gesture_input, bridge, render_output)
+    app = App(config, gesture_input, bridge, render_output, debug_frame_source=gesture_input)
     if hasattr(render_output, "set_quit_callback"):
         render_output.set_quit_callback(app.request_stop)
     return app

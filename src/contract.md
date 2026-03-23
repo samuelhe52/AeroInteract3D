@@ -80,8 +80,9 @@ Current project decision: the rendering consumer is implemented in **Python + Pa
 - `init_scene`
   - MUST include target object identifiers and default transforms.
 - `set_object_pose`
-  - MUST include `position: {x,y,z}`.
-  - MAY include `rotation: {x,y,z,w}` and `scale: {x,y,z}`.
+  - MAY include `position: {x,y,z}`.
+  - MAY include `hpr: {h,p,r}`.
+  - MUST include at least one of `position` or `hpr`.
   - MUST include `coordinate_space` (`world_norm`).
 - `set_object_state`
   - MUST include `interaction_state` in `{ "idle", "hover", "grabbed" }`.

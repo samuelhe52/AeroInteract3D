@@ -16,6 +16,7 @@ def make_packet(
     tracking_state: str = "tracked",
     confidence: float = 0.95,
     wrist: Vec3 | None = None,
+    debug: dict | None = None,
 ) -> GesturePacket:
     return GesturePacket(
         contract_version="1.0.0",
@@ -30,6 +31,7 @@ def make_packet(
         wrist=wrist or Vec3(0.0, 0.0, 0.0),
         coordinate_space="camera_norm",
         pinch_distance=0.02,
+        debug=debug,
     )
 
 
@@ -82,6 +84,33 @@ def test_bridge_uses_pinch_midpoint_and_inverts_horizontal_axis() -> None:
     commands = bridge.process(packet)
 
     assert commands[1].payload["position"] == pytest.approx({"x": -0.4, "y": 0.6, "z": 0.2})
+
+
+def test_bridge_emits_hpr_only_in_rotation_mode() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100, pinch_state="open"))
+    commands = bridge.process(
+        make_packet(
+            frame_id=2,
+            timestamp_ms=120,
+            pinch_state="pinched",
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 15.0,
+                    "deg_y": -30.0,
+                    "deg_z": 45.0,
+                }
+            },
+        )
+    )
+
+    assert [command.command_type for command in commands] == ["set_object_state", "set_object_pose"]
+    assert "position" not in commands[1].payload
+    assert commands[1].payload["hpr"] == pytest.approx({"h": 15.0, "p": -30.0, "r": 45.0})
+    assert commands[1].payload["coordinate_space"] == "world_norm"
 
 
 def test_bridge_resets_when_tracking_is_lost_during_grab() -> None:

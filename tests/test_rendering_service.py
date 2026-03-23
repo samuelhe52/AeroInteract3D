@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from src.contracts import SceneCommand
+from src.contracts import GesturePacket, SceneCommand, Vec3
+from src.rendering.debug.data_panel import DataPanelManager
 from src.rendering.rendering_core import RenderingCoreManager
 from src.rendering import service as rendering_service
 from src.rendering.service import ObjectInitialState, RenderingServiceImpl
@@ -24,6 +25,40 @@ def make_command(
         command_type=command_type,
         object_id=object_id,
         payload={} if payload is None else payload,
+    )
+
+
+def make_packet_with_rotation() -> GesturePacket:
+    return GesturePacket(
+        contract_version="1.0.0",
+        frame_id=7,
+        timestamp_ms=112,
+        hand_id="hand-right",
+        tracking_state="tracked",
+        confidence=0.93,
+        pinch_state="pinched",
+        index_tip=Vec3(0.4, 0.2, 0.1),
+        thumb_tip=Vec3(0.3, 0.2, 0.1),
+        wrist=Vec3(0.2, 0.1, 0.0),
+        coordinate_space="camera_norm",
+        pinch_distance=0.031,
+        debug={
+            "rotation": {
+                "enabled": True,
+                "rotating": True,
+                "slot": 4,
+                "slot_count": 18,
+                "slot_x": 2,
+                "slot_y": 3,
+                "slot_z": 4,
+                "deg_x": 40.0,
+                "deg_y": 60.0,
+                "deg_z": 80.0,
+                "gate_count": 3,
+                "source": "equivalent_xyz",
+                "mode_name": "ROTATE_ENABLED",
+            }
+        },
     )
 
 
@@ -169,6 +204,17 @@ def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     service.start()
 
     assert service.health()["lifecycle_state"] == LIFECYCLE_RUNNING
+
+
+def test_data_panel_formats_rotation_lines_from_packet_debug() -> None:
+    packet = make_packet_with_rotation()
+
+    lines = DataPanelManager._rotation_lines(packet)
+
+    assert lines == (
+        "rot: ROTATE_ENABLED rot/live g03",
+        "xyz: +40.0 +60.0 +80.0",
+    )
 
 
 def test_rendering_validation_does_not_mutate_invalid_command() -> None:
