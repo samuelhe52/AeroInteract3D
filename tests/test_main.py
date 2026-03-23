@@ -154,7 +154,7 @@ def test_parse_args_disables_debug_stats_by_default() -> None:
 
 
 def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "DEFAULT_RUN_CONFIG_PATH", tmp_path / ".run.yaml")
     run_config = tmp_path / ".run.yaml"
     run_config.write_text(
         "\n".join(
@@ -187,7 +187,7 @@ def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
 
 
 def test_parse_args_rejects_removed_live_preview_run_config_key(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "DEFAULT_RUN_CONFIG_PATH", tmp_path / ".run.yaml")
     (tmp_path / ".run.yaml").write_text(
         "\n".join(
             [
@@ -203,7 +203,7 @@ def test_parse_args_rejects_removed_live_preview_run_config_key(tmp_path, monkey
 
 
 def test_cli_flags_override_run_config_defaults(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "DEFAULT_RUN_CONFIG_PATH", tmp_path / ".run.yaml")
     (tmp_path / ".run.yaml").write_text(
         "\n".join(
             [
@@ -232,12 +232,22 @@ def test_cli_flags_override_run_config_defaults(tmp_path, monkeypatch) -> None:
 
 
 def test_no_run_config_ignores_local_file(tmp_path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "DEFAULT_RUN_CONFIG_PATH", tmp_path / ".run.yaml")
     (tmp_path / ".run.yaml").write_text("target_fps: 55\n", encoding="utf-8")
 
     config = build_config(parse_args(["--no-run-config"]))
 
     assert config.target_fps == DEFAULT_TARGET_FPS
+
+
+def test_parse_args_uses_default_run_config_independent_of_cwd(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(main, "DEFAULT_RUN_CONFIG_PATH", tmp_path / ".run.yaml")
+    monkeypatch.chdir(tmp_path.parent)
+    (tmp_path / ".run.yaml").write_text("target_fps: 55\n", encoding="utf-8")
+
+    config = build_config(parse_args([]))
+
+    assert config.target_fps == 55
 
 
 def test_parse_args_disables_debug_stats_flag() -> None:
