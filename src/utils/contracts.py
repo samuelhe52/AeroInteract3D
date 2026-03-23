@@ -180,6 +180,22 @@ def validate_scene_command(
             )
         )
 
+    if (
+        isinstance(command.payload, dict)
+        and command.command_type == "set_object_pose"
+        and "position" not in command.payload
+        and "hpr" not in command.payload
+    ):
+        errors.append(
+            error_entry(
+                "scene.set_object_pose.empty",
+                "set_object_pose payload must include position and/or hpr",
+                recoverable=True,
+                hint="Provide at least one transform component in set_object_pose.",
+                details={"command_id": command.command_id},
+            )
+        )
+
     return errors
 
 

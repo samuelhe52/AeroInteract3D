@@ -119,11 +119,6 @@ class DataPanelManager:
         if not isinstance(rotation, dict):
             return ()
 
-        slot = int(rotation.get("slot", 0))
-        slot_count = int(rotation.get("slot_count", 0))
-        slot_x = int(rotation.get("slot_x", slot))
-        slot_y = int(rotation.get("slot_y", slot))
-        slot_z = int(rotation.get("slot_z", slot))
         deg_x = float(rotation.get("deg_x", 0.0))
         deg_y = float(rotation.get("deg_y", 0.0))
         deg_z = float(rotation.get("deg_z", 0.0))
@@ -131,13 +126,12 @@ class DataPanelManager:
         rotating = bool(rotation.get("rotating", False))
         mode_name = str(rotation.get("mode_name", "MOVE_ONLY"))
         gate_count = int(rotation.get("gate_count", 0))
-        source = str(rotation.get("source", "none"))
+        mode_label = "rot" if enabled else "move"
+        state_label = "live" if rotating else "idle"
 
         return (
-            f"rotation: {mode_name} enabled={enabled} rotating={rotating}",
-            f"rot_slot xyz: ({slot_x:02d}, {slot_y:02d}, {slot_z:02d})/{slot_count:02d}",
-            f"rot_deg xyz: ({deg_x:+05.1f}, {deg_y:+05.1f}, {deg_z:+05.1f})",
-            f"rot_gate: {gate_count} source: {source}",
+            f"rot: {mode_name} {mode_label}/{state_label} g{gate_count:02d}",
+            f"xyz: {deg_x:+05.1f} {deg_y:+05.1f} {deg_z:+05.1f}",
         )
     
     def update_coordinate_data(self, world_norm_pos: tuple, scene_pos: tuple) -> None:

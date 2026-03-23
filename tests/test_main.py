@@ -26,6 +26,11 @@ class FakeGestureInput:
         return None
 
 
+class FakeDebugFrameSource:
+    def get_camera_data(self):
+        return None, None
+
+
 class FakeBridge:
     def start(self) -> None:
         return None
@@ -44,6 +49,8 @@ class FakeRenderOutput:
     def __init__(self) -> None:
         self.step_calls = 0
         self.quit_callback = None
+        self.updated_gesture_packets = []
+        self.updated_camera_frames = []
 
     def start(self) -> None:
         return None
@@ -59,6 +66,12 @@ class FakeRenderOutput:
 
     def stop(self) -> None:
         return None
+
+    def update_gesture_data(self, packet) -> None:
+        self.updated_gesture_packets.append(packet)
+
+    def update_camera_frame(self, frame, observation=None, packet=None) -> None:
+        self.updated_camera_frames.append((frame, observation, packet))
 
     def set_quit_callback(self, callback) -> None:
         self.quit_callback = callback
@@ -77,6 +90,41 @@ def test_app_run_steps_render_output_every_loop_iteration() -> None:
     app.run()
 
     assert render_output.step_calls == 1
+
+
+def test_app_run_reads_camera_data_through_port() -> None:
+    class CameraGestureInput(FakeGestureInput):
+        def __init__(self) -> None:
+            super().__init__()
+            self._emitted = False
+
+        def poll(self):
+            if self._emitted:
+                assert self.app is not None
+                self.app.request_stop()
+                return None
+
+            self._emitted = True
+            return object()
+
+    class CameraDebugFrameSource(FakeDebugFrameSource):
+        def get_camera_data(self):
+            return "frame", "observation"
+
+    config = AppConfig(target_fps=60)
+    gesture_input = CameraGestureInput()
+    bridge = FakeBridge()
+    render_output = FakeRenderOutput()
+    debug_frame_source = CameraDebugFrameSource()
+    app = App(config, gesture_input, bridge, render_output, debug_frame_source=debug_frame_source)
+    gesture_input.app = app
+
+    app.lifecycle_state = LIFECYCLE_RUNNING
+
+    app.run()
+
+    assert len(render_output.updated_gesture_packets) == 1
+    assert render_output.updated_camera_frames == [("frame", "observation", render_output.updated_gesture_packets[0])]
 
 
 def test_parse_args_enables_debug_stats_flag() -> None:

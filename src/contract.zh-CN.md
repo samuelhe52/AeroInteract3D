@@ -80,8 +80,9 @@ Python 数据类（dataclass）的唯一定义位于 `src/contracts.py`。
 - `init_scene`
   - 必须包含目标对象标识与默认变换。
 - `set_object_pose`
-  - 必须包含 `position: {x,y,z}`。
-  - 可选包含 `rotation: {x,y,z,w}` 与 `scale: {x,y,z}`。
+  - 可包含 `position: {x,y,z}`。
+  - 可包含 `hpr: {h,p,r}`。
+  - 至少必须包含 `position` 或 `hpr` 其中之一。
   - 必须包含 `coordinate_space`（`world_norm`）。
 - `set_object_state`
   - 必须包含 `interaction_state`，取值 `{ "idle", "hover", "grabbed" }`。

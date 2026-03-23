@@ -18,7 +18,7 @@ from src.gesture.constants import (
 from src.contracts import GesturePacket
 from src.gesture.runtime import CaptureRuntime, HandLandmarkerRuntime, RawHandObservation
 from src.gesture.temporal import MotionPreset, TemporalReducer, temporal_tuning_for_motion_preset
-from src.ports import GestureInputPort
+from src.ports import DebugFrameSource, GestureInputPort
 from src.utils.contracts import validate_gesture_packet
 from src.utils.runtime import (
     LIFECYCLE_DEGRADED,
@@ -60,7 +60,7 @@ class GestureConfig:
     aggressive_release_guard: bool = False
 
 
-class GestureServiceImpl(GestureInputPort):
+class GestureServiceImpl(GestureInputPort, DebugFrameSource):
     def __init__(
         self,
         *,

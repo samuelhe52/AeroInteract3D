@@ -212,10 +212,8 @@ def test_data_panel_formats_rotation_lines_from_packet_debug() -> None:
     lines = DataPanelManager._rotation_lines(packet)
 
     assert lines == (
-        "rotation: ROTATE_ENABLED enabled=True rotating=True",
-        "rot_slot xyz: (02, 03, 04)/18",
-        "rot_deg xyz: (+40.0, +60.0, +80.0)",
-        "rot_gate: 3 source: equivalent_xyz",
+        "rot: ROTATE_ENABLED rot/live g03",
+        "xyz: +40.0 +60.0 +80.0",
     )
 
 
@@ -371,6 +369,49 @@ def test_rendering_applies_pose_updates_with_axis_remap() -> None:
 
     assert obj.pos == (0.2, -0.3, 0.7)
     assert obj.hpr == (0.0, 0.0, 0.0)
+
+
+def test_rendering_hpr_only_pose_update_leaves_position_unchanged() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    obj.pos = (1.0, 2.0, 3.0)
+    obj.hpr = (0.0, 0.0, 0.0)
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="pose-rot-only-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={"hpr": {"h": 10.0, "p": 20.0, "r": 30.0}, "coordinate_space": "world_norm"},
+        )
+    )
+
+    assert obj.pos == (1.0, 2.0, 3.0)
+    assert obj.hpr == (10.0, 20.0, 30.0)
+
+
+def test_rendering_position_only_pose_update_leaves_rotation_unchanged() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    obj.hpr = (4.0, 5.0, 6.0)
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="pose-pos-only-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={"position": {"x": 0.2, "y": 0.7, "z": -0.3}, "coordinate_space": "world_norm"},
+        )
+    )
+
+    assert obj.pos == (0.2, -0.3, 0.7)
+    assert obj.hpr == (4.0, 5.0, 6.0)
 
 
 def test_rendering_applies_position_sensitivity_to_pose_updates() -> None:
