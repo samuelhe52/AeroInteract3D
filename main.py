@@ -26,7 +26,7 @@ from src.rendering.service import RenderingServiceImpl
 LIFECYCLE_INITIALIZING = "INITIALIZING"
 LIFECYCLE_RUNNING = "RUNNING"
 LIFECYCLE_STOPPED = "STOPPED"
-DEFAULT_RUN_CONFIG_PATH = Path(".run.yaml")
+DEFAULT_RUN_CONFIG_PATH = Path(__file__).resolve().with_name(".run.yaml")
 RUN_CONFIG_HELP = "Path to a YAML file with machine-local default run options."
 RUN_CONFIG_KEYS = frozenset(
     {
