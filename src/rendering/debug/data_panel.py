@@ -18,7 +18,7 @@ class DataPanelManager:
     """Data panel manager, responsible for data panel frame+text initialization, gesture data updates, and scaling adaptation"""
 
     PANEL_WIDTH = 384
-    PANEL_HEIGHT = 180
+    PANEL_HEIGHT = 220
     PANEL_MARGIN = 12
     PANEL_GAP = 12
     TEXT_OFFSET_X = 18
@@ -105,9 +105,34 @@ class DataPanelManager:
                 f"fps: {fps:.1f}",
                 f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
                 f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
-            )
-        
+            ) + self._rotation_lines(packet)
+
         self._status_panel.setText("\n".join(lines))
+
+    @staticmethod
+    def _rotation_lines(packet: GesturePacket) -> tuple[str, ...]:
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return ()
+
+        rotation = debug_payload.get("rotation")
+        if not isinstance(rotation, dict):
+            return ()
+
+        deg_x = float(rotation.get("deg_x", 0.0))
+        deg_y = float(rotation.get("deg_y", 0.0))
+        deg_z = float(rotation.get("deg_z", 0.0))
+        enabled = bool(rotation.get("enabled", False))
+        rotating = bool(rotation.get("rotating", False))
+        mode_name = str(rotation.get("mode_name", "MOVE_ONLY"))
+        gate_count = int(rotation.get("gate_count", 0))
+        mode_label = "rot" if enabled else "move"
+        state_label = "live" if rotating else "idle"
+
+        return (
+            f"rot: {mode_name} {mode_label}/{state_label} g{gate_count:02d}",
+            f"xyz: {deg_x:+05.1f} {deg_y:+05.1f} {deg_z:+05.1f}",
+        )
     
     def update_coordinate_data(self, world_norm_pos: tuple, scene_pos: tuple) -> None:
         """Update coordinate data for display"""

@@ -1,8 +1,11 @@
 log_level: INFO
 camera_index: 0
+flip_camera: true
 target_fps: 30
 frame_width: 1280
 frame_height: 960
+debug_stats: false
+render_position_sensitivity: 1.0
 debug_stats: true
 motion_preset: medium
 aggressive_release_guard: false

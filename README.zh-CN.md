@@ -29,6 +29,7 @@ live preview 当前显示的是预览主循环实际测得的 FPS，而不是仅
 主应用预览行为：
 
 - Panda3D 主窗口现在直接承载摄像头预览画面
+- 使用 `--flip-camera` 或 `--no-flip-camera` 控制是否做水平镜像
 - 使用 `--debug-stats` 可显示手势/运行时统计面板
 - 主入口旧的 `--live-preview` 路径已经彻底移除
 

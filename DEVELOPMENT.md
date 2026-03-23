@@ -92,9 +92,11 @@ The main app entrypoint in `main.py` currently supports:
 - `--run-config`
 - `--no-run-config`
 - `--camera-index`
+- `--flip-camera`
 - `--target-fps`
 - `--frame-width`
 - `--frame-height`
+- `--render-position-sensitivity`
 
 Current defaults are `30 FPS` and `1280x960` requested capture resolution.
 

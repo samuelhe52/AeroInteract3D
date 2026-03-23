@@ -66,6 +66,7 @@ class RenderingServiceImpl(RenderOutputPort):
         window_adapter_factory: Callable[[], RenderingCoreManager] | None = None,
         *,
         debug_stats_enabled: bool = False,
+        position_sensitivity: float = 1.0,
         virtual_hand_config: dict | None = None,
     ):
         super().__init__()
@@ -74,6 +75,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._window_adapter = self._window_adapter_factory()
         self._rendering_core: Optional[RenderingCoreManager] = self._window_adapter
         self._debug_stats_enabled = debug_stats_enabled
+        self._position_sensitivity = max(float(position_sensitivity), 0.001)
         self._quit_callback: Callable[[], None] | None = None
         # Material cache keyed by interaction state.
         self._material_cache: Dict[str, Material] = self._init_materials()
@@ -168,6 +170,12 @@ class RenderingServiceImpl(RenderOutputPort):
         """
         x, y, z = (float(value) for value in position)
         return (x, z, y)
+
+    def _scale_world_norm_position(
+        self,
+        position: tuple[float, float, float] | list[float],
+    ) -> tuple[float, float, float]:
+        return tuple(float(value) * self._position_sensitivity for value in position)
     
     def start(self) -> None:
         """Start module and initialize environment to RUNNING or DEGRADED (original logic preserved)"""
@@ -457,7 +465,7 @@ class RenderingServiceImpl(RenderOutputPort):
             # 1. Parse command parameters.
             object_id = command.object_id
             payload = command.payload
-            
+
             # 2. Parse position parameters (support dict{x,y,z} or 3D list/tuple)
             pos_data = payload.get("position", [0.0, 0.0, 0.0])
             if isinstance(pos_data, dict):
@@ -581,7 +589,8 @@ class RenderingServiceImpl(RenderOutputPort):
             # 6. Validate coordinate ranges and clip to world_norm [-1.0, 1.0].
             clipped_pos = self._clip_coordinate(pos_float)
             clipped_hpr = self._clip_coordinate(hpr_float, rotation=True)  # Rotation is type-checked only and not range-limited.
-            scene_pos = self._world_norm_to_scene_pos(clipped_pos)
+            scaled_pos = self._scale_world_norm_position(clipped_pos)
+            scene_pos = self._world_norm_to_scene_pos(scaled_pos)
             
             # 7. Update the object transform.
             obj_np = self._object_cache[object_id]
@@ -1014,36 +1023,6 @@ class RenderingServiceImpl(RenderOutputPort):
         payload.setdefault("timestamp", int(time.time() * 1000))
         self._errors.append(payload)
         self._errors = self._errors[-MAX_ERROR_HISTORY:]
-
-
-
-    def update_runtime_status(self, packet=None, fps: float = 0.0) -> None:
-        """Update the top-left data panel with externally passed gesture data packets and FPS"""
-        if not hasattr(self, "_status_panel") or self._status_panel is None:
-            return
-        if packet is None:
-            lines = (
-                "frame: 0",
-                "tracking: idle",
-                "pinch: idle",
-                "confidence: 0.00",
-                "pinch_distance: 0.000",
-                "wrist: (+0.00, +0.00, +0.00)",
-                f"fps: {fps:.1f}",
-            )
-        else:
-            lines = (
-                f"frame: {getattr(packet, 'frame_id', 0)}",
-                f"tracking: {getattr(packet, 'tracking_state', 'idle')}",
-                f"pinch: {getattr(packet, 'pinch_state', 'idle')}",
-                f"confidence: {getattr(packet, 'confidence', 0.0):.2f}",
-                f"pinch_distance: {0.0 if getattr(packet, 'pinch_distance', None) is None else packet.pinch_distance:.3f}",
-                f"wrist: ({getattr(packet.wrist, 'x', 0.0):+.2f}, {getattr(packet.wrist, 'y', 0.0):+.2f}, {getattr(packet.wrist, 'z', 0.0):+.2f})",
-                f"fps: {fps:.1f}",
-                f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
-                f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
-            )
-        self._status_panel.setText("\n".join(lines))
     
     def update_gesture_data(self, packet) -> None:
         """Update gesture data"""

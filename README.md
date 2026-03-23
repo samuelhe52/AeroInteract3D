@@ -29,8 +29,10 @@ Current runtime defaults:
 Main app preview behavior:
 
 - the Panda3D window now owns the camera preview feed
+- use `--flip-camera` or `--no-flip-camera` to control horizontal mirroring
 - use `--debug-stats` to show the gesture/runtime statistics panel
 - the old main-entry `--live-preview` path is removed completely
+- use `--render-position-sensitivity` to make rendered object translation more or less sensitive
 
 Local machine run defaults can be stored in `.run.yaml` at the repository root. A committed
 template is available in `.run.example.yaml`, while the real `.run.yaml` stays untracked.

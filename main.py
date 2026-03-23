@@ -19,7 +19,7 @@ from src.gesture.constants import (
 )
 from src.bridge.service import BridgeServiceImpl
 from src.gesture.service import GestureServiceImpl
-from src.ports import BridgeService, GestureInputPort, RenderOutputPort
+from src.ports import BridgeService, DebugFrameSource, GestureInputPort, RenderOutputPort
 from src.rendering.service import RenderingServiceImpl
 
 
@@ -32,10 +32,12 @@ RUN_CONFIG_KEYS = frozenset(
     {
         "log_level",
         "camera_index",
+        "flip_camera",
         "target_fps",
         "frame_width",
         "frame_height",
         "debug_stats",
+        "render_position_sensitivity",
         "motion_preset",
         "aggressive_release_guard",
         "virtual_hand",
@@ -48,10 +50,12 @@ class AppConfig:
     contract_version: str = "0.1.0"
     log_level: str = "INFO"
     camera_index: int = DEFAULT_CAMERA_INDEX
+    flip_camera: bool = True
     target_fps: int = DEFAULT_TARGET_FPS
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
     debug_stats: bool = False
+    render_position_sensitivity: float = 1.0
     motion_preset: str = GESTURE_MOTION_PRESET
     aggressive_release_guard: bool = False
     virtual_hand: dict | None = None
@@ -61,10 +65,12 @@ def _built_in_run_defaults() -> dict[str, object]:
     return {
         "log_level": "INFO",
         "camera_index": DEFAULT_CAMERA_INDEX,
+        "flip_camera": True,
         "target_fps": DEFAULT_TARGET_FPS,
         "frame_width": DEFAULT_FRAME_WIDTH,
         "frame_height": DEFAULT_FRAME_HEIGHT,
         "debug_stats": False,
+        "render_position_sensitivity": 1.0,
         "motion_preset": GESTURE_MOTION_PRESET,
         "aggressive_release_guard": False,
         "virtual_hand": {
@@ -97,6 +103,12 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
             validated[key] = value
             continue
 
+        if key == "flip_camera":
+            if not isinstance(value, bool):
+                raise ValueError(f"Run config {path} field '{key}' must be a boolean")
+            validated[key] = value
+            continue
+
         if key in {
             "camera_index",
             "target_fps",
@@ -106,6 +118,14 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
             if not isinstance(value, int) or isinstance(value, bool):
                 raise ValueError(f"Run config {path} field '{key}' must be an integer")
             validated[key] = value
+            continue
+
+        if key == "render_position_sensitivity":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise ValueError(f"Run config {path} field '{key}' must be a number")
+            if float(value) <= 0.0:
+                raise ValueError(f"Run config {path} field '{key}' must be greater than zero")
+            validated[key] = float(value)
             continue
 
         if key in {"debug_stats", "aggressive_release_guard"}:
@@ -175,11 +195,13 @@ class App:
         gesture_input: GestureInputPort,
         bridge: BridgeService,
         render_output: RenderOutputPort,
+        debug_frame_source: DebugFrameSource | None = None,
     ) -> None:
         self.config = config
         self.gesture_input = gesture_input
         self.bridge = bridge
         self.render_output = render_output
+        self.debug_frame_source = debug_frame_source
         self.lifecycle_state = LIFECYCLE_INITIALIZING
         self._running = False
 
@@ -206,9 +228,9 @@ class App:
             packet = self.gesture_input.poll()
             if packet is not None:
                 self.render_output.update_gesture_data(packet)
-                
-                if hasattr(self.gesture_input, 'get_camera_data'):
-                    camera_frame, observation = self.gesture_input.get_camera_data()
+
+                if self.debug_frame_source is not None:
+                    camera_frame, observation = self.debug_frame_source.get_camera_data()
                     if camera_frame is not None:
                         self.render_output.update_camera_frame(camera_frame, observation, packet)
                 
@@ -245,7 +267,11 @@ class App:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     defaults, run_config_path = _resolve_run_defaults(argv)
     parser = argparse.ArgumentParser(description="AeroInteract3D bootstrap entrypoint")
-    parser.add_argument("--run-config", default=None if run_config_path is None else str(run_config_path), help=RUN_CONFIG_HELP)
+    parser.add_argument(
+        "--run-config",
+        default=None if run_config_path is None else str(run_config_path),
+        help=RUN_CONFIG_HELP,
+    )
     parser.add_argument(
         "--no-run-config",
         action="store_true",
@@ -253,9 +279,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--log-level", default=defaults["log_level"])
     parser.add_argument("--camera-index", type=int, default=defaults["camera_index"])
+    parser.add_argument(
+        "--flip-camera",
+        dest="flip_camera",
+        action="store_true",
+        help="Mirror the camera input horizontally.",
+    )
+    parser.add_argument(
+        "--no-flip-camera",
+        dest="flip_camera",
+        action="store_false",
+        help="Keep the camera input unmirrored.",
+    )
     parser.add_argument("--target-fps", type=int, default=defaults["target_fps"])
     parser.add_argument("--frame-width", type=int, default=defaults["frame_width"])
     parser.add_argument("--frame-height", type=int, default=defaults["frame_height"])
+    parser.add_argument(
+        "--render-position-sensitivity",
+        type=float,
+        default=defaults["render_position_sensitivity"],
+        help="Sensitivity multiplier applied to object translation in the rendering module.",
+    )
     parser.add_argument(
         "--motion-preset",
         choices=["high", "medium", "low"],
@@ -287,6 +331,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Hide the gesture statistics overlay and keep only the in-window camera preview.",
     )
     parser.set_defaults(
+        flip_camera=defaults["flip_camera"],
         debug_stats=defaults["debug_stats"],
         aggressive_release_guard=defaults["aggressive_release_guard"],
     )
@@ -313,10 +358,12 @@ def build_config(args: argparse.Namespace) -> AppConfig:
     return AppConfig(
         log_level=args.log_level.upper(),
         camera_index=args.camera_index,
+        flip_camera=args.flip_camera,
         target_fps=args.target_fps,
         frame_width=args.frame_width,
         frame_height=args.frame_height,
         debug_stats=args.debug_stats,
+        render_position_sensitivity=args.render_position_sensitivity,
         motion_preset=args.motion_preset,
         aggressive_release_guard=args.aggressive_release_guard,
         virtual_hand=virtual_hand_config,
@@ -326,6 +373,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
 def build_app(config: AppConfig) -> App:
     gesture_input = GestureServiceImpl(
         camera_index=config.camera_index,
+        flip_camera=config.flip_camera,
         target_fps=float(config.target_fps),
         frame_width=config.frame_width,
         frame_height=config.frame_height,
@@ -336,9 +384,9 @@ def build_app(config: AppConfig) -> App:
     bridge = BridgeServiceImpl()
     render_output = RenderingServiceImpl(
         debug_stats_enabled=config.debug_stats,
-        virtual_hand_config=config.virtual_hand,
+        position_sensitivity=config.render_position_sensitivity,
     )
-    app = App(config, gesture_input, bridge, render_output)
+    app = App(config, gesture_input, bridge, render_output, debug_frame_source=gesture_input)
     if hasattr(render_output, "set_quit_callback"):
         render_output.set_quit_callback(app.request_stop)
     return app

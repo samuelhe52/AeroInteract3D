@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.gesture.constants import TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
+from src.gesture.constants import ROT_SLOT_COUNT, TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
 from src.contracts import Vec3
 from src.gesture.runtime import RawHandObservation, normalized_pinch_distance
 from src.gesture.temporal import MOTION_PRESET_TUNINGS, TemporalReducer, temporal_tuning_for_motion_preset
@@ -9,19 +9,93 @@ from src.gesture.temporal import MOTION_PRESET_TUNINGS, TemporalReducer, tempora
 def make_observation(
     *,
     wrist_x: float = 0.0,
+    wrist_y: float = 0.0,
+    wrist_z: float = 0.0,
     pinch_gap: float = 0.04,
     confidence: float = 0.95,
+    hand_pose: str = "open",
 ) -> RawHandObservation:
+    wrist = Vec3(wrist_x, wrist_y, wrist_z)
     return RawHandObservation(
-        index_tip=Vec3(wrist_x + pinch_gap, 0.20, 0.10),
-        thumb_tip=Vec3(wrist_x, 0.20, 0.10),
-        wrist=Vec3(wrist_x, 0.0, 0.0),
+        index_tip=Vec3(wrist_x + pinch_gap, 0.20 + wrist_y, 0.10 + wrist_z),
+        thumb_tip=Vec3(wrist_x, 0.20 + wrist_y, 0.10 + wrist_z),
+        wrist=wrist,
         confidence=confidence,
         raw_pinch_distance=pinch_gap,
         hand_scale=0.35,
-        landmarks=[Vec3(0.5, 0.5, 0.0) for _ in range(21)],
+        landmarks=make_hand_landmarks(wrist=wrist, pose=hand_pose),
         handedness="Right",
     )
+
+
+def make_hand_landmarks(*, wrist: Vec3, pose: str) -> list[Vec3]:
+    points = [Vec3(wrist.x, wrist.y, wrist.z) for _ in range(21)]
+    tip_indices = [4, 8, 12, 16, 20]
+    # Keep synthetic spread separated so spread-only grab/open logic remains testable.
+    spread = 0.06 if pose == "grab" else 0.32
+    offset_step = 0.005 if pose == "grab" else 0.080
+    for i, tip_idx in enumerate(tip_indices):
+        offset = (i - 2) * offset_step
+        points[tip_idx] = Vec3(wrist.x + offset, wrist.y + spread, wrist.z)
+    return points
+
+
+def make_eq_rotation_observation(
+    *,
+    mid_x: float,
+    mid_y: float,
+    mid_z: float,
+    pinch_gap: float = 0.03,
+    hand_pose: str = "open",
+) -> RawHandObservation:
+    wrist = Vec3(0.0, 0.0, 0.0)
+    return RawHandObservation(
+        index_tip=Vec3(mid_x + (pinch_gap * 0.5), mid_y, mid_z),
+        thumb_tip=Vec3(mid_x - (pinch_gap * 0.5), mid_y, mid_z),
+        wrist=wrist,
+        confidence=0.95,
+        raw_pinch_distance=pinch_gap,
+        hand_scale=0.35,
+        landmarks=make_hand_landmarks(wrist=wrist, pose=hand_pose),
+        handedness="Right",
+    )
+
+
+def activate_rotation_mode(reducer: TemporalReducer, *, start_frame_id: int = 1) -> int:
+    frame_id = start_frame_id
+
+    # Grab phase.
+    for _ in range(8):
+        reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    # Open phase to complete one grab->open sequence.
+    for _ in range(8):
+        check = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    assert check.debug["rotation"]["mode_active"] is True
+
+    # Ensure rotation channel is truly enabled before handing control to tests.
+    for _ in range(24):
+        check = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+        if check.pinch_state == "pinched" and check.debug["rotation"]["enabled"]:
+            return frame_id
+
+    raise AssertionError("failed to enter stable enabled rotation state")
 
 
 def test_temporal_reducer_requires_multiple_frames_to_confirm_pinch_and_release() -> None:
@@ -131,3 +205,254 @@ def test_temporal_motion_preset_affects_responsiveness() -> None:
 
     assert MOTION_PRESET_TUNINGS["low"].xy_smoothing_alpha > MOTION_PRESET_TUNINGS["high"].xy_smoothing_alpha
     assert low_packet.wrist.x > high_packet.wrist.x
+
+
+def test_equivalent_rotation_x_axis_updates_slot_x() -> None:
+    reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
+
+    first = None
+    mid_x = 0.0
+    for step in range(1, 28):
+        mid_x += 0.008
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=mid_x, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
+        if first is None:
+            first = packet.debug["rotation"]["slot_x"]
+
+    assert packet.debug["rotation"]["enabled"] is True
+    assert packet.debug["rotation"]["slot_x"] != first
+
+
+def test_equivalent_rotation_y_axis_updates_slot_y() -> None:
+    reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
+
+    start_packet = reducer.reduce(
+        make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+        frame_id=frame_id,
+        timestamp_ms=frame_id * 16,
+    )
+    start_slot = start_packet.debug["rotation"]["slot_y"]
+
+    mid_y = 0.20
+    packet = start_packet
+    for step in range(1, 28):
+        mid_y += 0.008
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=mid_y, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
+
+    assert packet.debug["rotation"]["slot_y"] != start_slot
+
+
+def test_equivalent_rotation_z_axis_updates_slot_z() -> None:
+    reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
+
+    start_packet = reducer.reduce(
+        make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+        frame_id=frame_id,
+        timestamp_ms=frame_id * 16,
+    )
+    start_slot = start_packet.debug["rotation"]["slot_z"]
+
+    mid_z = 0.10
+    packet = start_packet
+    for step in range(1, 28):
+        mid_z += 0.007
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=mid_z, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
+
+    assert packet.debug["rotation"]["slot_z"] != start_slot
+    assert packet.debug["rotation"]["slot"] == packet.debug["rotation"]["slot_z"]
+
+
+def test_equivalent_rotation_slots_wrap_on_continuous_motion() -> None:
+    reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
+
+    mid_x = 0.0
+    packet = None
+    for step in range(1, 220):
+        mid_x += 0.009
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=mid_x, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
+
+    assert packet is not None
+    slot_x = packet.debug["rotation"]["slot_x"]
+    assert 0 <= slot_x < ROT_SLOT_COUNT
+
+
+def test_rotation_mode_switches_with_single_grab_open_sequence() -> None:
+    reducer = TemporalReducer()
+
+    frame_id = 1
+    packet = None
+    for _ in range(6):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    for _ in range(6):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    assert packet is not None
+    assert packet.debug["rotation"]["mode_active"] is True
+    assert packet.debug["rotation"]["mode_name"] == "ROTATE_ENABLED"
+
+
+def test_rotation_mode_jitter_does_not_switch() -> None:
+    reducer = TemporalReducer()
+
+    frame_id = 1
+    packet = None
+    for _ in range(6):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    for _ in range(2):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    for _ in range(2):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    assert packet is not None
+    assert packet.debug["rotation"]["mode_active"] is False
+
+
+def test_rotation_mode_progress_times_out() -> None:
+    reducer = TemporalReducer()
+
+    frame_id = 1
+    packet = None
+    for _ in range(6):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    for _ in range(50):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    assert packet is not None
+    assert packet.debug["rotation"]["mode_active"] is False
+
+
+def test_rotation_stack_resets_after_single_slot_jump() -> None:
+    reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
+
+    jump_packet = None
+    jump_slot = 0
+    mid_z = 0.10
+    for step in range(1, 40):
+        mid_z += 0.01
+        candidate = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=mid_z, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
+        if candidate.debug["rotation"]["slot_z"] != 0:
+            jump_packet = candidate
+            jump_slot = candidate.debug["rotation"]["slot_z"]
+            break
+
+    assert jump_packet is not None
+    assert jump_packet.debug["rotation"]["stack_z_deg"] == 0.0
+
+    tiny_packet = reducer.reduce(
+        make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=mid_z + 0.0003, hand_pose="open"),
+        frame_id=frame_id + 60,
+        timestamp_ms=(frame_id + 60) * 16,
+    )
+    assert tiny_packet.debug["rotation"]["slot_z"] == jump_slot
+
+
+def test_rotation_gate_hysteresis_keeps_state_stable_on_short_drop() -> None:
+    reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
+
+    packet = None
+    mid_x = 0.0
+    for step in range(6):
+        mid_x += 0.009
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=mid_x, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id + step,
+            timestamp_ms=(frame_id + step) * 16,
+        )
+    assert packet is not None
+    assert packet.debug["rotation"]["rotating"] is True
+
+    weak = reducer.reduce(
+        make_eq_rotation_observation(mid_x=mid_x + 0.0002, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+        frame_id=frame_id + 7,
+        timestamp_ms=(frame_id + 7) * 16,
+    )
+    assert weak.debug["rotation"]["rotating"] is True
+
+
+def test_pinch_remains_stable_during_fast_motion() -> None:
+    reducer = TemporalReducer()
+
+    for frame_id in range(1, 5):
+        reducer.reduce(make_observation(wrist_x=0.0, pinch_gap=0.03), frame_id=frame_id, timestamp_ms=frame_id * 16)
+
+    moved = reducer.reduce(make_observation(wrist_x=0.35, pinch_gap=0.03), frame_id=5, timestamp_ms=80)
+    assert moved.pinch_state in {"pinched", "release_candidate"}
+
+
+def test_pinch_remains_stable_on_low_quality_front_facing_frame() -> None:
+    reducer = TemporalReducer()
+
+    for frame_id in range(1, 5):
+        reducer.reduce(make_observation(wrist_x=0.0, pinch_gap=0.03), frame_id=frame_id, timestamp_ms=frame_id * 16)
+
+    low_quality = reducer.reduce(
+        make_observation(wrist_x=0.0, pinch_gap=0.03),
+        frame_id=5,
+        timestamp_ms=80,
+        runtime_hint={"blur_level": 0.9, "appearance_match_score": 0.2},
+    )
+    assert low_quality.pinch_state in {"pinched", "release_candidate"}

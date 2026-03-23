@@ -26,7 +26,7 @@ class CameraPreviewManager:
     TITLE_OFFSET_X = 18
     TITLE_OFFSET_Y = 20
     STATUS_OFFSET_Y = 40
-    
+
     def __init__(
         self,
         auto_scaling: AutoScalingManager,
@@ -52,7 +52,7 @@ class CameraPreviewManager:
         self._camera_update_interval: float = 0.033  # 30fps
         self._colors = OverlayColors()
         self.init_preview()
-    
+
     def init_preview(self, data_panel_raw_params=None) -> None:
         """Initialize camera preview window (original logic preserved)"""
         try:
@@ -86,7 +86,7 @@ class CameraPreviewManager:
                     text="Camera: Not Connected",
                     mayChange=True,
                 )
-            
+
             # Create camera preview texture and node
             self._camera_texture = Texture("camera_preview")
             self._camera_texture.setup2dTexture(
@@ -95,90 +95,94 @@ class CameraPreviewManager:
                 Texture.T_unsigned_byte,
                 Texture.F_rgb,
             )
-            
+
             card_maker = CardMaker("camera_preview_card")
             card_maker.setFrame(0, self.PREVIEW_WIDTH, -self.PREVIEW_HEIGHT, 0)
-            
+
             self._camera_preview_node = self._pixel2d.attachNewNode(card_maker.generate())
             self._apply_preview_node_transform()
-            
+
             # Apply texture
             self._camera_preview_node.setTexture(self._camera_texture)
-            
+
             # Enable preview
             self._camera_preview_enabled = True
             logger.info("Camera preview initialized successfully")
-            
+
         except Exception as e:
             logger.warning(f"Camera preview initialization failed: {str(e)}")
             self._camera_preview_enabled = False
-    
-    def update_frame(self, frame_bgr: Optional[np.ndarray], observation: Optional[RawHandObservation] = None) -> None:
+
+    def update_frame(
+        self,
+        frame_bgr: Optional[np.ndarray],
+        observation: Optional[RawHandObservation] = None,
+    ) -> None:
         """Update camera frame data"""
         if frame_bgr is not None and self._camera_preview_enabled:
             self._camera_frame = frame_bgr
             self._last_observation = observation
-    
+
     def enable_preview(self, enabled: bool = True) -> None:
         """Enable or disable camera preview"""
         self._camera_preview_enabled = enabled
         if not enabled and self._camera_preview_node is not None:
             self._camera_preview_node.removeNode()
             self._camera_preview_node = None
-    
+
     def update_preview(self) -> None:
         """Update camera preview frame"""
         if self._camera_frame is None or self._camera_preview_node is None:
             return
-            
+
         try:
             frame = cv2.resize(
                 self._camera_frame,
                 (self.PREVIEW_WIDTH, self.PREVIEW_HEIGHT),
                 interpolation=cv2.INTER_LINEAR,
             )
-            
+
             # If there is gesture data, draw hand skeleton (reuse live_preview logic)
             if self._last_observation is not None:
                 frame = self._draw_hand_skeleton(frame, self._last_observation)
-            
+
             self._camera_texture.setRamImageAs(np.ascontiguousarray(frame), "BGR")
-            
+
             # Update status text
             if self._camera_preview_status:
                 self._camera_preview_status.setText("Camera: Active")
-                
+
         except Exception as e:
             logger.warning(f"Camera preview update failed: {str(e)}")
             if self._camera_preview_status:
                 self._camera_preview_status.setText("Camera: Error")
-    
+
     def _draw_hand_skeleton(self, frame: np.ndarray, observation: RawHandObservation) -> np.ndarray:
         """Draw hand skeleton (reuse live_preview logic)"""
         height, width = frame.shape[:2]
-        
+
         # Draw connection lines
         for start_idx, end_idx in HAND_CONNECTIONS:
             if start_idx < len(observation.landmarks) and end_idx < len(observation.landmarks):
                 start_point = self._landmark_to_pixel(observation.landmarks[start_idx], width, height)
                 end_point = self._landmark_to_pixel(observation.landmarks[end_idx], width, height)
                 cv2.line(frame, start_point, end_point, self._colors.bones, 2)
-        
+
         # Draw key points
         for landmark in observation.landmarks:
             point = self._landmark_to_pixel(landmark, width, height)
             cv2.circle(frame, point, 4, self._colors.landmarks, -1)
-        
+
         return frame
-    
+
     def _landmark_to_pixel(self, landmark: Any, width: int, height: int) -> Tuple[int, int]:
         """Convert landmarks coordinates to pixel coordinates"""
         return (int(landmark.x * width), int(landmark.y * height))
-    
+
     def set_ui_scale(self, scale: float) -> None:
         """Set UI scale factor and update size and position of all UI elements"""
         self._ui_scale = scale
-        
+
         # Scale camera preview window
         if self._camera_preview_frame:
             original_pos = (self.PREVIEW_MARGIN, 0, -self._top_margin)
@@ -187,7 +191,7 @@ class CameraPreviewManager:
             new_size = (original_size[0], original_size[1] * scale, original_size[2] * scale, original_size[3])
             self._camera_preview_frame.setPos(*new_pos)
             self._camera_preview_frame['frameSize'] = new_size
-        
+
         # Scale camera preview title
         if self._camera_preview_title:
             try:
@@ -199,14 +203,14 @@ class CameraPreviewManager:
                 self._camera_preview_title['scale'] = new_scale
             except Exception as e:
                 logger.warning(f"Failed to scale camera preview title: {e}")
-        
+
         # Scale camera preview node
         if self._camera_preview_node:
             try:
                 self._apply_preview_node_transform(scale)
             except Exception as e:
                 logger.warning(f"Failed to scale camera preview node: {e}")
-        
+
         # Scale camera preview status text
         if self._camera_preview_status:
             try:
@@ -230,28 +234,28 @@ class CameraPreviewManager:
             0,
             -(self._top_margin + self.PREVIEW_HEIGHT) * active_scale,
         )
-    
+
     def destroy(self) -> None:
         """Clean up camera preview resources"""
         if self._camera_preview_node is not None:
             self._camera_preview_node.removeNode()
             self._camera_preview_node = None
-        
+
         if self._camera_preview_frame:
             self._camera_preview_frame.destroy()
             self._camera_preview_frame = None
-            
+
         if self._camera_preview_title:
             self._camera_preview_title.destroy()
             self._camera_preview_title = None
-            
+
         if self._camera_preview_status:
             self._camera_preview_status.destroy()
             self._camera_preview_status = None
-        
+
         self._camera_frame = None
         self._last_observation = None
         self._camera_texture = None
         self._camera_preview_enabled = False
-        
+
         logger.info("Camera preview cleaned up")

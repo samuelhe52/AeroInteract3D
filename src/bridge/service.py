@@ -228,7 +228,6 @@ class BridgeServiceImpl(BridgeService):
 
     def _make_object_pose(self, packet: GesturePacket) -> SceneCommand:
         self._metrics.pose_updates += 1
-        world_position = self._camera_to_world_position(self._interaction_anchor(packet))
         return SceneCommand(
             contract_version=self._expected_contract_version,
             command_id=make_command_id("set-pose", packet.frame_id),
@@ -236,11 +235,38 @@ class BridgeServiceImpl(BridgeService):
             timestamp_ms=packet.timestamp_ms,
             command_type="set_object_pose",
             object_id=OBJECT_ID,
-            payload={
-                "position": vec3_payload(world_position),
-                "coordinate_space": "world_norm",
-            },
+            payload=self._pose_payload(packet),
         )
+
+    def _pose_payload(self, packet: GesturePacket) -> dict[str, Any]:
+        payload: dict[str, Any] = {"coordinate_space": "world_norm"}
+        rotation_hpr = self._rotation_hpr_payload(packet)
+        if rotation_hpr is not None:
+            payload["hpr"] = rotation_hpr
+            return payload
+
+        world_position = self._camera_to_world_position(self._interaction_anchor(packet))
+        payload["position"] = vec3_payload(world_position)
+        return payload
+
+    @staticmethod
+    def _rotation_hpr_payload(packet: GesturePacket) -> dict[str, float] | None:
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return None
+
+        rotation = debug_payload.get("rotation")
+        if not isinstance(rotation, dict):
+            return None
+
+        if not bool(rotation.get("mode_active", False)):
+            return None
+
+        return {
+            "h": float(rotation.get("deg_x", 0.0)),
+            "p": float(rotation.get("deg_y", 0.0)),
+            "r": float(rotation.get("deg_z", 0.0)),
+        }
 
     def _interaction_anchor(self, packet: GesturePacket) -> Vec3:
         return Vec3(
