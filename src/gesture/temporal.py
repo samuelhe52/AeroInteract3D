@@ -7,7 +7,6 @@ from typing import Any, Literal
 from src.contracts import GesturePacket, PinchState, TrackingState, Vec3
 from src.gesture.constants import (
     ENTER_THRESHOLD,
-    FALLBACK_MAX_FRAMES,
     GESTURE_DEFAULT_HAND_ID,
     GRACE_FRAMES,
     HIGH_BLUR_LEVEL,

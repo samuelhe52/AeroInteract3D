@@ -176,7 +176,6 @@ class App:
         self.render_output = render_output
         self.lifecycle_state = LIFECYCLE_INITIALIZING
         self._running = False
-        self._rotation_log_counter = 0
 
     def initialize(self) -> None:
         logging.info("Initializing application")
@@ -201,26 +200,12 @@ class App:
             packet = self.gesture_input.poll()
             if packet is not None:
                 self.render_output.update_gesture_data(packet)
-
-                rotation = packet.debug.get("rotation") if isinstance(packet.debug, dict) else None
-                if isinstance(rotation, dict):
-                    self._rotation_log_counter += 1
-                    if self._rotation_log_counter >= 6:
-                        self._rotation_log_counter = 0
-                        logging.info(
-                            "rotation enabled=%s rotating=%s slot=%s/%s src=%s",
-                            bool(rotation.get("enabled", False)),
-                            bool(rotation.get("rotating", False)),
-                            int(rotation.get("slot", 0)),
-                            int(rotation.get("slot_count", 0)),
-                            str(rotation.get("source", "none")),
-                        )
-
-                if hasattr(self.gesture_input, "get_camera_data"):
+                
+                if hasattr(self.gesture_input, 'get_camera_data'):
                     camera_frame, observation = self.gesture_input.get_camera_data()
                     if camera_frame is not None:
                         self.render_output.update_camera_frame(camera_frame, observation, packet)
-
+                
                 commands = self.bridge.process(packet)
                 for command in commands:
                     self.render_output.push(command)
@@ -399,12 +384,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-<<<<<<< HEAD
     raise SystemExit(main(sys.argv[1:]))
-=======
-    raise SystemExit(main(sys.argv[1:])) 
-
-
-
-
->>>>>>> c1311fa (Refine temporal rotation gating)

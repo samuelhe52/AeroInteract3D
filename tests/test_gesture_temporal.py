@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 from src.gesture.constants import ROT_SLOT_COUNT, TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
 from src.contracts import Vec3
 from src.gesture.runtime import RawHandObservation, normalized_pinch_distance

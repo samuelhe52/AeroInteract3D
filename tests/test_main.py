@@ -220,7 +220,6 @@ def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(m
     captured_gesture_kwargs: dict[str, object] = {}
     captured_render_kwargs: dict[str, object] = {}
     fake_bridge = object()
-    fake_render = object()
 
     class FakeGestureService:
         def __init__(self, **kwargs) -> None:
