@@ -94,7 +94,7 @@ class VirtualHand:
         # 【核心】正确的坐标转换，禁止乱改
         converted = []
         for lm in landmarks:
-            x = -(lm.x - 0.5) * self.SCALE  # 左右
+            x = (lm.x - 0.5) * self.SCALE  # 左右
             y = -lm.z * self.DEPTH_SCALE     # 前后深度（负号确保在相机前方）
             z = (0.5 - lm.y) * self.SCALE    # 上下
             converted.append(Vec3(x, y, z))

@@ -170,9 +170,10 @@ class RenderingCoreManager:
             lens.setNearFar(0.1, 100.0)  # Use a more practical near/far clip range.
             self._base.cam.node().setLens(lens)
             
-            # Position the camera with a shallow 10-degree downward-tilt view of the objects.
-            self._base.cam.setPos(0.0, 5.0, 0.9)  # Low angle view (≈10 degrees)
+            # Position the camera with a 30-degree downward-tilt view of the objects.
+            self._base.cam.setPos(0.0, 5.0, 2.887)  # 30-degree view (z = 5 * tan(30°))
             self._base.cam.lookAt(0.0, 0.0, 0.0)  # Look at the origin.
+            self._base.cam.setH(180)  # Flip camera horizontally
             logger.info("Camera configured, using perspective camera for 3D scene")
         except Exception as e:
             logger.error(f"Camera configuration failed: {str(e)}")

@@ -121,7 +121,7 @@ class DataPanelManager:
         # ========== 新增代码开始 ==========
         # 新增：交互调试信息（放在所有内容的最后）
         interaction_debug_lines = (
-            "--- 交互调试信息 ---",
+            "--- Interaction Debug ---",
             f"object_pos: ({self._object_world_pos[0]:+.2f}, {self._object_world_pos[1]:+.2f}, {self._object_world_pos[2]:+.2f})",
             f"index_tip: ({self._index_tip_world[0]:+.2f}, {self._index_tip_world[1]:+.2f}, {self._index_tip_world[2]:+.2f})",
             f"thumb_tip: ({self._thumb_tip_world[0]:+.2f}, {self._thumb_tip_world[1]:+.2f}, {self._thumb_tip_world[2]:+.2f})",
