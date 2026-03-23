@@ -4,7 +4,23 @@ from dataclasses import dataclass
 import time
 from typing import Any, Optional
 
-from src.constants import BRIDGE_HEARTBEAT_INTERVAL_FRAMES, BRIDGE_MIN_TRACKING_CONFIDENCE, MAX_ERROR_HISTORY
+from src.constants import (
+    MAX_ERROR_HISTORY,
+    BRIDGE_HEARTBEAT_INTERVAL_FRAMES,
+    BRIDGE_MIN_TRACKING_CONFIDENCE,
+    # ========== 新增：交互相关常量导入 ==========
+    BRIDGE_MODE_NORMAL,
+    BRIDGE_MODE_ROTATING,
+    BRIDGE_STATE_IDLE,
+    BRIDGE_STATE_HOVER,
+    BRIDGE_STATE_GRABBING,
+    INTERACTION_IDLE,
+    INTERACTION_HOVER,
+    INTERACTION_GRABBED,
+    HOVER_DISTANCE_THRESHOLD,
+    GRAB_RELEASE_DISTANCE_THRESHOLD,
+    PRIMARY_OBJECT_ID,
+)
 from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.ports import BridgeService
 from src.utils.contracts import EXPECTED_CONTRACT_VERSION, validate_gesture_packet, vec3_payload
@@ -21,6 +37,8 @@ from src.utils.runtime import (
 
 import math
 import logging
+
+
 
 # Create a dedicated logger for bridge service
 logger = logging.getLogger("bridge.service")

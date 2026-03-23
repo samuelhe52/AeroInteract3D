@@ -54,7 +54,7 @@ class AppConfig:
     target_fps: int = DEFAULT_TARGET_FPS
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
-    debug_stats: bool = False
+    debug_stats: bool = True
     render_position_sensitivity: float = 1.0
     motion_preset: str = GESTURE_MOTION_PRESET
     aggressive_release_guard: bool = False
@@ -69,7 +69,7 @@ def _built_in_run_defaults() -> dict[str, object]:
         "target_fps": DEFAULT_TARGET_FPS,
         "frame_width": DEFAULT_FRAME_WIDTH,
         "frame_height": DEFAULT_FRAME_HEIGHT,
-        "debug_stats": False,
+        "debug_stats": True,
         "render_position_sensitivity": 1.0,
         "motion_preset": GESTURE_MOTION_PRESET,
         "aggressive_release_guard": False,

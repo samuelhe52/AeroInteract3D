@@ -67,16 +67,6 @@ class CameraPreviewManager:
                     color=(20 / 255, 24 / 255, 32 / 255, 1.0),
                 )
 
-                self._camera_preview_title = OnscreenText(
-                    parent=self._pixel2d,
-                    pos=((self.PREVIEW_MARGIN + self.TITLE_OFFSET_X) * self._ui_scale, -(self._top_margin + self.TITLE_OFFSET_Y) * self._ui_scale),
-                    align=TextNode.ALeft,
-                    scale=16 * self._ui_scale,
-                    fg=(1.0, 1.0, 1.0, 1.0),
-                    text="Camera Preview",
-                    mayChange=False,
-                )
-
                 self._camera_preview_status = OnscreenText(
                     parent=self._pixel2d,
                     pos=((self.PREVIEW_MARGIN + self.TITLE_OFFSET_X) * self._ui_scale, -(self._top_margin + self.STATUS_OFFSET_Y) * self._ui_scale),
