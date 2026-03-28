@@ -140,7 +140,9 @@ def test_build_config_uses_default_target_fps() -> None:
 
     assert config.flip_camera is True
     assert config.target_fps == DEFAULT_TARGET_FPS
-    assert config.render_position_sensitivity == 1.0
+    assert config.render_position_sensitivity == 1.35
+    assert config.bridge_rotation_sensitivity == 1.5
+    assert config.render_camera_view == "front"
     assert config.motion_preset == "medium"
     assert config.aggressive_release_guard is False
 
@@ -150,7 +152,7 @@ def test_parse_args_disables_debug_stats_by_default() -> None:
 
     config = build_config(args)
 
-    assert config.debug_stats is False
+    assert config.debug_stats is True
 
 
 def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
@@ -166,6 +168,8 @@ def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
                 "frame_height: 540",
                 "debug_stats: true",
                 "render_position_sensitivity: 1.5",
+                "bridge_rotation_sensitivity: 1.8",
+                "render_camera_view: side",
                 "motion_preset: low",
                 "aggressive_release_guard: true",
             ]
@@ -182,6 +186,8 @@ def test_parse_args_uses_run_config_defaults(tmp_path, monkeypatch) -> None:
     assert config.frame_height == 540
     assert config.debug_stats is True
     assert config.render_position_sensitivity == 1.5
+    assert config.bridge_rotation_sensitivity == 1.8
+    assert config.render_camera_view == "side"
     assert config.motion_preset == "low"
     assert config.aggressive_release_guard is True
 
@@ -274,9 +280,26 @@ def test_parse_args_accepts_render_position_sensitivity() -> None:
     assert config.render_position_sensitivity == 1.75
 
 
+def test_parse_args_accepts_bridge_rotation_sensitivity() -> None:
+    args = parse_args(["--bridge-rotation-sensitivity", "1.9"])
+
+    config = build_config(args)
+
+    assert config.bridge_rotation_sensitivity == 1.9
+
+
+def test_parse_args_accepts_render_camera_view() -> None:
+    args = parse_args(["--render-camera-view", "side"])
+
+    config = build_config(args)
+
+    assert config.render_camera_view == "side"
+
+
 def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(monkeypatch) -> None:
     captured_gesture_kwargs: dict[str, object] = {}
     captured_render_kwargs: dict[str, object] = {}
+    captured_bridge_kwargs: dict[str, object] = {}
     fake_bridge = object()
 
     class FakeGestureService:
@@ -292,7 +315,11 @@ def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(m
             self.quit_callback = callback
 
     monkeypatch.setattr(main, "GestureServiceImpl", FakeGestureService)
-    monkeypatch.setattr(main, "BridgeServiceImpl", lambda: fake_bridge)
+    def fake_bridge_factory(**kwargs):
+        captured_bridge_kwargs.update(kwargs)
+        return fake_bridge
+
+    monkeypatch.setattr(main, "BridgeServiceImpl", fake_bridge_factory)
     monkeypatch.setattr(main, "RenderingServiceImpl", FakeRenderingService)
 
     app = main.build_app(AppConfig(debug_stats=True))
@@ -301,8 +328,11 @@ def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(m
     assert captured_gesture_kwargs["flip_camera"] is True
     assert captured_gesture_kwargs["motion_preset"] == "medium"
     assert captured_gesture_kwargs["aggressive_release_guard"] is False
+    assert captured_bridge_kwargs["input_mirrored"] is True
+    assert captured_bridge_kwargs["rotation_sensitivity"] == 1.5
     assert captured_render_kwargs["debug_stats_enabled"] is True
-    assert captured_render_kwargs["position_sensitivity"] == 1.0
+    assert captured_render_kwargs["position_sensitivity"] == 1.35
+    assert captured_render_kwargs["camera_view"] == "front"
     assert isinstance(app, App)
     assert app.gesture_input is not None
     assert app.bridge is fake_bridge

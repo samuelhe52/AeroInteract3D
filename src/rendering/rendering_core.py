@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import logging
 from typing import Optional
 import tkinter as tk
@@ -20,6 +21,8 @@ DEFAULT_WINDOW_SCREEN_SCALE = 0.8
 REFERENCE_WINDOW_SIZE = (1600, 900)
 MIN_WINDOW_SIZE = (800, 450)
 QUIT_SHORTCUT_EVENTS = ("meta-w", "meta-q", "control-w", "control-q")
+CAMERA_VIEW_FRONT = "front"
+CAMERA_VIEW_SIDE = "side"
 
 
 class RenderingCoreManager:
@@ -162,7 +165,18 @@ class RenderingCoreManager:
             logger.error(f"Window initialization failed: {str(e)}")
             raise RuntimeError(f"Window initialization failed: {str(e)}") from e
     
-    def config_camera_for_world_norm(self) -> None:
+    @staticmethod
+    def camera_pose_for_view(view: str) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        if view == CAMERA_VIEW_SIDE:
+            distance = 5.0
+            tilt_radians = math.radians(15.0)
+            planar_distance = distance * math.cos(tilt_radians)
+            diagonal_component = planar_distance / math.sqrt(2.0)
+            camera_height = distance * math.sin(tilt_radians)
+            return (diagonal_component, diagonal_component, camera_height), (0.0, 0.0, 0.0)
+        return (0.0, 5.0, 1.34), (0.0, 0.0, 0.0)
+
+    def config_camera_for_world_norm(self, *, view: str = CAMERA_VIEW_FRONT) -> None:
         """Configure world coordinate system camera (original logic preserved)"""
         if not self._is_initialized:
             raise RuntimeError("Window is not initialized; cannot configure the camera")
@@ -173,11 +187,12 @@ class RenderingCoreManager:
             lens.setNearFar(0.1, 100.0)  # Use a more practical near/far clip range.
             self._base.cam.node().setLens(lens)
             
-            # Position the camera with a 15-degree downward-tilt view of the objects.
-            self._base.cam.setPos(0.0, 5.0, 1.340)  # 15-degree view (z = 5 * tan(15°))
-            self._base.cam.lookAt(0.0, 0.0, 0.0)  # Look at the origin.
-            self._base.cam.setH(180)  # Flip camera horizontally
-            logger.info("Camera configured, using perspective camera for 3D scene")
+            camera_pos, look_at = self.camera_pose_for_view(view)
+            self._base.cam.setPos(*camera_pos)
+            self._base.cam.lookAt(*look_at)
+            if view == CAMERA_VIEW_FRONT:
+                self._base.cam.setH(180)
+            logger.info("Camera configured, using perspective camera for 3D scene (view=%s)", view)
         except Exception as e:
             logger.error(f"Camera configuration failed: {str(e)}")
             raise RuntimeError(f"Camera configuration failed: {str(e)}") from e

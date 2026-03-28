@@ -4,7 +4,9 @@ flip_camera: false
 target_fps: 30
 frame_width: 1280
 frame_height: 720
-render_position_sensitivity: 1.0
+render_position_sensitivity: 1.35
+bridge_rotation_sensitivity: 1.5
+render_camera_view: front
 debug_stats: true
 motion_preset: medium
 aggressive_release_guard: false

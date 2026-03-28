@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.rendering.debug.data_panel import DataPanelManager
 from src.rendering.rendering_core import RenderingCoreManager
@@ -131,13 +133,15 @@ class FakeWindowAdapter:
         self._base = FakeBase()
         self._is_initialized = False
         self.quit_callback = None
+        self.camera_view = None
 
     def init_window(self, window_size: tuple = (800, 600), window_title: str = "AeroInteract3D Rendering") -> None:
         self._is_initialized = True
 
-    def config_camera_for_world_norm(self) -> None:
+    def config_camera_for_world_norm(self, *, view: str = "front") -> None:
         if not self._is_initialized:
             raise RuntimeError("window must be initialized")
+        self.camera_view = view
 
     def create_base_lights(self) -> None:
         if not self._is_initialized:
@@ -251,6 +255,16 @@ def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     service.start()
 
     assert service.health()["lifecycle_state"] == LIFECYCLE_RUNNING
+
+
+def test_rendering_passes_camera_view_to_rendering_core(monkeypatch) -> None:
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter, camera_view="side")
+    service.start()
+
+    assert service._window_adapter.camera_view == "side"
 
 
 def test_data_panel_formats_rotation_lines_from_packet_debug() -> None:
@@ -398,6 +412,17 @@ def test_rendering_maps_contract_world_norm_axes_to_panda_axes() -> None:
     assert scene_pos == (0.25, -0.4, 0.6)
 
 
+def test_rendering_core_side_camera_pose_looks_across_depth_axis() -> None:
+    camera_pos, look_at = RenderingCoreManager.camera_pose_for_view("side")
+
+    assert camera_pos == pytest.approx((3.4150635094610964, 3.4150635094610964, 1.2940952255126037))
+    assert look_at == (0.0, 0.0, 0.0)
+
+
+def test_rendering_centers_box_model_under_transform_pivot() -> None:
+    assert RenderingServiceImpl._box_model_center_offset() == (-0.5, -0.5, -0.5)
+
+
 def test_rendering_applies_pose_updates_with_axis_remap() -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING
@@ -416,6 +441,52 @@ def test_rendering_applies_pose_updates_with_axis_remap() -> None:
 
     assert obj.pos == (0.2, -0.3, 0.7)
     assert obj.hpr == (0.0, 0.0, 0.0)
+
+
+def test_rendering_preserves_position_for_rotation_only_pose_updates() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    obj.pos = (0.2, -0.3, 0.7)
+    obj.hpr = (1.0, 2.0, 3.0)
+    service._object_cache["primary_cube"] = obj
+    service._last_world_norm_pos = (0.2, 0.7, -0.3)
+    service._last_scene_pos = obj.pos
+
+    service.push(
+        make_command(
+            command_id="pose-rotate-only-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={"hpr": {"h": 10.0, "p": 20.0, "r": 30.0}},
+        )
+    )
+
+    assert obj.pos == (0.2, -0.3, 0.7)
+    assert obj.hpr == (10.0, 20.0, 30.0)
+
+
+def test_rendering_preserves_hpr_for_position_only_pose_updates() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    obj.pos = (0.0, 0.0, 0.0)
+    obj.hpr = (4.0, 5.0, 6.0)
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="pose-position-only-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={"position": {"x": 0.2, "y": 0.7, "z": -0.3}},
+        )
+    )
+
+    assert obj.pos == (0.2, -0.3, 0.7)
+    assert obj.hpr == (4.0, 5.0, 6.0)
 
 
 def test_rendering_applies_position_sensitivity_to_pose_updates() -> None:
@@ -450,6 +521,25 @@ def test_rendering_applies_pending_grab_material_state() -> None:
             timestamp_ms=100,
             command_type="set_object_state",
             payload={"interaction_state": "pending_grab"},
+        )
+    )
+
+    assert obj.material is not None
+
+
+def test_rendering_applies_rotating_material_state() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="state-rotating-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_state",
+            payload={"interaction_state": "rotating"},
         )
     )
 

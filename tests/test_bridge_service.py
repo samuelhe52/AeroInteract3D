@@ -159,9 +159,210 @@ def test_bridge_emits_hpr_only_in_rotation_mode() -> None:
     )
 
     assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_state", "set_object_pose"]
+    assert commands[1].payload["interaction_state"] == "rotating"
     assert "position" not in commands[2].payload
-    assert commands[2].payload["hpr"] == pytest.approx({"h": 15.0, "p": -30.0, "r": 45.0})
+    assert commands[2].payload["hpr"] == pytest.approx({"h": 0.0, "p": 0.0, "r": 0.0})
     assert commands[2].payload["coordinate_space"] == "world_norm"
+
+    commands = bridge.process(
+        make_packet(
+            frame_id=4,
+            timestamp_ms=160,
+            pinch_state="pinched",
+            index_tip=Vec3(0.02, 0.01, 0.0),
+            thumb_tip=Vec3(-0.02, -0.01, 0.0),
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 25.0,
+                    "deg_y": -10.0,
+                    "deg_z": 60.0,
+                }
+            },
+        )
+    )
+
+    assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_pose"]
+    assert commands[1].payload["hpr"] == pytest.approx({"h": 10.0, "p": 20.0, "r": 15.0})
+
+
+def test_bridge_rotation_mode_does_not_enter_grabbed_state() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    bridge.process(hover_packet(frame_id=2, timestamp_ms=120))
+
+    commands = bridge.process(
+        hover_packet(
+            frame_id=3,
+            timestamp_ms=140,
+            pinch_state="pinched",
+        )
+    )
+
+    assert commands[1].payload["interaction_state"] == "grabbed"
+
+    commands = bridge.process(
+        make_packet(
+            frame_id=4,
+            timestamp_ms=160,
+            pinch_state="pinched",
+            index_tip=Vec3(0.02, 0.01, 0.0),
+            thumb_tip=Vec3(-0.02, -0.01, 0.0),
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 10.0,
+                    "deg_y": 20.0,
+                    "deg_z": 30.0,
+                }
+            },
+        )
+    )
+
+    assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_state", "set_object_pose"]
+    assert commands[1].payload["interaction_state"] == "rotating"
+    assert "position" not in commands[2].payload
+
+
+def test_bridge_emits_rotation_updates_outside_grab_region_when_rotation_mode_is_active() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    commands = bridge.process(
+        make_packet(
+            frame_id=2,
+            timestamp_ms=120,
+            pinch_state="pinched",
+            index_tip=Vec3(0.7, 0.7, 0.2),
+            thumb_tip=Vec3(0.5, 0.5, 0.1),
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 25.0,
+                    "deg_y": -10.0,
+                    "deg_z": 5.0,
+                }
+            },
+        )
+    )
+
+    assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_state", "set_object_pose"]
+    assert commands[1].payload["interaction_state"] == "rotating"
+    assert "position" not in commands[2].payload
+    assert commands[2].payload["hpr"] == pytest.approx({"h": 0.0, "p": 0.0, "r": 0.0})
+
+
+def test_bridge_rotation_restarts_from_current_object_pose_instead_of_raw_hand_pose() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    bridge.process(
+        make_packet(
+            frame_id=2,
+            timestamp_ms=120,
+            pinch_state="pinched",
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 10.0,
+                    "deg_y": 20.0,
+                    "deg_z": 30.0,
+                }
+            },
+        )
+    )
+    bridge.process(
+        make_packet(
+            frame_id=3,
+            timestamp_ms=140,
+            pinch_state="pinched",
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 35.0,
+                    "deg_y": 50.0,
+                    "deg_z": 70.0,
+                }
+            },
+        )
+    )
+    bridge.process(
+        make_packet(
+            frame_id=4,
+            timestamp_ms=160,
+            pinch_state="open",
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 35.0,
+                    "deg_y": 50.0,
+                    "deg_z": 70.0,
+                }
+            },
+        )
+    )
+
+    commands = bridge.process(
+        make_packet(
+            frame_id=5,
+            timestamp_ms=180,
+            pinch_state="pinched",
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 80.0,
+                    "deg_y": 90.0,
+                    "deg_z": 100.0,
+                }
+            },
+        )
+    )
+
+    assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_state", "set_object_pose"]
+    assert commands[2].payload["hpr"] == pytest.approx({"h": 25.0, "p": 30.0, "r": 40.0})
+
+
+def test_bridge_rotation_sensitivity_scales_rotation_delta() -> None:
+    bridge = BridgeServiceImpl(rotation_sensitivity=2.0)
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    bridge.process(
+        make_packet(
+            frame_id=2,
+            timestamp_ms=120,
+            pinch_state="pinched",
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 10.0,
+                    "deg_y": 20.0,
+                    "deg_z": 30.0,
+                }
+            },
+        )
+    )
+    commands = bridge.process(
+        make_packet(
+            frame_id=3,
+            timestamp_ms=140,
+            pinch_state="pinched",
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 20.0,
+                    "deg_y": 25.0,
+                    "deg_z": 40.0,
+                }
+            },
+        )
+    )
+
+    assert commands[1].payload["hpr"] == pytest.approx({"h": 20.0, "p": 10.0, "r": 20.0})
 
 
 def test_bridge_resets_when_tracking_is_lost_during_grab() -> None:

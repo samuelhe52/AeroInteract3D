@@ -85,7 +85,7 @@ Current project decision: the rendering consumer is implemented in **Python + Pa
   - MUST include at least one of `position` or `hpr`.
   - MUST include `coordinate_space` (`world_norm`).
 - `set_object_state`
-  - MUST include `interaction_state` in `{ "idle", "pending_grab", "grabbed" }`.
+  - MUST include `interaction_state` in `{ "idle", "pending_grab", "grabbed", "rotating" }`.
 - `set_hand_pose`
   - MUST include `coordinate_space` (`world_norm`).
   - MUST include `visible: bool`.

@@ -68,6 +68,7 @@ class RenderingServiceImpl(RenderOutputPort):
         *,
         debug_stats_enabled: bool = False,
         position_sensitivity: float = 1.0,
+        camera_view: str = "front",
         virtual_hand_config: dict | None = None,
     ):
         super().__init__()
@@ -77,6 +78,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._rendering_core: Optional[RenderingCoreManager] = self._window_adapter
         self._debug_stats_enabled = debug_stats_enabled
         self._position_sensitivity = max(float(position_sensitivity), 0.001)
+        self._camera_view = str(camera_view)
         self._quit_callback: Callable[[], None] | None = None
         # Material cache keyed by interaction state.
         self._material_cache: Dict[str, Material] = self._init_materials()
@@ -112,6 +114,13 @@ class RenderingServiceImpl(RenderOutputPort):
         self._auto_scaling: Optional[AutoScalingManager] = None
         self._last_world_norm_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    @staticmethod
+    def _box_model_center_offset() -> tuple[float, float, float]:
+        # Panda3D's built-in "box" model is anchored at a corner, so the visual
+        # must be centered under the transform node to make rotations happen
+        # around the cube's center.
+        return (-0.5, -0.5, -0.5)
     
     def _init_materials(self) -> Dict[str, Material]:
         """Initialize materials for each interaction state."""
@@ -140,6 +149,13 @@ class RenderingServiceImpl(RenderOutputPort):
         grabbed_mat.setSpecular(Vec4(0.8, 0.2, 0.2, 0.9)) # Specular highlight, alpha=0.9 for slight transparency.
         grabbed_mat.setShininess(15.0)
         material_cache["grabbed"] = grabbed_mat
+
+        rotating_mat = Material()
+        rotating_mat.setAmbient(Vec4(0.0, 0.72, 0.72, 0.85))
+        rotating_mat.setDiffuse(Vec4(0.0, 0.72, 0.72, 0.85))
+        rotating_mat.setSpecular(Vec4(0.4, 0.95, 0.95, 0.9))
+        rotating_mat.setShininess(18.0)
+        material_cache["rotating"] = rotating_mat
         
         return material_cache
 
@@ -183,7 +199,7 @@ class RenderingServiceImpl(RenderOutputPort):
         try:
             # Initialize window/camera/lights
             self._rendering_core.init_window()
-            self._rendering_core.config_camera_for_world_norm()
+            self._rendering_core.config_camera_for_world_norm(view=self._camera_view)
             self._rendering_core.create_base_lights()
             
             # Initialize submodules (dependency injection)
@@ -431,73 +447,76 @@ class RenderingServiceImpl(RenderOutputPort):
             object_id = command.object_id
             payload = command.payload
 
-            # 2. Parse position parameters (support dict{x,y,z} or 3D list/tuple)
-            pos_data = payload.get("position", [0.0, 0.0, 0.0])
-            if isinstance(pos_data, dict):
-                # Handle dict format: {"x": value, "y": value, "z": value}
-                if all(key in pos_data for key in ["x", "y", "z"]):
-                    pos = [pos_data["x"], pos_data["y"], pos_data["z"]]
+            has_position = "position" in payload
+            has_hpr = "hpr" in payload
+
+            # 2. Parse position parameters (support dict{x,y,z} or 3D list/tuple).
+            pos: list[float] | None = None
+            if has_position:
+                pos_data = payload["position"]
+                if isinstance(pos_data, dict):
+                    if all(key in pos_data for key in ["x", "y", "z"]):
+                        pos = [pos_data["x"], pos_data["y"], pos_data["z"]]
+                    else:
+                        self._record_error(
+                            error_entry(
+                                "rendering.set_object_pose.position.keys_missing",
+                                "Position payload is missing required keys",
+                                recoverable=True,
+                                hint="Provide position as a dict with x, y, z keys.",
+                                details={"command_id": command.command_id, "position": pos_data},
+                            )
+                        )
+                        logger.warning(f"set_object_pose command format error: position dict missing required keys (ID: {command.command_id}")
+                        return
+                elif isinstance(pos_data, (list, tuple)):
+                    pos = list(pos_data)
                 else:
                     self._record_error(
                         error_entry(
-                            "rendering.set_object_pose.position.keys_missing",
-                            "Position payload is missing required keys",
+                            "rendering.set_object_pose.position.invalid_type",
+                            "Position payload must be a dict or 3-dimensional list",
                             recoverable=True,
-                            hint="Provide position as a dict with x, y, z keys.",
-                            details={"command_id": command.command_id, "position": pos_data},
+                            hint="Provide position as either {x, y, z} or [x, y, z].",
+                            details={"command_id": command.command_id, "payload_type": type(pos_data).__name__},
                         )
                     )
-                    logger.warning(f"set_object_pose command format error: position dict missing required keys (ID: {command.command_id}")
+                    logger.warning(f"set_object_pose command format error: position must be dict or 3-dimensional list (ID: {command.command_id}")
                     return
-            elif isinstance(pos_data, (list, tuple)):
-                # Handle list/tuple format: [x, y, z]
-                pos = list(pos_data)
-            else:
-                self._record_error(
-                    error_entry(
-                        "rendering.set_object_pose.position.invalid_type",
-                        "Position payload must be a dict or 3-dimensional list",
-                        recoverable=True,
-                        hint="Provide position as either {x, y, z} or [x, y, z].",
-                        details={"command_id": command.command_id, "payload_type": type(pos_data).__name__},
-                    )
-                )
-                logger.warning(f"set_object_pose command format error: position must be dict or 3-dimensional list (ID: {command.command_id}")
-                return
-            
-            # 3. Parse hpr parameters (support dict{h,p,r} or 3D list/tuple)
-            hpr_data = payload.get("hpr", [0.0, 0.0, 0.0])
-            if isinstance(hpr_data, dict):
-                # Handle dict format: {"h": value, "p": value, "r": value}
-                if all(key in hpr_data for key in ["h", "p", "r"]):
-                    hpr = [hpr_data["h"], hpr_data["p"], hpr_data["r"]]
+
+            # 3. Parse hpr parameters (support dict{h,p,r} or 3D list/tuple).
+            hpr: list[float] | None = None
+            if has_hpr:
+                hpr_data = payload["hpr"]
+                if isinstance(hpr_data, dict):
+                    if all(key in hpr_data for key in ["h", "p", "r"]):
+                        hpr = [hpr_data["h"], hpr_data["p"], hpr_data["r"]]
+                    else:
+                        self._record_error(
+                            error_entry(
+                                "rendering.set_object_pose.hpr.keys_missing",
+                                "Rotation payload is missing required keys",
+                                recoverable=True,
+                                hint="Provide hpr as a dict with h, p, r keys.",
+                                details={"command_id": command.command_id, "hpr": hpr_data},
+                            )
+                        )
+                        logger.warning(f"set_object_pose command format error: hpr dict missing required keys (ID: {command.command_id}")
+                        return
+                elif isinstance(hpr_data, (list, tuple)):
+                    hpr = list(hpr_data)
                 else:
                     self._record_error(
                         error_entry(
-                            "rendering.set_object_pose.hpr.keys_missing",
-                            "Rotation payload is missing required keys",
+                            "rendering.set_object_pose.hpr.invalid_type",
+                            "Rotation payload must be a dict or 3-dimensional list",
                             recoverable=True,
-                            hint="Provide hpr as a dict with h, p, r keys.",
-                            details={"command_id": command.command_id, "hpr": hpr_data},
+                            hint="Provide hpr as either {h, p, r} or [h, p, r].",
+                            details={"command_id": command.command_id, "payload_type": type(hpr_data).__name__},
                         )
                     )
-                    logger.warning(f"set_object_pose command format error: hpr dict missing required keys (ID: {command.command_id}")
+                    logger.warning(f"set_object_pose command format error: hpr must be dict or 3-dimensional list (ID: {command.command_id}")
                     return
-            elif isinstance(hpr_data, (list, tuple)):
-                # Handle list/tuple format: [h, p, r]
-                hpr = list(hpr_data)
-            else:
-                self._record_error(
-                    error_entry(
-                        "rendering.set_object_pose.hpr.invalid_type",
-                        "Rotation payload must be a dict or 3-dimensional list",
-                        recoverable=True,
-                        hint="Provide hpr as either {h, p, r} or [h, p, r].",
-                        details={"command_id": command.command_id, "payload_type": type(hpr_data).__name__},
-                    )
-                )
-                logger.warning(f"set_object_pose command format error: hpr must be dict or 3-dimensional list (ID: {command.command_id}")
-                return
             
             # 4. Validate format and convert to float
             def validate_and_convert_to_float(values):
@@ -509,8 +528,12 @@ class RenderingServiceImpl(RenderOutputPort):
                     return False, []
             
             # Validate position
-            pos_valid, pos_float = validate_and_convert_to_float(pos)
-            if not pos_valid:
+            pos_float: list[float] | None = None
+            if pos is not None:
+                pos_valid, pos_float = validate_and_convert_to_float(pos)
+            else:
+                pos_valid = True
+            if not pos_valid or pos_float is None and has_position:
                 self._record_error(
                     error_entry(
                         "rendering.set_object_pose.position.invalid_value",
@@ -524,8 +547,12 @@ class RenderingServiceImpl(RenderOutputPort):
                 return
             
             # Validate hpr
-            hpr_valid, hpr_float = validate_and_convert_to_float(hpr)
-            if not hpr_valid:
+            hpr_float: list[float] | None = None
+            if hpr is not None:
+                hpr_valid, hpr_float = validate_and_convert_to_float(hpr)
+            else:
+                hpr_valid = True
+            if not hpr_valid or hpr_float is None and has_hpr:
                 self._record_error(
                     error_entry(
                         "rendering.set_object_pose.hpr.invalid_value",
@@ -551,27 +578,41 @@ class RenderingServiceImpl(RenderOutputPort):
                 logger.warning(f"{error['message']}: {error['details']}")
                 return
             
-            # 6. Validate coordinate ranges and clip to world_norm [-1.0, 1.0].
-            clipped_pos = self._clip_coordinate(pos_float)
-            clipped_hpr = self._clip_coordinate(hpr_float, rotation=True)  # Rotation is type-checked only and not range-limited.
-            scaled_pos = self._scale_world_norm_position(clipped_pos)
-            scene_pos = self._world_norm_to_scene_pos(scaled_pos)
-            
-            # 7. Update the object transform.
             obj_np = self._object_cache[object_id]
-            obj_np.setPos(*scene_pos)
-            obj_np.setHpr(*clipped_hpr)
+            raw_scene_pos = getattr(obj_np, "pos", (0.0, 0.0, 0.0))
+            current_scene_pos = tuple(raw_scene_pos) if isinstance(raw_scene_pos, (list, tuple)) and len(raw_scene_pos) == 3 else (0.0, 0.0, 0.0)
+            raw_hpr = getattr(obj_np, "hpr", (0.0, 0.0, 0.0))
+            current_hpr = list(raw_hpr) if isinstance(raw_hpr, (list, tuple)) and len(raw_hpr) == 3 else [0.0, 0.0, 0.0]
+
+            # 6. Validate coordinate ranges and clip to world_norm [-1.0, 1.0].
+            clipped_pos = list(self._last_world_norm_pos)
+            scene_pos = current_scene_pos
+            if pos_float is not None:
+                clipped_pos = self._clip_coordinate(pos_float)
+                scaled_pos = self._scale_world_norm_position(clipped_pos)
+                scene_pos = self._world_norm_to_scene_pos(scaled_pos)
+
+            clipped_hpr = current_hpr
+            if hpr_float is not None:
+                clipped_hpr = self._clip_coordinate(hpr_float, rotation=True)  # Rotation is type-checked only and not range-limited.
+
+            # 7. Update the object transform.
+            if pos_float is not None:
+                obj_np.setPos(*scene_pos)
+            if hpr_float is not None:
+                obj_np.setHpr(*clipped_hpr)
             self._metrics.pose_updates += 1
             self._metrics.commands_applied += 1
             
             # Save coordinate data for display
-            if self._data_panel:
+            if self._data_panel and pos_float is not None:
                 self._data_panel.update_coordinate_data(tuple(clipped_pos), scene_pos)
-            self._last_world_norm_pos = tuple(clipped_pos)
-            self._last_scene_pos = scene_pos
+            if pos_float is not None:
+                self._last_world_norm_pos = tuple(clipped_pos)
+                self._last_scene_pos = scene_pos
             
             # 8. Logging
-            if tuple(clipped_pos) != tuple(pos_float):
+            if pos_float is not None and tuple(clipped_pos) != tuple(pos_float):
                 logger.warning(f"Coordinate out of world_norm range, automatically clipped: original{pos_float} → clipped{clipped_pos} (ID: {command.command_id}")
                 error = error_entry(
                     "rendering.coordinate.out_of_range",
@@ -603,15 +644,15 @@ class RenderingServiceImpl(RenderOutputPort):
             payload = command.payload
             state = payload.get("interaction_state", "idle")
             
-            # 2. State validation (only process idle/pending_grab/grabbed)
-            valid_states = ["idle", "pending_grab", "grabbed"]
+            # 2. State validation (only process idle/pending_grab/grabbed/rotating)
+            valid_states = ["idle", "pending_grab", "grabbed", "rotating"]
             if state not in valid_states:
                 self._record_error(
                     error_entry(
                         "rendering.interaction_state.unknown",
                         "Unknown interaction state received",
                         recoverable=True,
-                        hint="Emit one of idle, pending_grab, or grabbed.",
+                        hint="Emit one of idle, pending_grab, grabbed, or rotating.",
                         details={"command_id": command.command_id, "interaction_state": state},
                     )
                 )
@@ -940,7 +981,9 @@ class RenderingServiceImpl(RenderOutputPort):
                 
                 # Create NodePath
                 cube_np = self._scene_root.attachNewNode(object_id)
-                cube_model.reparentTo(cube_np)
+                cube_visual_np = cube_np.attachNewNode(f"{object_id}_visual")
+                cube_model.reparentTo(cube_visual_np)
+                cube_visual_np.setPos(*self._box_model_center_offset())
                 
                 # Set the initial pose and interaction state.
                 scene_init_pos = self._world_norm_to_scene_pos(init_pos)
