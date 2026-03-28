@@ -23,14 +23,13 @@ from .debug.auto_scaling import AutoScalingManager
 from .debug.data_panel import DataPanelManager
 from .debug.cam_preview import CameraPreviewManager
 from .interaction import VirtualHand
-from src.gesture.runtime import estimate_hand_depth, landmark_to_camera_vec3
-
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
 VALID_PAYLOAD_KEYS = {
     "init_scene": {"objects"},
     "set_object_pose": {"coordinate_space", "position", "hpr"},
     "set_object_state": {"interaction_state"},
+    "set_hand_pose": {"coordinate_space", "visible", "points"},
     "reset_interaction": set(),
     "heartbeat": {"interaction_state"},
 }
@@ -54,6 +53,7 @@ class RenderingMetrics:
     resets_processed: int = 0
     pose_updates: int = 0
     state_updates: int = 0
+    hand_pose_updates: int = 0
     init_scene_commands: int = 0
     heartbeats_received: int = 0
     render_steps: int = 0
@@ -93,24 +93,12 @@ class RenderingServiceImpl(RenderOutputPort):
         self._last_pose_log_ts: Optional[int] = None
         self._suppressed_pose_logs: int = 0
         self._metrics = RenderingMetrics()
-        # For storing gesture data
+        # For storing debug-facing gesture data
         self._last_gesture_packet = None
         self._last_observation = None
+        self._last_hand_points_world: Dict[str, tuple[float, float, float]] = {}
         # Virtual hand configuration
         self._virtual_hand_config = virtual_hand_config or {}
-        # Hand data stability counter for debouncing
-        self._hand_data_stable_count = 0
-        self._HAND_STABLE_THRESHOLD = self._virtual_hand_config.get("stable_threshold", 3)
-        # Hand data stability counter for debouncing
-        self._hand_data_stable_count = 0
-        self._HAND_STABLE_THRESHOLD = 3  # 连续3帧有数据才显示
-        # Hand data stability counter for debouncing
-        self._hand_data_stable_count = 0
-        self._HAND_STABLE_THRESHOLD = 3  # 连续3帧有数据才显示
-        # Hand data stability counter for debouncing
-        self._hand_data_stable_count = 0
-        self._HAND_STABLE_THRESHOLD = 3  # 连续3帧有数据才显示
-        self._last_observation = None
         self._last_fps = 0.0
         # FPS calculation related
         self._frame_times = []
@@ -137,13 +125,13 @@ class RenderingServiceImpl(RenderOutputPort):
         idle_mat.setShininess(5.0)                     # Highlight intensity.
         material_cache["idle"] = idle_mat
         
-        # 2. hover material: blue and semi-transparent.
-        hover_mat = Material()
-        hover_mat.setAmbient(Vec4(0.0, 0.0, 0.8, 0.7))  # Ambient reflection, alpha=0.7 for semi-transparency.
-        hover_mat.setDiffuse(Vec4(0.0, 0.0, 0.8, 0.7))  # Diffuse reflection, alpha=0.7 for semi-transparency.
-        hover_mat.setSpecular(Vec4(0.2, 0.2, 0.8, 0.7)) # Specular highlight, alpha=0.7 for semi-transparency.
-        hover_mat.setShininess(10.0)
-        material_cache["hover"] = hover_mat
+        # 2. pending_grab material: warm highlight before pinch.
+        pending_grab_mat = Material()
+        pending_grab_mat.setAmbient(Vec4(0.85, 0.65, 0.0, 0.78))
+        pending_grab_mat.setDiffuse(Vec4(0.85, 0.65, 0.0, 0.78))
+        pending_grab_mat.setSpecular(Vec4(0.95, 0.82, 0.2, 0.78))
+        pending_grab_mat.setShininess(12.0)
+        material_cache["pending_grab"] = pending_grab_mat
         
         # 3. grabbed material: red and emphasized.
         grabbed_mat = Material()
@@ -292,6 +280,8 @@ class RenderingServiceImpl(RenderOutputPort):
                 self._handle_set_object_pose(command)
             elif command_type == "set_object_state":
                 self._handle_set_object_state(command)
+            elif command_type == "set_hand_pose":
+                self._handle_set_hand_pose(command)
             elif command_type == "reset_interaction":
                 self._handle_reset_interaction(command)
             elif command_type == "heartbeat":
@@ -355,32 +345,6 @@ class RenderingServiceImpl(RenderOutputPort):
             self._camera_preview.update_preview()
             self._last_camera_update_time = current_time
         
-        # Update virtual hand
-        if hasattr(self, '_virtual_hand'):
-            # 复用cam_preview验证过的RawHandObservation数据源
-            if self._last_observation is not None and hasattr(self._last_observation, 'landmarks'):
-                raw_landmarks = self._last_observation.landmarks
-                depth_hint = estimate_hand_depth(raw_landmarks, self._last_observation.hand_scale)
-                converted_landmarks = []
-                for lm in raw_landmarks:
-                    camera_lm = landmark_to_camera_vec3(lm, depth_hint=depth_hint)
-                    panda_lm = PandaVec3(camera_lm.x, camera_lm.y, camera_lm.z)
-                    converted_landmarks.append(panda_lm)
-                landmarks = converted_landmarks
-                
-                # 只有拿到21个有效关键点才更新
-                if landmarks and len(landmarks) == 21:
-                    self._hand_data_stable_count += 1
-                    if self._hand_data_stable_count >= self._HAND_STABLE_THRESHOLD:
-                        self._virtual_hand.update(landmarks)
-                else:
-                    self._hand_data_stable_count = 0
-                    self._virtual_hand.update(None)
-            else:
-                # 无有效数据，隐藏虚拟手
-                self._hand_data_stable_count = 0
-                self._virtual_hand.update(None)
-
         # Main window size monitoring + auto-scaling logic
         if self._auto_scaling:
             self._auto_scaling.update_window_scale()
@@ -411,6 +375,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 "resets_processed": self._metrics.resets_processed,
                 "pose_updates": self._metrics.pose_updates,
                 "state_updates": self._metrics.state_updates,
+                "hand_pose_updates": self._metrics.hand_pose_updates,
                 "init_scene_commands": self._metrics.init_scene_commands,
                 "heartbeats_received": self._metrics.heartbeats_received,
                 "render_steps": self._metrics.render_steps,
@@ -638,15 +603,15 @@ class RenderingServiceImpl(RenderOutputPort):
             payload = command.payload
             state = payload.get("interaction_state", "idle")
             
-            # 2. State validation (only process idle/hover/grabbed)
-            valid_states = ["idle", "hover", "grabbed"]
+            # 2. State validation (only process idle/pending_grab/grabbed)
+            valid_states = ["idle", "pending_grab", "grabbed"]
             if state not in valid_states:
                 self._record_error(
                     error_entry(
                         "rendering.interaction_state.unknown",
                         "Unknown interaction state received",
                         recoverable=True,
-                        hint="Emit one of idle, hover, or grabbed.",
+                        hint="Emit one of idle, pending_grab, or grabbed.",
                         details={"command_id": command.command_id, "interaction_state": state},
                     )
                 )
@@ -684,6 +649,75 @@ class RenderingServiceImpl(RenderOutputPort):
                     "Failed to update object state",
                     recoverable=True,
                     hint="Check object existence and interaction_state payload structure.",
+                    details={"command_id": command.command_id, "error": str(e)},
+                )
+            )
+
+    def _handle_set_hand_pose(self, command: SceneCommand) -> None:
+        try:
+            payload = command.payload
+            if not hasattr(self, "_virtual_hand") or self._virtual_hand is None:
+                return
+
+            visible = bool(payload.get("visible", False))
+            if not visible:
+                self._last_hand_points_world = {}
+                self._virtual_hand.update_points(None)
+                self._metrics.hand_pose_updates += 1
+                self._metrics.commands_applied += 1
+                return
+
+            points = payload.get("points")
+            if not isinstance(points, dict):
+                self._record_error(
+                    error_entry(
+                        "rendering.set_hand_pose.points.invalid",
+                        "Hand pose payload must include a points dictionary",
+                        recoverable=True,
+                        hint="Provide wrist, thumb_tip, index_tip, and anchor in world_norm.",
+                        details={"command_id": command.command_id},
+                    )
+                )
+                return
+
+            scene_points: dict[str, PandaVec3] = {}
+            cached_points: dict[str, tuple[float, float, float]] = {}
+            for point_name in ("wrist", "thumb_tip", "index_tip", "anchor"):
+                point = points.get(point_name)
+                if not isinstance(point, dict):
+                    self._record_error(
+                        error_entry(
+                            "rendering.set_hand_pose.point.invalid",
+                            "Hand pose point is missing or invalid",
+                            recoverable=True,
+                            hint="Provide all required hand points as {x, y, z}.",
+                            details={"command_id": command.command_id, "point_name": point_name},
+                        )
+                    )
+                    return
+
+                world_point = [
+                    float(point["x"]),
+                    float(point["y"]),
+                    float(point["z"]),
+                ]
+                clipped = self._clip_coordinate(world_point)
+                scene_point = self._world_norm_to_scene_pos(self._scale_world_norm_position(clipped))
+                scene_points[point_name] = PandaVec3(*scene_point)
+                cached_points[point_name] = tuple(clipped)
+
+            self._last_hand_points_world = cached_points
+            self._virtual_hand.update_points(scene_points)
+            self._metrics.hand_pose_updates += 1
+            self._metrics.commands_applied += 1
+        except Exception as e:
+            logger.error(f"set_hand_pose processing failed (command ID: {command.command_id}): {str(e)}")
+            self._record_error(
+                error_entry(
+                    "rendering.set_hand_pose.failed",
+                    "Failed to update hand pose",
+                    recoverable=True,
+                    hint="Check hand pose payload structure and coordinate values.",
                     details={"command_id": command.command_id, "error": str(e)},
                 )
             )
@@ -949,7 +983,7 @@ class RenderingServiceImpl(RenderOutputPort):
     def _validate_command_effectiveness(self, command: SceneCommand) -> bool:
         """Validate command effectiveness with deduplication and stale-frame checks."""
         frame_status = classify_frame(self._latest_frame_id, command.frame_id)
-        if command.command_id in self._executed_command_ids or frame_status == "duplicate":
+        if command.command_id in self._executed_command_ids:
             self._metrics.duplicate_commands += 1
             self._record_error(
                 error_entry(
@@ -1008,6 +1042,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._last_pose_log_ts = None
         self._suppressed_pose_logs = 0
         self._last_gesture_packet = None
+        self._last_hand_points_world = {}
         self._last_fps = 0.0
         self._frame_times = []
         self._last_world_norm_pos = (0.0, 0.0, 0.0)

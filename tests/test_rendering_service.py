@@ -18,7 +18,7 @@ def make_command(
     payload: dict | None = None,
 ) -> SceneCommand:
     return SceneCommand(
-        contract_version="1.0.0",
+        contract_version="2.0.0",
         command_id=command_id,
         frame_id=frame_id,
         timestamp_ms=timestamp_ms,
@@ -30,7 +30,7 @@ def make_command(
 
 def make_packet_with_rotation() -> GesturePacket:
     return GesturePacket(
-        contract_version="1.0.0",
+        contract_version="2.0.0",
         frame_id=7,
         timestamp_ms=112,
         hand_id="hand-right",
@@ -97,9 +97,20 @@ class FakeWindow:
             self.height = int(get_y_size())
 
 
+class FakeRenderRoot:
+    def __init__(self) -> None:
+        self.children: list[object] = []
+
+    def attachNewNode(self, node) -> "FakeNodePath":
+        child = FakeNodePath(getattr(node, "name", "child"))
+        child.parent = self
+        self.children.append(child)
+        return child
+
+
 class FakeBase:
     def __init__(self) -> None:
-        self.render = object()
+        self.render = FakeRenderRoot()
         self.taskMgr = FakeTaskManager()
         self.win = FakeWindow()
         self.destroyed = False
@@ -109,6 +120,9 @@ class FakeBase:
         self.accepted_events[event_name] = callback
 
     def destroy(self) -> None:
+        self.destroyed = True
+
+    def userExit(self) -> None:
         self.destroyed = True
 
 
@@ -153,8 +167,31 @@ class FakeNodePath:
     def reparentTo(self, parent: object) -> None:
         self.parent = parent
 
+    def attachNewNode(self, node) -> "FakeNodePath":
+        child = FakeNodePath(getattr(node, "name", "child"))
+        child.parent = self
+        return child
+
     def removeChildren(self) -> None:
         return None
+
+    def removeNode(self) -> None:
+        return None
+
+    def hide(self) -> None:
+        return None
+
+    def show(self) -> None:
+        return None
+
+    def setPos(self, *values: float) -> None:
+        self.pos = values
+
+    def setScale(self, value: float) -> None:
+        self.scale = value
+
+    def setTransparency(self, mode) -> None:
+        self.transparency = mode
 
     def isEmpty(self) -> bool:
         return False
@@ -180,8 +217,18 @@ class FakeObjectNode:
         self.scale = value
 
 
+class FakeVirtualHand:
+    def __init__(self, *args, **kwargs) -> None:
+        self.last_points = None
+        self.root = FakeNodePath("virtual_hand")
+
+    def update_points(self, points) -> None:
+        self.last_points = points
+
+
 def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service._errors = [{"code": "stale"}]
@@ -221,7 +268,7 @@ def test_rendering_validation_does_not_mutate_invalid_command() -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING
     command = SceneCommand(
-        contract_version="1.0.0",
+        contract_version="2.0.0",
         command_id="cmd-invalid",
         frame_id="7",  # type: ignore[arg-type]
         timestamp_ms=100,
@@ -247,7 +294,7 @@ def test_rendering_error_history_is_bounded() -> None:
 
     for index in range(12):
         command = SceneCommand(
-            contract_version="1.0.0",
+            contract_version="2.0.0",
             command_id=f"cmd-{index}",
             frame_id=index,
             timestamp_ms=100 + index,
@@ -390,6 +437,54 @@ def test_rendering_applies_position_sensitivity_to_pose_updates() -> None:
     assert obj.pos == (0.30000000000000004, -0.44999999999999996, 1.0499999999999998)
 
 
+def test_rendering_applies_pending_grab_material_state() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="state-pending-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_state",
+            payload={"interaction_state": "pending_grab"},
+        )
+    )
+
+    assert obj.material is not None
+
+
+def test_rendering_updates_virtual_hand_from_scene_command() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    service._virtual_hand = FakeVirtualHand()
+
+    service.push(
+        make_command(
+            command_id="hand-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_hand_pose",
+            object_id="hand-1",
+            payload={
+                "coordinate_space": "world_norm",
+                "visible": True,
+                "points": {
+                    "wrist": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "thumb_tip": {"x": 0.1, "y": 0.0, "z": 0.0},
+                    "index_tip": {"x": -0.1, "y": 0.0, "z": 0.0},
+                    "anchor": {"x": 0.0, "y": 0.05, "z": 0.0},
+                },
+            },
+        )
+    )
+
+    assert service._virtual_hand.last_points is not None
+    assert service.health()["stats"]["hand_pose_updates"] == 1
+
+
 def test_rendering_reset_restores_cached_scene_pose() -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING
@@ -408,6 +503,7 @@ def test_rendering_reset_restores_cached_scene_pose() -> None:
 
 def test_rendering_step_advances_panda3d_task_manager(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -485,6 +581,7 @@ def test_rendering_core_aspect_lock_prefers_height_when_height_changes_more() ->
 
 def test_rendering_service_registers_quit_callback_with_window_adapter(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.set_quit_callback(lambda: None)

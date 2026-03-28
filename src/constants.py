@@ -14,12 +14,12 @@ BRIDGE_MODE_ROTATING = "rotating"
 
 # 交互状态枚举
 BRIDGE_STATE_IDLE = "idle"
-BRIDGE_STATE_HOVER = "hover"
+BRIDGE_STATE_PENDING_GRAB = "pending_grab"
 BRIDGE_STATE_GRABBING = "grabbing"
 
 # 物体交互状态（对应Rendering材质）
 INTERACTION_IDLE = "idle"
-INTERACTION_HOVER = "hover"
+INTERACTION_PENDING_GRAB = "pending_grab"
 INTERACTION_GRABBED = "grabbed"
 
 # 距离阈值（世界坐标系下，适配物体setScale(0.2)的大小）
