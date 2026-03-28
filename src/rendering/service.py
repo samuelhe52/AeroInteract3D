@@ -68,7 +68,6 @@ class RenderingServiceImpl(RenderOutputPort):
         *,
         debug_stats_enabled: bool = False,
         position_sensitivity: float = 1.0,
-        camera_view: str = "front",
         virtual_hand_config: dict | None = None,
     ):
         super().__init__()
@@ -78,7 +77,6 @@ class RenderingServiceImpl(RenderOutputPort):
         self._rendering_core: Optional[RenderingCoreManager] = self._window_adapter
         self._debug_stats_enabled = debug_stats_enabled
         self._position_sensitivity = max(float(position_sensitivity), 0.001)
-        self._camera_view = str(camera_view)
         self._quit_callback: Callable[[], None] | None = None
         # Material cache keyed by interaction state.
         self._material_cache: Dict[str, Material] = self._init_materials()
@@ -199,7 +197,7 @@ class RenderingServiceImpl(RenderOutputPort):
         try:
             # Initialize window/camera/lights
             self._rendering_core.init_window()
-            self._rendering_core.config_camera_for_world_norm(view=self._camera_view)
+            self._rendering_core.config_camera_for_world_norm()
             self._rendering_core.create_base_lights()
             
             # Initialize submodules (dependency injection)

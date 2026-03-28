@@ -133,15 +133,13 @@ class FakeWindowAdapter:
         self._base = FakeBase()
         self._is_initialized = False
         self.quit_callback = None
-        self.camera_view = None
 
     def init_window(self, window_size: tuple = (800, 600), window_title: str = "AeroInteract3D Rendering") -> None:
         self._is_initialized = True
 
-    def config_camera_for_world_norm(self, *, view: str = "front") -> None:
+    def config_camera_for_world_norm(self) -> None:
         if not self._is_initialized:
             raise RuntimeError("window must be initialized")
-        self.camera_view = view
 
     def create_base_lights(self) -> None:
         if not self._is_initialized:
@@ -255,16 +253,6 @@ def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     service.start()
 
     assert service.health()["lifecycle_state"] == LIFECYCLE_RUNNING
-
-
-def test_rendering_passes_camera_view_to_rendering_core(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-
-    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter, camera_view="side")
-    service.start()
-
-    assert service._window_adapter.camera_view == "side"
 
 
 def test_data_panel_formats_rotation_lines_from_packet_debug() -> None:
@@ -412,10 +400,10 @@ def test_rendering_maps_contract_world_norm_axes_to_panda_axes() -> None:
     assert scene_pos == (0.25, -0.4, 0.6)
 
 
-def test_rendering_core_side_camera_pose_looks_across_depth_axis() -> None:
-    camera_pos, look_at = RenderingCoreManager.camera_pose_for_view("side")
+def test_rendering_core_world_norm_camera_pose_uses_front_view() -> None:
+    camera_pos, look_at = RenderingCoreManager.camera_pose_for_world_norm()
 
-    assert camera_pos == pytest.approx((3.4150635094610964, 3.4150635094610964, 1.2940952255126037))
+    assert camera_pos == pytest.approx((0.0, 5.0, 1.34))
     assert look_at == (0.0, 0.0, 0.0)
 
 

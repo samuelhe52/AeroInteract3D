@@ -39,7 +39,6 @@ RUN_CONFIG_KEYS = frozenset(
         "debug_stats",
         "render_position_sensitivity",
         "bridge_rotation_sensitivity",
-        "render_camera_view",
         "motion_preset",
         "aggressive_release_guard",
         "virtual_hand",
@@ -59,7 +58,6 @@ class AppConfig:
     debug_stats: bool = True
     render_position_sensitivity: float = 1.35
     bridge_rotation_sensitivity: float = 1.5
-    render_camera_view: str = "front"
     motion_preset: str = GESTURE_MOTION_PRESET
     aggressive_release_guard: bool = False
     virtual_hand: dict | None = None
@@ -76,7 +74,6 @@ def _built_in_run_defaults() -> dict[str, object]:
         "debug_stats": True,
         "render_position_sensitivity": 1.35,
         "bridge_rotation_sensitivity": 1.5,
-        "render_camera_view": "front",
         "motion_preset": GESTURE_MOTION_PRESET,
         "aggressive_release_guard": False,
         "virtual_hand": {
@@ -104,7 +101,7 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
     validated: dict[str, object] = {}
 
     for key, value in config_data.items():
-        if key in {"log_level", "motion_preset", "render_camera_view"}:
+        if key in {"log_level", "motion_preset"}:
             if not isinstance(value, str):
                 raise ValueError(f"Run config {path} field '{key}' must be a string")
             validated[key] = value
@@ -164,12 +161,6 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
     if motion_preset is not None and motion_preset not in {"high", "medium", "low"}:
         raise ValueError(
             f"Run config {path} field 'motion_preset' must be one of: high, medium, low"
-        )
-
-    render_camera_view = validated.get("render_camera_view")
-    if render_camera_view is not None and render_camera_view not in {"front", "side"}:
-        raise ValueError(
-            f"Run config {path} field 'render_camera_view' must be one of: front, side"
         )
 
     return validated
@@ -322,12 +313,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Sensitivity multiplier applied to rotation deltas before the bridge emits object hpr updates.",
     )
     parser.add_argument(
-        "--render-camera-view",
-        choices=["front", "side"],
-        default=defaults["render_camera_view"],
-        help="Camera view for the 3D scene. Use side to make depth separation easier to see.",
-    )
-    parser.add_argument(
         "--motion-preset",
         choices=["high", "medium", "low"],
         default=defaults["motion_preset"],
@@ -392,7 +377,6 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         debug_stats=args.debug_stats,
         render_position_sensitivity=args.render_position_sensitivity,
         bridge_rotation_sensitivity=args.bridge_rotation_sensitivity,
-        render_camera_view=args.render_camera_view,
         motion_preset=args.motion_preset,
         aggressive_release_guard=args.aggressive_release_guard,
         virtual_hand=virtual_hand_config,
@@ -417,7 +401,6 @@ def build_app(config: AppConfig) -> App:
     render_output = RenderingServiceImpl(
         debug_stats_enabled=config.debug_stats,
         position_sensitivity=config.render_position_sensitivity,
-        camera_view=config.render_camera_view,
         virtual_hand_config=config.virtual_hand,
     )
     app = App(config, gesture_input, bridge, render_output, debug_frame_source=gesture_input)
