@@ -42,6 +42,79 @@ logger = logging.getLogger("bridge.service")
 coordinate_logger = logging.getLogger("bridge.coordinate_transformation")
 
 INITIAL_OBJECT_POSITION = Vec3(0.0, 0.0, 0.0)
+TABLE_SCENE_OBJECTS: tuple[dict[str, Any], ...] = (
+    {
+        "object_id": "table_plane",
+        "init_pos": {"x": 0.0, "y": -0.34, "z": 0.18},
+        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "plane",
+        "scale": {"x": 2.2, "y": 0.10, "z": 1.42},
+        "color": {"r": 0.68, "g": 0.64, "b": 0.58, "a": 1.0},
+        "interactable": False,
+    },
+    {
+        "object_id": PRIMARY_OBJECT_ID,
+        "init_pos": {"x": 0.0, "y": -0.08, "z": 0.18},
+        "init_hpr": {"h": 12.0, "p": 8.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "cube",
+        "scale": {"x": 0.22, "y": 0.22, "z": 0.22},
+        "color": {"r": 0.86, "g": 0.48, "b": 0.26, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.18,
+    },
+    {
+        "object_id": "tile_left",
+        "init_pos": {"x": -0.48, "y": -0.14, "z": 0.02},
+        "init_hpr": {"h": -8.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "tile",
+        "scale": {"x": 0.28, "y": 0.06, "z": 0.22},
+        "color": {"r": 0.31, "g": 0.55, "b": 0.82, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.16,
+    },
+    {
+        "object_id": "pillar_left",
+        "init_pos": {"x": -0.24, "y": -0.06, "z": 0.32},
+        "init_hpr": {"h": 18.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "pillar",
+        "scale": {"x": 0.14, "y": 0.32, "z": 0.14},
+        "color": {"r": 0.90, "g": 0.79, "b": 0.34, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.18,
+    },
+    {
+        "object_id": "cube_right",
+        "init_pos": {"x": 0.34, "y": -0.10, "z": -0.04},
+        "init_hpr": {"h": -14.0, "p": 6.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "cube",
+        "scale": {"x": 0.18, "y": 0.18, "z": 0.18},
+        "color": {"r": 0.35, "g": 0.75, "b": 0.60, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.16,
+    },
+    {
+        "object_id": "tile_right",
+        "init_pos": {"x": 0.54, "y": -0.16, "z": 0.30},
+        "init_hpr": {"h": 10.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "tile",
+        "scale": {"x": 0.32, "y": 0.05, "z": 0.20},
+        "color": {"r": 0.72, "g": 0.41, "b": 0.65, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.16,
+    },
+)
 
 
 @dataclass(slots=True)
@@ -59,6 +132,7 @@ class BridgeMetrics:
 class ObjectInteractionState:
     object_id: str
     world_position: Vec3
+    interaction_radius: float = HOVER_DISTANCE_THRESHOLD
     world_hpr: tuple[float, float, float] = (0.0, 0.0, 0.0)
     interaction_state: str = BRIDGE_STATE_IDLE
     grab_offset_world: Vec3 | None = None
@@ -80,6 +154,8 @@ class BridgeServiceImpl(BridgeService):
         self._metrics = BridgeMetrics()
         self._pending_init = False
         self._object_states: dict[str, ObjectInteractionState] = {}
+        self._hovered_object_id: str | None = None
+        self._grabbed_object_id: str | None = None
 
     def start(self) -> None:
         if self.lifecycle_state == LIFECYCLE_RUNNING:
@@ -93,9 +169,12 @@ class BridgeServiceImpl(BridgeService):
         self._metrics = BridgeMetrics()
         self._pending_init = True
         self._object_states = {}
+        self._hovered_object_id = None
+        self._grabbed_object_id = None
         self._ensure_object_state(
             PRIMARY_OBJECT_ID,
             world_position=INITIAL_OBJECT_POSITION,
+            interaction_radius=HOVER_DISTANCE_THRESHOLD,
             interaction_state=BRIDGE_STATE_IDLE,
             initialized=False,
         )
@@ -198,78 +277,124 @@ class BridgeServiceImpl(BridgeService):
         self._pending_init = False
         self._interaction_state = BRIDGE_STATE_IDLE
         self._object_states = {}
+        self._hovered_object_id = None
+        self._grabbed_object_id = None
         self.lifecycle_state = LIFECYCLE_STOPPED
         return None
 
     def _step_state_machine(self, packet: GesturePacket) -> list[SceneCommand]:
-        object_state = self._object_state(PRIMARY_OBJECT_ID)
         commands: list[SceneCommand] = []
 
         if packet.tracking_state != "tracked" or packet.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
-            if object_state.interaction_state == BRIDGE_STATE_GRABBING:
-                return self._reset_interaction(packet, reason="tracking_lost")
-            return self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_IDLE)
+            if self._grabbed_object_id is not None or self._hovered_object_id is not None:
+                return self._release_interaction(packet)
+            return commands
 
         hand_anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
-        is_hovering = self._is_hovering_object(hand_anchor_world, object_state)
+        hovered_object = self._select_hovered_object(hand_anchor_world)
+        hovered_object_id = hovered_object.object_id if hovered_object is not None else None
         rotation_mode_active = self._rotation_mode_active(packet)
 
         if rotation_mode_active:
-            commands.extend(self._handle_rotation_mode(packet, object_state, is_hovering, hand_anchor_world))
-            return commands
-
-        if object_state.interaction_state == BRIDGE_STATE_IDLE:
-            if is_hovering:
-                return self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_PENDING_GRAB)
-            return commands
-
-        if object_state.interaction_state == BRIDGE_STATE_PENDING_GRAB:
-            if not is_hovering:
-                return self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_IDLE)
-            if packet.pinch_state == "pinched":
-                object_state.grab_offset_world = self._subtract_vec3(object_state.world_position, hand_anchor_world)
-                commands.extend(
-                    self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_GRABBING)
+            target_object = self._active_object_state(hovered_object)
+            if target_object is None:
+                return self._sync_hover_state(packet, hovered_object_id)
+            if self._grabbed_object_id is None:
+                commands.extend(self._sync_hover_state(packet, hovered_object_id))
+            commands.extend(
+                self._handle_rotation_mode(
+                    packet,
+                    target_object,
+                    hovered_object_id == target_object.object_id,
+                    hand_anchor_world,
                 )
-                commands.append(self._make_object_pose(packet, object_state, hand_anchor_world))
+            )
             return commands
 
-        if object_state.interaction_state == BRIDGE_STATE_GRABBING:
-            if packet.pinch_state == "open":
-                next_state = BRIDGE_STATE_PENDING_GRAB if is_hovering else BRIDGE_STATE_IDLE
-                return self._set_object_interaction_state(packet, object_state, next_state)
-            commands.append(self._make_object_pose(packet, object_state, hand_anchor_world))
+        if self._grabbed_object_id is None:
+            commands.extend(self._sync_hover_state(packet, hovered_object_id))
+            if hovered_object is None:
+                return commands
+            if packet.pinch_state == "pinched":
+                self._grabbed_object_id = hovered_object.object_id
+                self._hovered_object_id = hovered_object.object_id
+                hovered_object.grab_offset_world = self._subtract_vec3(hovered_object.world_position, hand_anchor_world)
+                commands.extend(
+                    self._set_object_interaction_state(packet, hovered_object, BRIDGE_STATE_GRABBING)
+                )
+                commands.append(self._make_object_pose(packet, hovered_object, hand_anchor_world))
             return commands
 
-        return self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_IDLE)
+        grabbed_object = self._object_state(self._grabbed_object_id)
+        if packet.pinch_state == "open":
+            self._grabbed_object_id = None
+            commands.extend(self._set_object_interaction_state(packet, grabbed_object, BRIDGE_STATE_IDLE))
+            self._hovered_object_id = None
+            commands.extend(self._sync_hover_state(packet, hovered_object_id))
+            return commands
+
+        commands.append(self._make_object_pose(packet, grabbed_object, hand_anchor_world))
+        return commands
 
     def _reset_interaction(self, packet: GesturePacket, *, reason: str) -> list[SceneCommand]:
-        object_state = self._object_state(PRIMARY_OBJECT_ID)
-        object_state.interaction_state = BRIDGE_STATE_IDLE
-        object_state.grab_offset_world = None
-        object_state.rotation_reference_hpr = None
-        object_state.rotation_reference_input = None
+        commands = [self._make_reset_interaction(packet, reason=reason)]
+        for object_state in self._object_states.values():
+            if object_state.interaction_state != BRIDGE_STATE_IDLE:
+                object_state.interaction_state = BRIDGE_STATE_IDLE
+                object_state.grab_offset_world = None
+                object_state.rotation_reference_hpr = None
+                object_state.rotation_reference_input = None
+                commands.append(self._make_object_state(packet, object_state.object_id, INTERACTION_IDLE))
+            else:
+                object_state.grab_offset_world = None
+                object_state.rotation_reference_hpr = None
+                object_state.rotation_reference_input = None
+        self._hovered_object_id = None
+        self._grabbed_object_id = None
         self._interaction_state = BRIDGE_STATE_IDLE
         self._metrics.resets_emitted += 1
-        return [
-            self._make_reset_interaction(packet, reason=reason),
-            self._make_object_state(packet, PRIMARY_OBJECT_ID, INTERACTION_IDLE),
-        ]
+        return commands
+
+    def _release_interaction(self, packet: GesturePacket) -> list[SceneCommand]:
+        commands: list[SceneCommand] = []
+        for object_state in self._object_states.values():
+            if object_state.interaction_state != BRIDGE_STATE_IDLE:
+                commands.extend(self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_IDLE))
+            object_state.grab_offset_world = None
+            object_state.rotation_reference_hpr = None
+            object_state.rotation_reference_input = None
+        self._hovered_object_id = None
+        self._grabbed_object_id = None
+        self._interaction_state = BRIDGE_STATE_IDLE
+        return commands
 
     def _make_init_scene(self, packet: GesturePacket) -> SceneCommand:
-        object_state = self._ensure_object_state(
-            PRIMARY_OBJECT_ID,
-            world_position=INITIAL_OBJECT_POSITION,
-            interaction_state=BRIDGE_STATE_IDLE,
-            initialized=True,
-        )
-        object_state.world_position = INITIAL_OBJECT_POSITION
-        object_state.world_hpr = (0.0, 0.0, 0.0)
-        object_state.interaction_state = BRIDGE_STATE_IDLE
-        object_state.grab_offset_world = None
-        object_state.rotation_reference_hpr = None
-        object_state.rotation_reference_input = None
-        object_state.initialized = True
+        self._object_states = {}
+        self._hovered_object_id = None
+        self._grabbed_object_id = None
+        for descriptor in TABLE_SCENE_OBJECTS:
+            if not bool(descriptor.get("interactable", True)):
+                continue
+            object_state = self._ensure_object_state(
+                str(descriptor["object_id"]),
+                world_position=Vec3(
+                    x=float(descriptor["init_pos"]["x"]),
+                    y=float(descriptor["init_pos"]["y"]),
+                    z=float(descriptor["init_pos"]["z"]),
+                ),
+                interaction_radius=float(descriptor.get("interaction_radius", HOVER_DISTANCE_THRESHOLD)),
+                interaction_state=BRIDGE_STATE_IDLE,
+                initialized=True,
+            )
+            object_state.world_hpr = (
+                float(descriptor["init_hpr"]["h"]),
+                float(descriptor["init_hpr"]["p"]),
+                float(descriptor["init_hpr"]["r"]),
+            )
+            object_state.grab_offset_world = None
+            object_state.rotation_reference_hpr = None
+            object_state.rotation_reference_input = None
+            object_state.initialized = True
         self._interaction_state = BRIDGE_STATE_IDLE
         return SceneCommand(
             contract_version=self._expected_contract_version,
@@ -278,17 +403,7 @@ class BridgeServiceImpl(BridgeService):
             timestamp_ms=packet.timestamp_ms,
             command_type="init_scene",
             object_id=PRIMARY_OBJECT_ID,
-            payload={
-                "objects": [
-                    {
-                        "object_id": PRIMARY_OBJECT_ID,
-                        "init_pos": vec3_payload(object_state.world_position),
-                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
-                        "coordinate_space": "world_norm",
-                        "interaction_state": INTERACTION_IDLE,
-                    }
-                ]
-            },
+            payload={"objects": [dict(scene_object) for scene_object in TABLE_SCENE_OBJECTS]},
         )
 
     def _make_object_pose(
@@ -373,6 +488,8 @@ class BridgeServiceImpl(BridgeService):
         hand_anchor_world: Vec3,
     ) -> list[SceneCommand]:
         if packet.pinch_state != "pinched":
+            if self._grabbed_object_id == object_state.object_id:
+                self._grabbed_object_id = None
             next_state = BRIDGE_STATE_PENDING_GRAB if is_hovering else BRIDGE_STATE_IDLE
             object_state.grab_offset_world = None
             object_state.rotation_reference_hpr = None
@@ -380,6 +497,8 @@ class BridgeServiceImpl(BridgeService):
             return self._set_object_interaction_state(packet, object_state, next_state)
 
         commands: list[SceneCommand] = []
+        self._grabbed_object_id = object_state.object_id
+        self._hovered_object_id = object_state.object_id
         object_state.grab_offset_world = None
         commands.extend(self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_ROTATING))
         commands.append(self._make_object_pose(packet, object_state, hand_anchor_world))
@@ -574,6 +693,7 @@ class BridgeServiceImpl(BridgeService):
         object_id: str,
         *,
         world_position: Vec3,
+        interaction_radius: float,
         interaction_state: str,
         initialized: bool,
     ) -> ObjectInteractionState:
@@ -582,12 +702,17 @@ class BridgeServiceImpl(BridgeService):
             object_state = ObjectInteractionState(
                 object_id=object_id,
                 world_position=world_position,
+                interaction_radius=interaction_radius,
                 interaction_state=interaction_state,
                 initialized=initialized,
             )
             self._object_states[object_id] = object_state
             return object_state
 
+        object_state.world_position = world_position
+        object_state.interaction_radius = interaction_radius
+        object_state.interaction_state = interaction_state
+        object_state.initialized = initialized
         return object_state
 
     def _object_state(self, object_id: str) -> ObjectInteractionState:
@@ -597,9 +722,43 @@ class BridgeServiceImpl(BridgeService):
         return self._ensure_object_state(
             object_id,
             world_position=INITIAL_OBJECT_POSITION,
+            interaction_radius=HOVER_DISTANCE_THRESHOLD,
             interaction_state=BRIDGE_STATE_IDLE,
             initialized=False,
         )
+
+    def _active_object_state(self, hovered_object: ObjectInteractionState | None) -> ObjectInteractionState | None:
+        if self._grabbed_object_id is not None:
+            return self._object_state(self._grabbed_object_id)
+        return hovered_object
+
+    def _sync_hover_state(self, packet: GesturePacket, hovered_object_id: str | None) -> list[SceneCommand]:
+        if hovered_object_id == self._hovered_object_id:
+            return []
+
+        commands: list[SceneCommand] = []
+        previous_hover_id = self._hovered_object_id
+        self._hovered_object_id = hovered_object_id
+
+        if previous_hover_id is not None and previous_hover_id != self._grabbed_object_id:
+            commands.extend(
+                self._set_object_interaction_state(
+                    packet,
+                    self._object_state(previous_hover_id),
+                    BRIDGE_STATE_IDLE,
+                )
+            )
+
+        if hovered_object_id is not None and hovered_object_id != self._grabbed_object_id:
+            commands.extend(
+                self._set_object_interaction_state(
+                    packet,
+                    self._object_state(hovered_object_id),
+                    BRIDGE_STATE_PENDING_GRAB,
+                )
+            )
+
+        return commands
 
     def _set_object_interaction_state(
         self,
@@ -634,7 +793,19 @@ class BridgeServiceImpl(BridgeService):
         return math.sqrt(((a.x - b.x) ** 2) + ((a.y - b.y) ** 2) + ((a.z - b.z) ** 2))
 
     def _is_hovering_object(self, hand_anchor_world: Vec3, object_state: ObjectInteractionState) -> bool:
-        return self._distance(hand_anchor_world, object_state.world_position) <= HOVER_DISTANCE_THRESHOLD
+        return self._distance(hand_anchor_world, object_state.world_position) <= object_state.interaction_radius
+
+    def _select_hovered_object(self, hand_anchor_world: Vec3) -> ObjectInteractionState | None:
+        best_match: ObjectInteractionState | None = None
+        best_distance: float | None = None
+        for object_state in self._object_states.values():
+            distance = self._distance(hand_anchor_world, object_state.world_position)
+            if distance > object_state.interaction_radius:
+                continue
+            if best_distance is None or distance < best_distance:
+                best_match = object_state
+                best_distance = distance
+        return best_match
 
     @staticmethod
     def _add_vec3(a: Vec3, b: Vec3) -> Vec3:

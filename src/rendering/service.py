@@ -44,6 +44,18 @@ class ObjectInitialState:
 
 
 @dataclass(slots=True)
+class SceneObjectDescriptor:
+    object_id: str
+    init_pos: tuple[float, float, float]
+    init_hpr: tuple[float, float, float]
+    interaction_state: str
+    shape: str
+    scale: tuple[float, float, float]
+    color: tuple[float, float, float, float]
+    interactable: bool
+
+
+@dataclass(slots=True)
 class RenderingMetrics:
     commands_seen: int = 0
     commands_applied: int = 0
@@ -179,6 +191,162 @@ class RenderingServiceImpl(RenderOutputPort):
         position: tuple[float, float, float] | list[float],
     ) -> tuple[float, float, float]:
         return tuple(float(value) * self._position_sensitivity for value in position)
+
+    @staticmethod
+    def _world_norm_to_scene_scale(scale: tuple[float, float, float] | list[float]) -> tuple[float, float, float]:
+        x, y, z = (float(value) for value in scale)
+        return (x, z, y)
+
+    @staticmethod
+    def _parse_xyz_dict(payload: dict[str, Any], *, keys: tuple[str, str, str]) -> tuple[float, float, float] | None:
+        if not all(key in payload for key in keys):
+            return None
+        try:
+            return tuple(float(payload[key]) for key in keys)
+        except (TypeError, ValueError):
+            return None
+
+    def _parse_scene_object_descriptor(self, command: SceneCommand, obj_data: dict[str, Any]) -> SceneObjectDescriptor | None:
+        object_id = obj_data.get("object_id")
+        if not object_id:
+            self._record_error(
+                error_entry(
+                    "rendering.init_scene.object_id.missing",
+                    "init_scene object is missing object_id",
+                    recoverable=True,
+                    hint="Provide a non-empty object_id for each init_scene object.",
+                    details={"command_id": command.command_id, "object": obj_data},
+                )
+            )
+            logger.warning(f"init_scene command format error: object missing object_id (ID: {command.command_id}")
+            return None
+
+        init_pos_data = obj_data.get("init_pos")
+        if isinstance(init_pos_data, dict):
+            init_pos = self._parse_xyz_dict(init_pos_data, keys=("x", "y", "z"))
+            if init_pos is None:
+                self._record_error(
+                    error_entry(
+                        "rendering.init_scene.init_pos.keys_missing",
+                        "init_scene init_pos is missing required keys",
+                        recoverable=True,
+                        hint="Provide init_pos as a dict with x, y, z keys.",
+                        details={"command_id": command.command_id, "object_id": object_id, "init_pos": init_pos_data},
+                    )
+                )
+                logger.warning(f"init_scene command format error: init_pos dict missing required keys (ID: {command.command_id}")
+                return None
+        elif isinstance(init_pos_data, (list, tuple)) and len(init_pos_data) == 3:
+            try:
+                init_pos = tuple(float(v) for v in init_pos_data)
+            except (TypeError, ValueError):
+                init_pos = None
+        else:
+            init_pos = None
+        if init_pos is None:
+            self._record_error(
+                error_entry(
+                    "rendering.init_scene.init_pos.invalid",
+                    "init_scene object is missing a valid init_pos",
+                    recoverable=True,
+                    hint="Provide init_pos as either {x, y, z} or [x, y, z].",
+                    details={"command_id": command.command_id, "object_id": object_id, "init_pos": init_pos_data},
+                )
+            )
+            logger.warning(f"init_scene command format error: object {object_id} missing or invalid init_pos (ID: {command.command_id}")
+            return None
+
+        init_hpr_data = obj_data.get("init_hpr")
+        if isinstance(init_hpr_data, dict):
+            init_hpr = self._parse_xyz_dict(init_hpr_data, keys=("h", "p", "r"))
+            if init_hpr is None:
+                self._record_error(
+                    error_entry(
+                        "rendering.init_scene.init_hpr.keys_missing",
+                        "init_scene init_hpr is missing required keys",
+                        recoverable=True,
+                        hint="Provide init_hpr as a dict with h, p, r keys.",
+                        details={"command_id": command.command_id, "object_id": object_id, "init_hpr": init_hpr_data},
+                    )
+                )
+                logger.warning(f"init_scene command format error: init_hpr dict missing required keys (ID: {command.command_id}")
+                return None
+        elif isinstance(init_hpr_data, (list, tuple)) and len(init_hpr_data) == 3:
+            try:
+                init_hpr = tuple(float(v) for v in init_hpr_data)
+            except (TypeError, ValueError):
+                init_hpr = None
+        else:
+            init_hpr = None
+        if init_hpr is None:
+            self._record_error(
+                error_entry(
+                    "rendering.init_scene.init_hpr.invalid",
+                    "init_scene object is missing a valid init_hpr",
+                    recoverable=True,
+                    hint="Provide init_hpr as either {h, p, r} or [h, p, r].",
+                    details={"command_id": command.command_id, "object_id": object_id, "init_hpr": init_hpr_data},
+                )
+            )
+            logger.warning(f"init_scene command format error: object {object_id} missing or invalid init_hpr (ID: {command.command_id}")
+            return None
+
+        shape = str(obj_data.get("shape", "cube")).lower()
+        if shape not in {"cube", "tile", "pillar", "plane"}:
+            logger.warning(f"Unknown init_scene shape '{shape}' for {object_id}, defaulting to cube")
+            shape = "cube"
+
+        scale_data = obj_data.get("scale", {"x": 0.2, "y": 0.2, "z": 0.2})
+        if isinstance(scale_data, dict):
+            scale = self._parse_xyz_dict(scale_data, keys=("x", "y", "z"))
+        elif isinstance(scale_data, (list, tuple)) and len(scale_data) == 3:
+            try:
+                scale = tuple(float(v) for v in scale_data)
+            except (TypeError, ValueError):
+                scale = None
+        else:
+            scale = None
+        if scale is None or any(value <= 0.0 for value in scale):
+            scale = (0.2, 0.2, 0.2)
+
+        color_data = obj_data.get("color", {"r": 0.5, "g": 0.5, "b": 0.5, "a": 1.0})
+        if isinstance(color_data, dict):
+            try:
+                color = (
+                    float(color_data["r"]),
+                    float(color_data["g"]),
+                    float(color_data["b"]),
+                    float(color_data.get("a", 1.0)),
+                )
+            except (KeyError, TypeError, ValueError):
+                color = (0.5, 0.5, 0.5, 1.0)
+        else:
+            color = (0.5, 0.5, 0.5, 1.0)
+
+        interaction_state = str(obj_data.get("interaction_state", "idle"))
+        interactable = bool(obj_data.get("interactable", True))
+        return SceneObjectDescriptor(
+            object_id=object_id,
+            init_pos=init_pos,
+            init_hpr=init_hpr,
+            interaction_state=interaction_state,
+            shape=shape,
+            scale=scale,
+            color=color,
+            interactable=interactable,
+        )
+
+    def _create_scene_object(self, descriptor: SceneObjectDescriptor, box_template: NodePath) -> NodePath:
+        object_np = self._scene_root.attachNewNode(descriptor.object_id)
+        visual_np = object_np.attachNewNode(f"{descriptor.object_id}_visual")
+        model_np = box_template.copyTo(visual_np)
+        model_np.setPos(*self._box_model_center_offset())
+        model_np.setColorScale(*descriptor.color)
+        model_np.setTransparency(1)
+        object_np.setScale(*self._world_norm_to_scene_scale(descriptor.scale))
+        object_np.setTag("shape", descriptor.shape)
+        object_np.setTag("interactable", "1" if descriptor.interactable else "0")
+        return object_np
     
     def start(self) -> None:
         """Start module and initialize environment to RUNNING or DEGRADED (original logic preserved)"""
@@ -837,10 +1005,7 @@ class RenderingServiceImpl(RenderOutputPort):
             cube_model = base.loader.loadModel("box")
             if cube_model.isEmpty():
                 raise RuntimeError("Failed to load cube model")
-            # Forcefully disable all textures to eliminate noise completely
             cube_model.setTextureOff(1)
-            # Set solid color to match idle material
-            cube_model.setColor(0.5, 0.5, 0.5, 1.0)
             
             # Parse objects from payload
             objects = command.payload.get("objects", [])
@@ -861,7 +1026,6 @@ class RenderingServiceImpl(RenderOutputPort):
             
             # Process each object
             for obj_data in objects:
-                # Validate object data format
                 if not isinstance(obj_data, dict):
                     self._record_error(
                         error_entry(
@@ -874,127 +1038,34 @@ class RenderingServiceImpl(RenderOutputPort):
                     )
                     logger.warning(f"init_scene command format error: object must be a dict (ID: {command.command_id}")
                     continue
-                
-                # Extract required fields
-                object_id = obj_data.get("object_id")
-                init_pos_data = obj_data.get("init_pos")
-                init_hpr_data = obj_data.get("init_hpr")
-                
-                # Validate required fields
-                if not object_id:
-                    self._record_error(
-                        error_entry(
-                            "rendering.init_scene.object_id.missing",
-                            "init_scene object is missing object_id",
-                            recoverable=True,
-                            hint="Provide a non-empty object_id for each init_scene object.",
-                            details={"command_id": command.command_id, "object": obj_data},
-                        )
-                    )
-                    logger.warning(f"init_scene command format error: object missing object_id (ID: {command.command_id}")
+                descriptor = self._parse_scene_object_descriptor(command, obj_data)
+                if descriptor is None:
                     continue
-                
-                # Parse init_pos_data (support dict{x,y,z} or 3D list/tuple)
-                if isinstance(init_pos_data, dict):
-                    # Handle dict format: {"x": value, "y": value, "z": value}
-                    if all(key in init_pos_data for key in ["x", "y", "z"]):
-                        init_pos = (init_pos_data["x"], init_pos_data["y"], init_pos_data["z"])
-                    else:
-                        self._record_error(
-                            error_entry(
-                                "rendering.init_scene.init_pos.keys_missing",
-                                "init_scene init_pos is missing required keys",
-                                recoverable=True,
-                                hint="Provide init_pos as a dict with x, y, z keys.",
-                                details={"command_id": command.command_id, "object_id": object_id, "init_pos": init_pos_data},
-                            )
-                        )
-                        logger.warning(f"init_scene command format error: init_pos dict missing required keys (ID: {command.command_id}")
-                        continue
-                elif isinstance(init_pos_data, (list, tuple)) and len(init_pos_data) == 3:
-                    # Handle list/tuple format: [x, y, z]
-                    init_pos = tuple(init_pos_data)
-                else:
-                    self._record_error(
-                        error_entry(
-                            "rendering.init_scene.init_pos.invalid",
-                            "init_scene object is missing a valid init_pos",
-                            recoverable=True,
-                            hint="Provide init_pos as either {x, y, z} or [x, y, z].",
-                            details={"command_id": command.command_id, "object_id": object_id, "init_pos": init_pos_data},
-                        )
-                    )
-                    logger.warning(f"init_scene command format error: object {object_id} missing or invalid init_pos (ID: {command.command_id}")
-                    continue
-                
-                # Parse init_hpr_data (support dict{h,p,r} or 3D list/tuple)
-                if isinstance(init_hpr_data, dict):
-                    # Handle dict format: {"h": value, "p": value, "r": value}
-                    if all(key in init_hpr_data for key in ["h", "p", "r"]):
-                        init_hpr = (init_hpr_data["h"], init_hpr_data["p"], init_hpr_data["r"])
-                    else:
-                        self._record_error(
-                            error_entry(
-                                "rendering.init_scene.init_hpr.keys_missing",
-                                "init_scene init_hpr is missing required keys",
-                                recoverable=True,
-                                hint="Provide init_hpr as a dict with h, p, r keys.",
-                                details={"command_id": command.command_id, "object_id": object_id, "init_hpr": init_hpr_data},
-                            )
-                        )
-                        logger.warning(f"init_scene command format error: init_hpr dict missing required keys (ID: {command.command_id}")
-                        continue
-                elif isinstance(init_hpr_data, (list, tuple)) and len(init_hpr_data) == 3:
-                    # Handle list/tuple format: [h, p, r]
-                    init_hpr = tuple(init_hpr_data)
-                else:
-                    self._record_error(
-                        error_entry(
-                            "rendering.init_scene.init_hpr.invalid",
-                            "init_scene object is missing a valid init_hpr",
-                            recoverable=True,
-                            hint="Provide init_hpr as either {h, p, r} or [h, p, r].",
-                            details={"command_id": command.command_id, "object_id": object_id, "init_hpr": init_hpr_data},
-                        )
-                    )
-                    logger.warning(f"init_scene command format error: object {object_id} missing or invalid init_hpr (ID: {command.command_id}")
-                    continue
-                
-                # Convert to float
-                try:
-                    init_pos = tuple(float(v) for v in init_pos)
-                    init_hpr = tuple(float(v) for v in init_hpr)
-                except (ValueError, TypeError):
-                    self._record_error(
-                        error_entry(
-                            "rendering.init_scene.numeric_values.invalid",
-                            "init_scene object contains invalid numeric values",
-                            recoverable=True,
-                            hint="Provide numeric init_pos and init_hpr values.",
-                            details={"command_id": command.command_id, "object_id": object_id},
-                        )
-                    )
-                    logger.warning(f"init_scene command format error: object {object_id} has invalid numeric values (ID: {command.command_id}")
-                    continue
-                
-                # Create NodePath
-                cube_np = self._scene_root.attachNewNode(object_id)
-                cube_visual_np = cube_np.attachNewNode(f"{object_id}_visual")
-                cube_model.reparentTo(cube_visual_np)
-                cube_visual_np.setPos(*self._box_model_center_offset())
-                
-                # Set the initial pose and interaction state.
-                scene_init_pos = self._world_norm_to_scene_pos(init_pos)
-                cube_np.setPos(*scene_init_pos)
-                cube_np.setHpr(*init_hpr)
-                cube_np.setMaterial(self._material_cache["idle"], 1)
-                cube_np.setScale(0.2)  # Fit within world_norm.
-                
-                # Cache the object and its initial state.
-                self._object_cache[object_id] = cube_np
-                self._object_initial_states[object_id] = ObjectInitialState(pos=scene_init_pos, hpr=init_hpr)
-                
-                logger.info(f"init_scene executed: created object {object_id}, initial state pos={init_pos}, hpr={init_hpr}, state=idle")
+
+                object_np = self._create_scene_object(descriptor, cube_model)
+                scene_init_pos = self._world_norm_to_scene_pos(
+                    self._scale_world_norm_position(descriptor.init_pos)
+                )
+                object_np.setPos(*scene_init_pos)
+                object_np.setHpr(*descriptor.init_hpr)
+                object_np.setMaterial(self._material_cache.get(descriptor.interaction_state, self._material_cache["idle"]), 1)
+
+                self._object_cache[descriptor.object_id] = object_np
+                self._object_initial_states[descriptor.object_id] = ObjectInitialState(
+                    pos=scene_init_pos,
+                    hpr=descriptor.init_hpr,
+                    state=descriptor.interaction_state if descriptor.interactable else "idle",
+                )
+
+                logger.info(
+                    "init_scene executed: created object %s shape=%s pos=%s hpr=%s scale=%s interactable=%s",
+                    descriptor.object_id,
+                    descriptor.shape,
+                    descriptor.init_pos,
+                    descriptor.init_hpr,
+                    descriptor.scale,
+                    descriptor.interactable,
+                )
             
             # Log if no objects were created
             if not objects:

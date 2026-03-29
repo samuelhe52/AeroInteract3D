@@ -165,7 +165,7 @@ class RenderingCoreManager:
     
     @staticmethod
     def camera_pose_for_world_norm() -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-        return (0.0, 5.0, 1.34), (0.0, 0.0, 0.0)
+        return (0.0, 4.6, 1.85), (0.0, 0.18, 0.0)
 
     def config_camera_for_world_norm(self) -> None:
         """Configure world coordinate system camera (original logic preserved)"""
