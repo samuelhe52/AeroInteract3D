@@ -889,7 +889,9 @@ class RenderingServiceImpl(RenderOutputPort):
 
             scene_points: dict[str, PandaVec3] = {}
             cached_points: dict[str, tuple[float, float, float]] = {}
-            for point_name in ("wrist", "thumb_tip", "index_tip", "anchor"):
+            required_points = ("wrist", "thumb_tip", "index_tip", "anchor")
+            optional_points = ("thumb_base", "index_base")
+            for point_name in required_points:
                 point = points.get(point_name)
                 if not isinstance(point, dict):
                     self._record_error(
@@ -903,6 +905,20 @@ class RenderingServiceImpl(RenderOutputPort):
                     )
                     return
 
+                world_point = [
+                    float(point["x"]),
+                    float(point["y"]),
+                    float(point["z"]),
+                ]
+                clipped = self._clip_coordinate(world_point)
+                scene_point = self._world_norm_to_scene_pos(self._scale_world_norm_position(clipped))
+                scene_points[point_name] = PandaVec3(*scene_point)
+                cached_points[point_name] = tuple(clipped)
+
+            for point_name in optional_points:
+                point = points.get(point_name)
+                if not isinstance(point, dict):
+                    continue
                 world_point = [
                     float(point["x"]),
                     float(point["y"]),

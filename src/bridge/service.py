@@ -454,12 +454,20 @@ class BridgeServiceImpl(BridgeService):
             thumb_tip_world = self._camera_to_world_position(packet.thumb_tip)
             wrist_world = self._camera_to_world_position(packet.wrist)
             anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
+            thumb_base_world, index_base_world = self._finger_base_points(
+                wrist_world,
+                anchor_world,
+                thumb_tip_world,
+                index_tip_world,
+            )
             payload["visible"] = True
             payload["points"] = {
                 "wrist": vec3_payload(wrist_world),
                 "thumb_tip": vec3_payload(thumb_tip_world),
                 "index_tip": vec3_payload(index_tip_world),
                 "anchor": vec3_payload(anchor_world),
+                "thumb_base": vec3_payload(thumb_base_world),
+                "index_base": vec3_payload(index_base_world),
             }
 
         return SceneCommand(
@@ -471,6 +479,26 @@ class BridgeServiceImpl(BridgeService):
             object_id=packet.hand_id,
             payload=payload,
         )
+
+    def _finger_base_points(
+        self,
+        wrist_world: Vec3,
+        anchor_world: Vec3,
+        thumb_tip_world: Vec3,
+        index_tip_world: Vec3,
+    ) -> tuple[Vec3, Vec3]:
+        palm_pull = self._scale_vec3(self._subtract_vec3(wrist_world, anchor_world), 0.34)
+        thumb_forward = self._scale_vec3(
+            self._normalized_vec3(self._subtract_vec3(thumb_tip_world, anchor_world)),
+            0.085,
+        )
+        index_forward = self._scale_vec3(
+            self._normalized_vec3(self._subtract_vec3(index_tip_world, anchor_world)),
+            0.085,
+        )
+        thumb_base = self._add_vec3(anchor_world, self._add_vec3(palm_pull, thumb_forward))
+        index_base = self._add_vec3(anchor_world, self._add_vec3(palm_pull, index_forward))
+        return thumb_base, index_base
 
     @staticmethod
     def _rotation_mode_active(packet: GesturePacket) -> bool:
@@ -837,6 +865,18 @@ class BridgeServiceImpl(BridgeService):
     @staticmethod
     def _subtract_vec3(a: Vec3, b: Vec3) -> Vec3:
         return Vec3(a.x - b.x, a.y - b.y, a.z - b.z)
+
+    @staticmethod
+    def _scale_vec3(value: Vec3, factor: float) -> Vec3:
+        return Vec3(value.x * factor, value.y * factor, value.z * factor)
+
+    @staticmethod
+    def _normalized_vec3(value: Vec3) -> Vec3:
+        length = math.sqrt((value.x ** 2) + (value.y ** 2) + (value.z ** 2))
+        if length <= 1e-6:
+            return Vec3(0.0, 0.0, 0.0)
+        inv_length = 1.0 / length
+        return Vec3(value.x * inv_length, value.y * inv_length, value.z * inv_length)
 
     def _record_error(self, error: dict[str, Any]) -> None:
         payload = dict(error)

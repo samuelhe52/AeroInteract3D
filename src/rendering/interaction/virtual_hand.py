@@ -8,19 +8,20 @@ from panda3d.core import NodePath, TransparencyAttrib, Vec3
 
 
 class VirtualHand:
-    WRIST_MARKER_SCALE = (0.11, 0.06, 0.035)
-    JOINT_MARKER_SCALE = (0.06, 0.06, 0.06)
-    ANCHOR_MARKER_SCALE = (0.085, 0.085, 0.05)
-    PALM_SEGMENT_THICKNESS = 0.045
-    FINGER_SEGMENT_THICKNESS = 0.035
-    PINCH_BAR_THICKNESS_OPEN = 0.012
-    PINCH_BAR_THICKNESS_CANDIDATE = 0.02
-    PINCH_BAR_THICKNESS_PINCHED = 0.03
-    PINCH_CENTER_SCALE_OPEN = 0.035
-    PINCH_CENTER_SCALE_CANDIDATE = 0.055
-    PINCH_CENTER_SCALE_PINCHED = 0.08
-    PINCH_CANDIDATE_DISTANCE = 0.16
-    PINCH_LOCK_DISTANCE = 0.09
+    WRIST_SCALE = (0.10, 0.06, 0.03)
+    ANCHOR_SCALE = (0.055, 0.055, 0.028)
+    ROOT_JOINT_SCALE = (0.065, 0.065, 0.04)
+    TIP_JOINT_SCALE = (0.05, 0.05, 0.04)
+    PALM_BAR_THICKNESS = 0.05
+    FINGER_BAR_THICKNESS = 0.032
+    PINCH_BAR_THICKNESS_OPEN = 0.01
+    PINCH_BAR_THICKNESS_CANDIDATE = 0.016
+    PINCH_BAR_THICKNESS_PINCHED = 0.024
+    PINCH_CENTER_SCALE_OPEN = (0.024, 0.024, 0.024)
+    PINCH_CENTER_SCALE_CANDIDATE = (0.042, 0.042, 0.042)
+    PINCH_CENTER_SCALE_PINCHED = (0.06, 0.06, 0.06)
+    PINCH_CANDIDATE_DISTANCE = 0.12
+    PINCH_LOCK_DISTANCE = 0.055
     _CENTER_OFFSET = (-0.5, -0.5, -0.5)
 
     def __init__(self, base, root_np: NodePath, config: dict | None = None):
@@ -28,24 +29,19 @@ class VirtualHand:
         self.root = root_np.attachNewNode("virtual_hand")
         self.config = config or {}
         self._box_template = self._load_box_template()
-        self._marker_colors = {
-            "wrist": self.config.get("wrist_color", [0.36, 0.44, 0.52]),
-            "thumb_tip": self.config.get("thumb_color", [0.98, 0.60, 0.22]),
-            "index_tip": self.config.get("index_color", [0.96, 0.74, 0.30]),
-            "anchor": self.config.get("anchor_color", [0.24, 0.88, 0.86]),
+        self._colors = {
+            "wrist": self.config.get("wrist_color", [0.32, 0.38, 0.46]),
+            "anchor": self.config.get("anchor_color", [0.22, 0.84, 0.84]),
+            "palm": self.config.get("palm_color", [0.44, 0.48, 0.54]),
+            "thumb": self.config.get("thumb_color", [0.95, 0.58, 0.22]),
+            "index": self.config.get("index_color", [0.93, 0.73, 0.30]),
+            "pinch_open": self.config.get("pinch_open_color", [1.0, 0.82, 0.38]),
+            "pinch_candidate": self.config.get("pinch_candidate_color", [1.0, 0.66, 0.22]),
+            "pinch_locked": self.config.get("pinch_locked_color", [1.0, 0.36, 0.16]),
         }
-        self._segment_colors = {
-            "palm": self.config.get("palm_color", [0.30, 0.36, 0.44]),
-            "thumb": self.config.get("thumb_segment_color", [0.96, 0.56, 0.24]),
-            "index": self.config.get("index_segment_color", [0.95, 0.70, 0.26]),
-            "pinch_open": self.config.get("pinch_open_color", [0.99, 0.82, 0.38]),
-            "pinch_candidate": self.config.get("pinch_candidate_color", [1.0, 0.72, 0.26]),
-            "pinch_locked": self.config.get("pinch_locked_color", [1.0, 0.42, 0.18]),
-        }
-        self._points: dict[str, NodePath] = {}
+        self._markers: dict[str, NodePath] = {}
         self._segments: dict[str, NodePath] = {}
-        self._pinch_center = self._create_marker("pinch_center", [1.0, 0.72, 0.26], (0.05, 0.05, 0.05), alpha=0.78)
-        self._init_points()
+        self._init_markers()
         self._init_segments()
         self.root.hide()
 
@@ -58,121 +54,125 @@ class VirtualHand:
         box_model.setPos(*self._CENTER_OFFSET)
         return box_model
 
-    def _init_points(self) -> None:
-        self._points["wrist"] = self._create_marker(
+    def _init_markers(self) -> None:
+        self._markers["wrist"] = self._create_box_node(
             "wrist_marker",
-            self._marker_colors["wrist"],
-            self.WRIST_MARKER_SCALE,
-            alpha=0.95,
-        )
-        self._points["thumb_tip"] = self._create_marker(
-            "thumb_marker",
-            self._marker_colors["thumb_tip"],
-            self.JOINT_MARKER_SCALE,
-            alpha=0.96,
-        )
-        self._points["index_tip"] = self._create_marker(
-            "index_marker",
-            self._marker_colors["index_tip"],
-            self.JOINT_MARKER_SCALE,
-            alpha=0.96,
-        )
-        self._points["anchor"] = self._create_marker(
-            "anchor_marker",
-            self._marker_colors["anchor"],
-            self.ANCHOR_MARKER_SCALE,
+            self._colors["wrist"],
+            self.WRIST_SCALE,
             alpha=0.92,
+        )
+        self._markers["anchor"] = self._create_box_node(
+            "anchor_marker",
+            self._colors["anchor"],
+            self.ANCHOR_SCALE,
+            alpha=0.88,
+        )
+        self._markers["thumb_base"] = self._create_box_node(
+            "thumb_root_marker",
+            self._colors["thumb"],
+            self.ROOT_JOINT_SCALE,
+            alpha=0.94,
+        )
+        self._markers["index_base"] = self._create_box_node(
+            "index_root_marker",
+            self._colors["index"],
+            self.ROOT_JOINT_SCALE,
+            alpha=0.94,
+        )
+        self._markers["thumb_tip"] = self._create_box_node(
+            "thumb_tip_marker",
+            self._colors["thumb"],
+            self.TIP_JOINT_SCALE,
+            alpha=0.96,
+        )
+        self._markers["index_tip"] = self._create_box_node(
+            "index_tip_marker",
+            self._colors["index"],
+            self.TIP_JOINT_SCALE,
+            alpha=0.96,
+        )
+        self._markers["pinch_center"] = self._create_box_node(
+            "pinch_center",
+            self._colors["pinch_candidate"],
+            self.PINCH_CENTER_SCALE_CANDIDATE,
+            alpha=0.84,
         )
 
     def _init_segments(self) -> None:
-        self._segments["wrist_anchor"] = self._create_segment("wrist_anchor", self._segment_colors["palm"], alpha=0.82)
-        self._segments["anchor_thumb"] = self._create_segment("anchor_thumb", self._segment_colors["thumb"], alpha=0.92)
-        self._segments["anchor_index"] = self._create_segment("anchor_index", self._segment_colors["index"], alpha=0.92)
-        self._segments["pinch_bar"] = self._create_segment("pinch_bar", self._segment_colors["pinch_open"], alpha=0.72)
+        self._segments["palm_bridge"] = self._create_segment("palm_bridge", self._colors["palm"], alpha=0.78)
+        self._segments["thumb_root"] = self._create_segment("thumb_root", self._colors["thumb"], alpha=0.82)
+        self._segments["index_root"] = self._create_segment("index_root", self._colors["index"], alpha=0.82)
+        self._segments["thumb_finger"] = self._create_segment("thumb_finger", self._colors["thumb"], alpha=0.94)
+        self._segments["index_finger"] = self._create_segment("index_finger", self._colors["index"], alpha=0.94)
+        self._segments["pinch_bar"] = self._create_segment("pinch_bar", self._colors["pinch_open"], alpha=0.66)
 
     def update_points(self, points: Optional[dict[str, Vec3]]) -> None:
         if not points:
             self._hide_all()
             return
 
-        required = {"wrist", "thumb_tip", "index_tip", "anchor"}
+        required = {"wrist", "thumb_tip", "index_tip", "anchor", "thumb_base", "index_base"}
         if any(name not in points for name in required):
             self._hide_all()
             return
 
         self.root.show()
-        for name, node in self._points.items():
-            node.show()
-            node.setPos(points[name])
-
         wrist = points["wrist"]
         anchor = points["anchor"]
+        thumb_base = points["thumb_base"]
+        index_base = points["index_base"]
         thumb_tip = points["thumb_tip"]
         index_tip = points["index_tip"]
+
+        marker_positions = {
+            "wrist": wrist,
+            "anchor": anchor,
+            "thumb_base": thumb_base,
+            "index_base": index_base,
+            "thumb_tip": thumb_tip,
+            "index_tip": index_tip,
+        }
+        for name, pos in marker_positions.items():
+            node = self._markers[name]
+            node.show()
+            node.setPos(pos)
+
+        self._update_segment(self._segments["palm_bridge"], thumb_base, index_base, thickness=self.PALM_BAR_THICKNESS)
+        self._update_segment(self._segments["thumb_root"], wrist, thumb_base, thickness=self.PALM_BAR_THICKNESS * 0.72)
+        self._update_segment(self._segments["index_root"], wrist, index_base, thickness=self.PALM_BAR_THICKNESS * 0.72)
+        self._update_segment(self._segments["thumb_finger"], thumb_base, thumb_tip, thickness=self.FINGER_BAR_THICKNESS)
+        self._update_segment(self._segments["index_finger"], index_base, index_tip, thickness=self.FINGER_BAR_THICKNESS)
+        self._update_pinch_visual(thumb_tip, index_tip)
+
+    def _update_pinch_visual(self, thumb_tip: Vec3, index_tip: Vec3) -> None:
         pinch_distance = (thumb_tip - index_tip).length()
-
-        self._update_segment(
-            self._segments["wrist_anchor"],
-            wrist,
-            anchor,
-            thickness=self.PALM_SEGMENT_THICKNESS,
-        )
-        self._update_segment(
-            self._segments["anchor_thumb"],
-            anchor,
-            thumb_tip,
-            thickness=self.FINGER_SEGMENT_THICKNESS,
-        )
-        self._update_segment(
-            self._segments["anchor_index"],
-            anchor,
-            index_tip,
-            thickness=self.FINGER_SEGMENT_THICKNESS,
-        )
-        self._update_pinch_visual(thumb_tip, index_tip, pinch_distance)
-
-    def _update_pinch_visual(self, thumb_tip: Vec3, index_tip: Vec3, pinch_distance: float) -> None:
         if pinch_distance <= self.PINCH_LOCK_DISTANCE:
-            color = self._segment_colors["pinch_locked"]
+            color = self._colors["pinch_locked"]
             bar_thickness = self.PINCH_BAR_THICKNESS_PINCHED
             center_scale = self.PINCH_CENTER_SCALE_PINCHED
             alpha = 0.95
         elif pinch_distance <= self.PINCH_CANDIDATE_DISTANCE:
-            color = self._segment_colors["pinch_candidate"]
+            color = self._colors["pinch_candidate"]
             bar_thickness = self.PINCH_BAR_THICKNESS_CANDIDATE
             center_scale = self.PINCH_CENTER_SCALE_CANDIDATE
-            alpha = 0.88
+            alpha = 0.86
         else:
-            color = self._segment_colors["pinch_open"]
+            color = self._colors["pinch_open"]
             bar_thickness = self.PINCH_BAR_THICKNESS_OPEN
             center_scale = self.PINCH_CENTER_SCALE_OPEN
-            alpha = 0.62
+            alpha = 0.54
 
         pinch_bar = self._segments["pinch_bar"]
-        pinch_bar.show()
-        self._set_segment_color(pinch_bar, color, alpha=alpha)
-        self._update_segment(
-            pinch_bar,
-            thumb_tip,
-            index_tip,
-            thickness=bar_thickness,
-        )
+        self._set_node_color(pinch_bar, color, alpha=alpha)
+        self._update_segment(pinch_bar, thumb_tip, index_tip, thickness=bar_thickness)
 
-        pinch_center_pos = (thumb_tip + index_tip) * 0.5
-        self._pinch_center.show()
-        self._pinch_center.setPos(pinch_center_pos)
-        self._pinch_center.setScale(center_scale, center_scale, center_scale)
-        self._set_node_color(self._pinch_center, color, alpha=alpha)
+        pinch_center = self._markers["pinch_center"]
+        pinch_center.show()
+        pinch_center.setPos((thumb_tip + index_tip) * 0.5)
+        pinch_center.setScale(*center_scale)
+        self._set_node_color(pinch_center, color, alpha=alpha)
 
-    def _hide_all(self) -> None:
-        self.root.hide()
-        for node in self._points.values():
-            node.hide()
-        for node in self._segments.values():
-            node.hide()
-        self._pinch_center.hide()
-
-    def _create_marker(
+    def _create_box_node(
         self,
         name: str,
         color: list[float],
@@ -180,36 +180,37 @@ class VirtualHand:
         *,
         alpha: float,
     ) -> NodePath:
-        marker_np = self.root.attachNewNode(name)
-        model_np = self._box_template.copyTo(marker_np)
-        marker_np.setScale(*scale)
-        self._set_node_color(marker_np, color, alpha=alpha)
-        return marker_np
+        node = self.root.attachNewNode(name)
+        self._box_template.copyTo(node)
+        node.setScale(*scale)
+        self._set_node_color(node, color, alpha=alpha)
+        return node
 
     def _create_segment(self, name: str, color: list[float], *, alpha: float) -> NodePath:
-        segment_np = self.root.attachNewNode(name)
-        self._box_template.copyTo(segment_np)
-        self._set_segment_color(segment_np, color, alpha=alpha)
-        return segment_np
+        node = self.root.attachNewNode(name)
+        self._box_template.copyTo(node)
+        self._set_node_color(node, color, alpha=alpha)
+        return node
 
-    def _update_segment(self, segment_np: NodePath, start: Vec3, end: Vec3, *, thickness: float) -> None:
+    def _update_segment(self, segment: NodePath, start: Vec3, end: Vec3, *, thickness: float) -> None:
         direction = end - start
         length = direction.length()
         if length <= 1e-4:
-            segment_np.hide()
+            segment.hide()
             return
+        segment.show()
+        segment.setPos(start + (direction * 0.5))
+        segment.lookAt(end)
+        segment.setScale(thickness, length, thickness)
 
-        midpoint = start + (direction * 0.5)
-        segment_np.show()
-        segment_np.setPos(midpoint)
-        segment_np.lookAt(end)
-        segment_np.setScale(thickness, length, thickness)
+    def _hide_all(self) -> None:
+        self.root.hide()
+        for node in self._markers.values():
+            node.hide()
+        for node in self._segments.values():
+            node.hide()
 
     @staticmethod
     def _set_node_color(node: NodePath, color: list[float], *, alpha: float) -> None:
         node.setTransparency(TransparencyAttrib.MAlpha)
         node.setColor(float(color[0]), float(color[1]), float(color[2]), float(alpha))
-
-    def _set_segment_color(self, node: NodePath, color: list[float], *, alpha: float) -> None:
-        self._set_node_color(node, color, alpha=alpha)
-

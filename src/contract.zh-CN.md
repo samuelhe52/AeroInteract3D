@@ -12,7 +12,7 @@ Python 数据类（dataclass）的唯一定义位于 `src/contracts.py`。
 ## 1）契约版本
 
 - `contract_version`：字符串，语义化版本格式（`MAJOR.MINOR.PATCH`）。
-- 当前基线：`1.0.0`。
+- 当前基线：`2.0.0`。
 - 兼容性规则：
   - `PATCH`：仅文档澄清，不改 schema。
   - `MINOR`：向后兼容的字段新增（仅新增可选字段）。
@@ -85,7 +85,12 @@ Python 数据类（dataclass）的唯一定义位于 `src/contracts.py`。
   - 至少必须包含 `position` 或 `hpr` 其中之一。
   - 必须包含 `coordinate_space`（`world_norm`）。
 - `set_object_state`
-  - 必须包含 `interaction_state`，取值 `{ "idle", "hover", "grabbed" }`。
+  - 必须包含 `interaction_state`，取值 `{ "idle", "pending_grab", "grabbed", "rotating" }`。
+- `set_hand_pose`
+  - 必须包含 `coordinate_space`（`world_norm`）。
+  - 必须包含 `visible: bool`。
+  - 当 `visible` 为 `true` 时，`points` 必须包含 `wrist`、`thumb_tip`、`index_tip` 和 `anchor` 四个世界坐标点。
+  - 可选包含 `thumb_base` 和 `index_base` 世界坐标点，用于更自然的双指手部渲染。
 - `heartbeat`
   - 必须包含最小存活信息。
 - `reset_interaction`
