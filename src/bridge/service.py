@@ -13,6 +13,7 @@ from src.constants import (
     BRIDGE_STATE_GRABBING,
     BRIDGE_STATE_PENDING_GRAB,
     BRIDGE_STATE_ROTATING,
+    GRAB_RELEASE_DISTANCE_THRESHOLD,
     HOVER_DISTANCE_THRESHOLD,
     INTERACTION_IDLE,
     INTERACTION_GRABBED,
@@ -115,6 +116,7 @@ TABLE_SCENE_OBJECTS: tuple[dict[str, Any], ...] = (
         "interaction_radius": 0.16,
     },
 )
+TABLE_SURFACE_Y = float(TABLE_SCENE_OBJECTS[0]["init_pos"]["y"]) + (float(TABLE_SCENE_OBJECTS[0]["scale"]["y"]) * 0.5)
 
 
 @dataclass(slots=True)
@@ -133,6 +135,7 @@ class ObjectInteractionState:
     object_id: str
     world_position: Vec3
     interaction_radius: float = HOVER_DISTANCE_THRESHOLD
+    half_height: float = 0.1
     world_hpr: tuple[float, float, float] = (0.0, 0.0, 0.0)
     interaction_state: str = BRIDGE_STATE_IDLE
     grab_offset_world: Vec3 | None = None
@@ -177,6 +180,7 @@ class BridgeServiceImpl(BridgeService):
             PRIMARY_OBJECT_ID,
             world_position=INITIAL_OBJECT_POSITION,
             interaction_radius=HOVER_DISTANCE_THRESHOLD,
+            half_height=0.1,
             interaction_state=BRIDGE_STATE_IDLE,
             initialized=False,
         )
@@ -334,6 +338,15 @@ class BridgeServiceImpl(BridgeService):
             commands.extend(self._sync_hover_state(packet, hovered_object_id))
             return commands
 
+        constrained_position, blocked_by_table = self._drag_world_position(packet, grabbed_object, hand_anchor_world)
+        if blocked_by_table and self._distance(hand_anchor_world, constrained_position) >= GRAB_RELEASE_DISTANCE_THRESHOLD:
+            self._grabbed_object_id = None
+            grabbed_object.grab_offset_world = None
+            commands.extend(self._set_object_interaction_state(packet, grabbed_object, BRIDGE_STATE_IDLE))
+            self._hovered_object_id = None
+            commands.extend(self._sync_hover_state(packet, hovered_object_id))
+            return commands
+
         commands.append(self._make_object_pose(packet, grabbed_object, hand_anchor_world))
         return commands
 
@@ -387,6 +400,7 @@ class BridgeServiceImpl(BridgeService):
                     z=float(descriptor["init_pos"]["z"]),
                 ),
                 interaction_radius=float(descriptor.get("interaction_radius", HOVER_DISTANCE_THRESHOLD)),
+                half_height=float(descriptor["scale"]["y"]) * 0.5,
                 interaction_state=BRIDGE_STATE_IDLE,
                 initialized=True,
             )
@@ -439,7 +453,7 @@ class BridgeServiceImpl(BridgeService):
             payload["hpr"] = rotation_hpr
             return payload
 
-        world_position = self._drag_world_position(packet, object_state, hand_anchor_world)
+        world_position, _ = self._drag_world_position(packet, object_state, hand_anchor_world)
         object_state.world_position = world_position
         payload["position"] = vec3_payload(world_position)
         return payload
@@ -602,12 +616,19 @@ class BridgeServiceImpl(BridgeService):
         packet: GesturePacket,
         object_state: ObjectInteractionState,
         hand_anchor_world: Vec3 | None = None,
-    ) -> Vec3:
+    ) -> tuple[Vec3, bool]:
         if hand_anchor_world is None:
             hand_anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
         if object_state.grab_offset_world is None:
-            return object_state.world_position
-        return self._add_vec3(hand_anchor_world, object_state.grab_offset_world)
+            return object_state.world_position, False
+        unconstrained_position = self._add_vec3(hand_anchor_world, object_state.grab_offset_world)
+        return self._constrain_object_to_table(unconstrained_position, object_state)
+
+    def _constrain_object_to_table(self, world_position: Vec3, object_state: ObjectInteractionState) -> tuple[Vec3, bool]:
+        minimum_center_y = TABLE_SURFACE_Y + object_state.half_height
+        if world_position.y >= minimum_center_y:
+            return world_position, False
+        return Vec3(world_position.x, minimum_center_y, world_position.z), True
 
     def _camera_to_world_position(self, position: Optional[Vec3]) -> Vec3:
         '''
@@ -731,6 +752,7 @@ class BridgeServiceImpl(BridgeService):
         *,
         world_position: Vec3,
         interaction_radius: float,
+        half_height: float,
         interaction_state: str,
         initialized: bool,
     ) -> ObjectInteractionState:
@@ -740,6 +762,7 @@ class BridgeServiceImpl(BridgeService):
                 object_id=object_id,
                 world_position=world_position,
                 interaction_radius=interaction_radius,
+                half_height=half_height,
                 interaction_state=interaction_state,
                 initialized=initialized,
             )
@@ -748,6 +771,7 @@ class BridgeServiceImpl(BridgeService):
 
         object_state.world_position = world_position
         object_state.interaction_radius = interaction_radius
+        object_state.half_height = half_height
         object_state.interaction_state = interaction_state
         object_state.initialized = initialized
         return object_state
@@ -760,6 +784,7 @@ class BridgeServiceImpl(BridgeService):
             object_id,
             world_position=INITIAL_OBJECT_POSITION,
             interaction_radius=HOVER_DISTANCE_THRESHOLD,
+            half_height=0.1,
             interaction_state=BRIDGE_STATE_IDLE,
             initialized=False,
         )
