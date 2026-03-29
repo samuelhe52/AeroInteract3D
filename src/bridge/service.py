@@ -156,6 +156,7 @@ class BridgeServiceImpl(BridgeService):
         self._object_states: dict[str, ObjectInteractionState] = {}
         self._hovered_object_id: str | None = None
         self._grabbed_object_id: str | None = None
+        self._rotation_object_id: str | None = None
 
     def start(self) -> None:
         if self.lifecycle_state == LIFECYCLE_RUNNING:
@@ -171,6 +172,7 @@ class BridgeServiceImpl(BridgeService):
         self._object_states = {}
         self._hovered_object_id = None
         self._grabbed_object_id = None
+        self._rotation_object_id = None
         self._ensure_object_state(
             PRIMARY_OBJECT_ID,
             world_position=INITIAL_OBJECT_POSITION,
@@ -279,6 +281,7 @@ class BridgeServiceImpl(BridgeService):
         self._object_states = {}
         self._hovered_object_id = None
         self._grabbed_object_id = None
+        self._rotation_object_id = None
         self.lifecycle_state = LIFECYCLE_STOPPED
         return None
 
@@ -296,11 +299,9 @@ class BridgeServiceImpl(BridgeService):
         rotation_mode_active = self._rotation_mode_active(packet)
 
         if rotation_mode_active:
-            target_object = self._active_object_state(hovered_object)
+            target_object = self._rotation_target_object(hovered_object_id)
             if target_object is None:
                 return self._sync_hover_state(packet, hovered_object_id)
-            if self._grabbed_object_id is None:
-                commands.extend(self._sync_hover_state(packet, hovered_object_id))
             commands.extend(
                 self._handle_rotation_mode(
                     packet,
@@ -351,6 +352,7 @@ class BridgeServiceImpl(BridgeService):
                 object_state.rotation_reference_input = None
         self._hovered_object_id = None
         self._grabbed_object_id = None
+        self._rotation_object_id = None
         self._interaction_state = BRIDGE_STATE_IDLE
         self._metrics.resets_emitted += 1
         return commands
@@ -365,6 +367,7 @@ class BridgeServiceImpl(BridgeService):
             object_state.rotation_reference_input = None
         self._hovered_object_id = None
         self._grabbed_object_id = None
+        self._rotation_object_id = None
         self._interaction_state = BRIDGE_STATE_IDLE
         return commands
 
@@ -372,6 +375,7 @@ class BridgeServiceImpl(BridgeService):
         self._object_states = {}
         self._hovered_object_id = None
         self._grabbed_object_id = None
+        self._rotation_object_id = None
         for descriptor in TABLE_SCENE_OBJECTS:
             if not bool(descriptor.get("interactable", True)):
                 continue
@@ -490,6 +494,7 @@ class BridgeServiceImpl(BridgeService):
         if packet.pinch_state != "pinched":
             if self._grabbed_object_id == object_state.object_id:
                 self._grabbed_object_id = None
+            self._rotation_object_id = None
             next_state = BRIDGE_STATE_PENDING_GRAB if is_hovering else BRIDGE_STATE_IDLE
             object_state.grab_offset_world = None
             object_state.rotation_reference_hpr = None
@@ -498,6 +503,7 @@ class BridgeServiceImpl(BridgeService):
 
         commands: list[SceneCommand] = []
         self._grabbed_object_id = object_state.object_id
+        self._rotation_object_id = object_state.object_id
         self._hovered_object_id = object_state.object_id
         object_state.grab_offset_world = None
         commands.extend(self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_ROTATING))
@@ -541,8 +547,11 @@ class BridgeServiceImpl(BridgeService):
         base_h, base_p, base_r = object_state.rotation_reference_hpr
         ref_h, ref_p, ref_r = object_state.rotation_reference_input
         cur_h, cur_p, cur_r = rotation_input
+        heading_delta = cur_h - ref_h
+        if self._input_mirrored:
+            heading_delta *= -1.0
         next_hpr = (
-            base_h + ((cur_h - ref_h) * self._rotation_sensitivity),
+            base_h + (heading_delta * self._rotation_sensitivity),
             base_p + ((cur_p - ref_p) * self._rotation_sensitivity),
             base_r + ((cur_r - ref_r) * self._rotation_sensitivity),
         )
@@ -727,10 +736,24 @@ class BridgeServiceImpl(BridgeService):
             initialized=False,
         )
 
-    def _active_object_state(self, hovered_object: ObjectInteractionState | None) -> ObjectInteractionState | None:
+    def _rotation_target_object(self, hovered_object_id: str | None) -> ObjectInteractionState | None:
+        if self._rotation_object_id is not None:
+            return self._object_state(self._rotation_object_id)
+
         if self._grabbed_object_id is not None:
+            self._rotation_object_id = self._grabbed_object_id
             return self._object_state(self._grabbed_object_id)
-        return hovered_object
+
+        if self._hovered_object_id is not None:
+            self._rotation_object_id = self._hovered_object_id
+            return self._object_state(self._hovered_object_id)
+
+        if hovered_object_id is not None:
+            self._hovered_object_id = hovered_object_id
+            self._rotation_object_id = hovered_object_id
+            return self._object_state(hovered_object_id)
+
+        return None
 
     def _sync_hover_state(self, packet: GesturePacket, hovered_object_id: str | None) -> list[SceneCommand]:
         if hovered_object_id == self._hovered_object_id:
