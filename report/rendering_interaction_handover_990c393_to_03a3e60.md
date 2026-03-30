@@ -7,7 +7,7 @@
 - 哪些行为是新约定，哪些只是实现细节
 - 接手后优先应该看哪些文件和测试
 
-## 1. 一句话结论
+## 一句话结论
 
 这段时间最大的变化不是“把某个效果调好了”，而是把交互语义进一步前移到了 Bridge：
 
@@ -17,7 +17,7 @@
 
 如果只记一件事：当前架构里，交互“语义”基本都在 `src/bridge/service.py`，Rendering 主要负责“表现”和“合同执行”。
 
-## 2. 提交范围概览
+## 提交范围概览
 
 从 `990c393` 到 `03a3e60` 主要提交如下：
 
@@ -39,9 +39,9 @@
 5. `tests/test_bridge_service.py`
 6. `tests/test_rendering_service.py`
 
-## 3. 当前架构状态
+## 当前架构状态
 
-### 3.1 数据流
+### 数据流
 
 当前主链路可以理解为：
 
@@ -53,7 +53,7 @@
 - 首个有效包会发 `init_scene`，scene 由 Bridge 描述，而不是 Rendering 内置一个默认 cube。
 - 交互对象状态通过 `set_object_state` 表达，pose 通过 `set_object_pose` 表达，二者现在支持多物体。
 
-### 3.2 职责边界
+### 职责边界
 
 当前职责分布已经比较清楚：
 
@@ -63,11 +63,11 @@
 
 和之前相比，Rendering 明显去掉了“自己从 observation/raw landmarks 推导手”的逻辑。
 
-## 4. Bridge 侧的主要变化
+## Bridge 侧的主要变化
 
 关键文件：`src/bridge/service.py`
 
-### 4.1 从单物体状态机变成多物体状态机
+### 从单物体状态机变成多物体状态机
 
 之前交互逻辑基本围绕单个 `primary_cube`。现在 Bridge 引入了：
 
@@ -81,7 +81,7 @@
 
 `_make_init_scene()` 现在会根据 `TABLE_SCENE_OBJECTS` 初始化一组对象，并把 interactable 对象同步进 `_object_states`。
 
-### 4.2 scene 初始化从“默认 cube”变成“Bridge 描述 scene”
+### scene 初始化从“默认 cube”变成“Bridge 描述 scene”
 
 `TABLE_SCENE_OBJECTS` 是这段时间架构变化的一个核心锚点。
 
@@ -107,7 +107,7 @@
 
 这说明当前 demo scene 的“布局真相”已经从 Rendering 转移到 Bridge。
 
-### 4.3 hover 语义从 `hover` 改成 `pending_grab`
+### hover 语义从 `hover` 改成 `pending_grab`
 
 之前 hover 更像视觉高亮状态。现在合同和实现统一改成了：
 
@@ -125,7 +125,7 @@
 - `_set_object_interaction_state()`
 - `_render_state()`
 
-### 4.4 grab 改成相对位移，而不是绝对吸附
+### grab 改成相对位移，而不是绝对吸附
 
 这是这轮交互手感改动里最重要的一点。
 
@@ -150,7 +150,7 @@
 - `_make_object_pose()`
 - `_pose_payload()`
 
-### 4.5 rotation 模式被正规化
+### rotation 模式被正规化
 
 rotation 现在不是一个临时分支，而是完整状态机的一部分。
 
@@ -178,7 +178,7 @@ Bridge 侧新增/强化的约定：
 - `4d1f702` 修了 rotation target locking
 - `4d1f702` 也修了 mirrored input 下 heading delta 需要反向的问题
 
-### 4.6 桌面约束与强制释放
+### 桌面约束与强制释放
 
 `03a3e60` 新增了比较实用的一层物理约束：grabbed object 不能穿过桌面。
 
@@ -193,11 +193,11 @@ Bridge 侧新增/强化的约定：
 - 视觉上物体不会穿过桌面
 - 用户继续下压时不会一直处在“卡住但仍算 grabbed”的模糊状态
 
-## 5. Rendering 侧的主要变化
+## Rendering 侧的主要变化
 
 关键文件：`src/rendering/service.py`
 
-### 5.1 Rendering 更像通用 SceneCommand consumer 了
+### Rendering 更像通用 SceneCommand consumer 了
 
 这段时间 Rendering 最大的变化是：不再假设 scene 里只有默认 cube，也不再自己推导 hand。
 
@@ -216,7 +216,7 @@ Bridge 侧新增/强化的约定：
 - 颜色 `color`
 - 是否可交互 `interactable`
 
-### 5.2 scene object 创建支持 shape / scale / color / interactable
+### scene object 创建支持 shape / scale / color / interactable
 
 `_handle_init_scene()` 现在不再只做：
 
@@ -237,7 +237,7 @@ Bridge 侧新增/强化的约定：
 
 这个改动对 rotation 很关键，否则转动中心会偏。
 
-### 5.3 `set_object_pose` 现在允许“只改 position”或“只改 hpr”
+### `set_object_pose` 现在允许“只改 position”或“只改 hpr”
 
 这是为了匹配 Bridge 的 rotation 逻辑。
 
@@ -251,7 +251,7 @@ Bridge 侧新增/强化的约定：
 
 这使得 rotation-only 更新不会意外重置位置。
 
-### 5.4 材质状态扩展到四态
+### 材质状态扩展到四态
 
 材质从过去的三态近似，扩展为：
 
@@ -267,7 +267,7 @@ Bridge 侧新增/强化的约定：
 
 这和 Bridge 当前状态机保持一致。
 
-### 5.5 手部渲染彻底改为命令驱动
+### 手部渲染彻底改为命令驱动
 
 旧逻辑里，Rendering 在 `step()` 中会直接读取 observation/raw landmarks，再自己估计深度、转换 landmark、做 debounce 后更新虚拟手。
 
@@ -286,13 +286,13 @@ Bridge 侧新增/强化的约定：
 - Rendering 只负责画
 - gesture debug observation 不再是 hand overlay 的真实数据源
 
-## 6. 虚拟手的变化
+## 虚拟手的变化
 
 关键文件：`src/rendering/interaction/virtual_hand.py`
 
 这是视觉上变化最大的部分。
 
-### 6.1 从 21 点 debug hand 改成双指风格化 hand
+### 从 21 点 debug hand 改成双指风格化 hand
 
 以前的 `VirtualHand` 主要是：
 
@@ -321,7 +321,7 @@ Bridge 侧新增/强化的约定：
 - `index_finger`
 - `pinch_bar`
 
-### 6.2 手的几何输入不再来自原始 landmarks
+### 手的几何输入不再来自原始 landmarks
 
 Bridge 现在只输出双指需要的关键点，而不是 21 landmarks。
 
@@ -332,7 +332,7 @@ Bridge 现在只输出双指需要的关键点，而不是 21 landmarks。
 
 它们由 Bridge 通过 wrist / anchor / fingertip 推导，用来让手掌和指根结构更自然。
 
-### 6.3 pinch 视觉反馈更明确
+### pinch 视觉反馈更明确
 
 现在 pinch bar / pinch center 会根据 thumb-tip 和 index-tip 距离切换三种视觉状态：
 
@@ -344,9 +344,9 @@ Bridge 现在只输出双指需要的关键点，而不是 21 landmarks。
 
 这比原先只显示 landmarks 的反馈更直接，也更适合演示交互状态。
 
-## 7. 合同与配置层变化
+## 合同与配置层变化
 
-### 7.1 contract 扩展了 `set_hand_pose`
+### contract 扩展了 `set_hand_pose`
 
 `src/contract.zh-CN.md` 现在明确了：
 
@@ -363,7 +363,7 @@ Bridge 现在只输出双指需要的关键点，而不是 21 landmarks。
 
 这意味着 hand overlay 已经成为 contract 正式部分，不再是 rendering 内部实现细节。
 
-### 7.2 入口配置变化
+### 入口配置变化
 
 `main.py` 和 `.run.example.yaml` 这段时间与交互相关的配置主要有：
 
@@ -380,7 +380,7 @@ Bridge 现在只输出双指需要的关键点，而不是 21 landmarks。
 - 现在不需要先理解一套外部 camera view knob
 - 先按固定视角理解 scene 即可
 
-## 8. 测试层反映出的当前行为
+## 测试层反映出的当前行为
 
 优先建议看：
 
@@ -411,11 +411,11 @@ Rendering 侧被明确测试的行为包括：
 - `camera_pose_for_world_norm()` 是固定入口相机定义
 - data panel 能格式化 rotation debug 信息
 
-## 9. 当前我认为最重要的设计点
+## 当前我认为最重要的设计点
 
 如果你要接回这个模块，我建议先用下面这些判断当前代码，而不是用旧心智模型：
 
-### 9.1 Bridge 现在已经不是“纯转发层”
+### Bridge 现在已经不是“纯转发层”
 
 它已经承担：
 
@@ -426,7 +426,7 @@ Rendering 侧被明确测试的行为包括：
 
 如果后面要继续扩交互，优先应该在 Bridge 想清楚 contract 和状态机，再让 Rendering 被动消费。
 
-### 9.2 Rendering 当前的价值在“执行一致性”
+### Rendering 当前的价值在“执行一致性”
 
 它现在更像：
 
@@ -437,7 +437,7 @@ Rendering 侧被明确测试的行为包括：
 
 这比让 Rendering 直接读 gesture/raw observation 更容易测，也更容易在未来换 gesture 输入。
 
-### 9.3 scene 初始化已经有“场景描述层”的雏形
+### scene 初始化已经有“场景描述层”的雏形
 
 `TABLE_SCENE_OBJECTS` 目前还是硬编码在 Bridge 里，但它实际上已经接近一个 scene description/config 的雏形了。
 
@@ -448,7 +448,7 @@ Rendering 侧被明确测试的行为包括：
 
 不过当前规模下，先保留在 Bridge 内部也合理。
 
-## 10. 接手建议
+## 接手建议
 
 如果你要快速接手，我建议按下面顺序读代码：
 
@@ -467,13 +467,13 @@ Rendering 侧被明确测试的行为包括：
 4. `shape` tag 目前只是保留在 Rendering object tag，中期是否要长成真正不同几何体
 5. `virtual_hand` 的 config 字段里仍保留了不少旧配置项，是否需要清理成和新实现一致的参数集合
 
-## 11. 已知遗留 / 我会优先关注的点
+## 已知遗留 / 我会优先关注的点
 
 - `virtual_hand` 的运行配置仍带有旧版 landmark hand 的参数名，例如 `scale/depth_scale/perspective_scale/bone_color/bone_width`，但新 `VirtualHand` 实现实际读取的是 wrist/anchor/thumb/index/pinch 等颜色项。配置层现在有一定历史残留。
 - `aggressive_release_guard` 仍在 `main.py` 配置里，但本轮交互逻辑核心释放行为已经更依赖 Bridge 的桌面约束与距离判定，建议后续再确认它和当前状态机的关系是否仍清晰。
 - `shape` 目前只影响 tag 和 scene 描述，不影响真正不同 mesh；渲染上仍然复用了 `box` 模型，只通过 scale/color 区分。
 
-## 12. 验证情况
+## 验证情况
 
 我已基于提交记录、关键实现文件和现有测试代码完成这份交接梳理。
 
