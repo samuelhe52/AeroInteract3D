@@ -12,7 +12,7 @@ Canonical Python dataclass definitions live in `src/contracts.py`.
 ## 1) Contract Versioning
 
 - `contract_version`: string, semantic version format (`MAJOR.MINOR.PATCH`).
-- Current baseline: `1.0.0`.
+- Current baseline: `2.0.0`.
 - Compatibility rule:
   - `PATCH`: docs clarifications only, no schema change.
   - `MINOR`: backward-compatible field additions (new optional fields only).
@@ -71,7 +71,7 @@ Current project decision: the rendering consumer is implemented in **Python + Pa
 - `frame_id: int` (source-aligned when available)
 - `timestamp_ms: int`
 - `command_type: str` in
-  - `{ "init_scene", "set_object_pose", "set_object_state", "heartbeat", "reset_interaction" }`
+  - `{ "init_scene", "set_object_pose", "set_object_state", "set_hand_pose", "heartbeat", "reset_interaction" }`
 - `object_id: str` (for object-scoped commands)
 - `payload: dict` (schema depends on `command_type`)
 
@@ -80,11 +80,16 @@ Current project decision: the rendering consumer is implemented in **Python + Pa
 - `init_scene`
   - MUST include target object identifiers and default transforms.
 - `set_object_pose`
-  - MUST include `position: {x,y,z}`.
-  - MAY include `rotation: {x,y,z,w}` and `scale: {x,y,z}`.
+  - MAY include `position: {x,y,z}`.
+  - MAY include `hpr: {h,p,r}`.
+  - MUST include at least one of `position` or `hpr`.
   - MUST include `coordinate_space` (`world_norm`).
 - `set_object_state`
-  - MUST include `interaction_state` in `{ "idle", "hover", "grabbed" }`.
+  - MUST include `interaction_state` in `{ "idle", "pending_grab", "grabbed", "rotating" }`.
+- `set_hand_pose`
+  - MUST include `coordinate_space` (`world_norm`).
+  - MUST include `visible: bool`.
+  - MUST include `points` with `wrist`, `thumb_tip`, `index_tip`, and `anchor` world-space vectors when `visible` is `true`.
 - `heartbeat`
   - MUST include minimal liveness payload.
 - `reset_interaction`

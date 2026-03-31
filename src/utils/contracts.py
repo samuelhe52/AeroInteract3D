@@ -6,12 +6,13 @@ from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.utils.runtime import error_entry
 
 
-EXPECTED_CONTRACT_VERSION = "1.0.0"
+EXPECTED_CONTRACT_VERSION = "2.0.0"
 
 SCENE_COMMAND_TYPES = {
     "init_scene",
     "set_object_pose",
     "set_object_state",
+    "set_hand_pose",
     "heartbeat",
     "reset_interaction",
 }
@@ -177,6 +178,38 @@ def validate_scene_command(
                 recoverable=True,
                 hint="Encode scene command payloads as JSON-style dictionaries.",
                 details={"payload_type": type(command.payload).__name__},
+            )
+        )
+
+    if (
+        isinstance(command.payload, dict)
+        and command.command_type == "set_object_pose"
+        and "position" not in command.payload
+        and "hpr" not in command.payload
+    ):
+        errors.append(
+            error_entry(
+                "scene.set_object_pose.empty",
+                "set_object_pose payload must include position and/or hpr",
+                recoverable=True,
+                hint="Provide at least one transform component in set_object_pose.",
+                details={"command_id": command.command_id},
+            )
+        )
+
+    if (
+        isinstance(command.payload, dict)
+        and command.command_type == "set_hand_pose"
+        and command.payload.get("visible") is True
+        and "points" not in command.payload
+    ):
+        errors.append(
+            error_entry(
+                "scene.set_hand_pose.points_missing",
+                "set_hand_pose payload must include points when visible is true",
+                recoverable=True,
+                hint="Provide wrist, thumb_tip, index_tip, and anchor for visible hand poses.",
+                details={"command_id": command.command_id},
             )
         )
 

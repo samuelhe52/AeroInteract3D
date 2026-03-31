@@ -171,3 +171,23 @@ def test_gesture_service_health_reports_aggressive_release_guard() -> None:
     service.start()
 
     assert service.health()["stats"]["aggressive_release_guard"] is True
+
+
+def test_gesture_service_passes_flip_camera_setting_to_capture() -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    class RecordingCapture(FakeCapture):
+        def __init__(self, **kwargs: object) -> None:
+            captured_kwargs.update(kwargs)
+            super().__init__(**kwargs)
+
+    service = GestureServiceImpl(
+        flip_camera=False,
+        capture_factory=RecordingCapture,
+        detector_factory=FakeDetector,
+        clock=iter([6.0]).__next__,
+    )
+
+    service.start()
+
+    assert captured_kwargs["flip_horizontal"] is False

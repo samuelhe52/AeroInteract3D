@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+import math
 import logging
 from typing import Optional
 import tkinter as tk
 from collections.abc import Callable
 
 from panda3d.core import (
-    WindowProperties, AmbientLight, DirectionalLight,
-    PerspectiveLens, NodePath, GraphicsWindow
+    AntialiasAttrib, WindowProperties, AmbientLight, DirectionalLight,
+    PerspectiveLens, NodePath, GraphicsWindow, loadPrcFileData
 )
 from direct.showbase.ShowBase import ShowBase
 
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_core")
+loadPrcFileData("", "framebuffer-multisample 1")
+loadPrcFileData("", "multisamples 4")
 DEFAULT_WINDOW_ASPECT_RATIO = (16, 9)
 DEFAULT_WINDOW_SCREEN_SCALE = 0.8
 REFERENCE_WINDOW_SIZE = (1600, 900)
@@ -142,6 +145,7 @@ class RenderingCoreManager:
             # Set window background to white (original logic preserved)
             if self._base:
                 self._base.setBackgroundColor(1, 1, 1, 1)
+                self._base.render.setAntialias(AntialiasAttrib.MAuto)
                 win: Optional[GraphicsWindow] = self._base.win
                 if win:
                     win.requestProperties(window_props)
@@ -159,6 +163,10 @@ class RenderingCoreManager:
             logger.error(f"Window initialization failed: {str(e)}")
             raise RuntimeError(f"Window initialization failed: {str(e)}") from e
     
+    @staticmethod
+    def camera_pose_for_world_norm() -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+        return (0.0, 5.0, 1.34), (0.0, 0.0, 0.0)
+
     def config_camera_for_world_norm(self) -> None:
         """Configure world coordinate system camera (original logic preserved)"""
         if not self._is_initialized:
@@ -170,9 +178,10 @@ class RenderingCoreManager:
             lens.setNearFar(0.1, 100.0)  # Use a more practical near/far clip range.
             self._base.cam.node().setLens(lens)
             
-            # Position the camera with a shallow 10-degree downward-tilt view of the objects.
-            self._base.cam.setPos(0.0, 5.0, 0.9)  # Low angle view (≈10 degrees)
-            self._base.cam.lookAt(0.0, 0.0, 0.0)  # Look at the origin.
+            camera_pos, look_at = self.camera_pose_for_world_norm()
+            self._base.cam.setPos(*camera_pos)
+            self._base.cam.lookAt(*look_at)
+            self._base.cam.setH(180)
             logger.info("Camera configured, using perspective camera for 3D scene")
         except Exception as e:
             logger.error(f"Camera configuration failed: {str(e)}")

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from src.contracts import SceneCommand
+import pytest
+
+from src.contracts import GesturePacket, SceneCommand, Vec3
+from src.rendering.debug.data_panel import DataPanelManager
 from src.rendering.rendering_core import RenderingCoreManager
 from src.rendering import service as rendering_service
 from src.rendering.service import ObjectInitialState, RenderingServiceImpl
@@ -17,13 +20,47 @@ def make_command(
     payload: dict | None = None,
 ) -> SceneCommand:
     return SceneCommand(
-        contract_version="1.0.0",
+        contract_version="2.0.0",
         command_id=command_id,
         frame_id=frame_id,
         timestamp_ms=timestamp_ms,
         command_type=command_type,
         object_id=object_id,
         payload={} if payload is None else payload,
+    )
+
+
+def make_packet_with_rotation() -> GesturePacket:
+    return GesturePacket(
+        contract_version="2.0.0",
+        frame_id=7,
+        timestamp_ms=112,
+        hand_id="hand-right",
+        tracking_state="tracked",
+        confidence=0.93,
+        pinch_state="pinched",
+        index_tip=Vec3(0.4, 0.2, 0.1),
+        thumb_tip=Vec3(0.3, 0.2, 0.1),
+        wrist=Vec3(0.2, 0.1, 0.0),
+        coordinate_space="camera_norm",
+        pinch_distance=0.031,
+        debug={
+            "rotation": {
+                "enabled": True,
+                "rotating": True,
+                "slot": 4,
+                "slot_count": 18,
+                "slot_x": 2,
+                "slot_y": 3,
+                "slot_z": 4,
+                "deg_x": 40.0,
+                "deg_y": 60.0,
+                "deg_z": 80.0,
+                "gate_count": 3,
+                "source": "equivalent_xyz",
+                "mode_name": "ROTATE_ENABLED",
+            }
+        },
     )
 
 
@@ -62,9 +99,20 @@ class FakeWindow:
             self.height = int(get_y_size())
 
 
+class FakeRenderRoot:
+    def __init__(self) -> None:
+        self.children: list[object] = []
+
+    def attachNewNode(self, node) -> "FakeNodePath":
+        child = FakeNodePath(getattr(node, "name", "child"))
+        child.parent = self
+        self.children.append(child)
+        return child
+
+
 class FakeBase:
     def __init__(self) -> None:
-        self.render = object()
+        self.render = FakeRenderRoot()
         self.taskMgr = FakeTaskManager()
         self.win = FakeWindow()
         self.destroyed = False
@@ -74,6 +122,9 @@ class FakeBase:
         self.accepted_events[event_name] = callback
 
     def destroy(self) -> None:
+        self.destroyed = True
+
+    def userExit(self) -> None:
         self.destroyed = True
 
 
@@ -118,8 +169,31 @@ class FakeNodePath:
     def reparentTo(self, parent: object) -> None:
         self.parent = parent
 
+    def attachNewNode(self, node) -> "FakeNodePath":
+        child = FakeNodePath(getattr(node, "name", "child"))
+        child.parent = self
+        return child
+
     def removeChildren(self) -> None:
         return None
+
+    def removeNode(self) -> None:
+        return None
+
+    def hide(self) -> None:
+        return None
+
+    def show(self) -> None:
+        return None
+
+    def setPos(self, *values: float) -> None:
+        self.pos = values
+
+    def setScale(self, value: float) -> None:
+        self.scale = value
+
+    def setTransparency(self, mode) -> None:
+        self.transparency = mode
 
     def isEmpty(self) -> bool:
         return False
@@ -145,8 +219,18 @@ class FakeObjectNode:
         self.scale = value
 
 
+class FakeVirtualHand:
+    def __init__(self, *args, **kwargs) -> None:
+        self.last_points = None
+        self.root = FakeNodePath("virtual_hand")
+
+    def update_points(self, points) -> None:
+        self.last_points = points
+
+
 def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service._errors = [{"code": "stale"}]
@@ -171,11 +255,22 @@ def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     assert service.health()["lifecycle_state"] == LIFECYCLE_RUNNING
 
 
+def test_data_panel_formats_rotation_lines_from_packet_debug() -> None:
+    packet = make_packet_with_rotation()
+
+    lines = DataPanelManager._rotation_lines(packet)
+
+    assert lines == (
+        "rot: ROTATE_ENABLED rot/live g03",
+        "xyz: +40.0 +60.0 +80.0",
+    )
+
+
 def test_rendering_validation_does_not_mutate_invalid_command() -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING
     command = SceneCommand(
-        contract_version="1.0.0",
+        contract_version="2.0.0",
         command_id="cmd-invalid",
         frame_id="7",  # type: ignore[arg-type]
         timestamp_ms=100,
@@ -201,7 +296,7 @@ def test_rendering_error_history_is_bounded() -> None:
 
     for index in range(12):
         command = SceneCommand(
-            contract_version="1.0.0",
+            contract_version="2.0.0",
             command_id=f"cmd-{index}",
             frame_id=index,
             timestamp_ms=100 + index,
@@ -305,6 +400,17 @@ def test_rendering_maps_contract_world_norm_axes_to_panda_axes() -> None:
     assert scene_pos == (0.25, -0.4, 0.6)
 
 
+def test_rendering_core_world_norm_camera_pose_uses_front_view() -> None:
+    camera_pos, look_at = RenderingCoreManager.camera_pose_for_world_norm()
+
+    assert camera_pos == pytest.approx((0.0, 5.0, 1.34))
+    assert look_at == (0.0, 0.0, 0.0)
+
+
+def test_rendering_centers_box_model_under_transform_pivot() -> None:
+    assert RenderingServiceImpl._box_model_center_offset() == (-0.5, -0.5, -0.5)
+
+
 def test_rendering_applies_pose_updates_with_axis_remap() -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING
@@ -325,6 +431,138 @@ def test_rendering_applies_pose_updates_with_axis_remap() -> None:
     assert obj.hpr == (0.0, 0.0, 0.0)
 
 
+def test_rendering_preserves_position_for_rotation_only_pose_updates() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    obj.pos = (0.2, -0.3, 0.7)
+    obj.hpr = (1.0, 2.0, 3.0)
+    service._object_cache["primary_cube"] = obj
+    service._last_world_norm_pos = (0.2, 0.7, -0.3)
+    service._last_scene_pos = obj.pos
+
+    service.push(
+        make_command(
+            command_id="pose-rotate-only-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={"hpr": {"h": 10.0, "p": 20.0, "r": 30.0}},
+        )
+    )
+
+    assert obj.pos == (0.2, -0.3, 0.7)
+    assert obj.hpr == (10.0, 20.0, 30.0)
+
+
+def test_rendering_preserves_hpr_for_position_only_pose_updates() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    obj.pos = (0.0, 0.0, 0.0)
+    obj.hpr = (4.0, 5.0, 6.0)
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="pose-position-only-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={"position": {"x": 0.2, "y": 0.7, "z": -0.3}},
+        )
+    )
+
+    assert obj.pos == (0.2, -0.3, 0.7)
+    assert obj.hpr == (4.0, 5.0, 6.0)
+
+
+def test_rendering_applies_position_sensitivity_to_pose_updates() -> None:
+    service = RenderingServiceImpl(position_sensitivity=1.5)
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="pose-scale-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={"position": {"x": 0.2, "y": 0.7, "z": -0.3}, "hpr": [0.0, 0.0, 0.0]},
+        )
+    )
+
+    assert obj.pos == (0.30000000000000004, -0.44999999999999996, 1.0499999999999998)
+
+
+def test_rendering_applies_pending_grab_material_state() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="state-pending-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_state",
+            payload={"interaction_state": "pending_grab"},
+        )
+    )
+
+    assert obj.material is not None
+
+
+def test_rendering_applies_rotating_material_state() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["primary_cube"] = obj
+
+    service.push(
+        make_command(
+            command_id="state-rotating-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_state",
+            payload={"interaction_state": "rotating"},
+        )
+    )
+
+    assert obj.material is not None
+
+
+def test_rendering_updates_virtual_hand_from_scene_command() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    service._virtual_hand = FakeVirtualHand()
+
+    service.push(
+        make_command(
+            command_id="hand-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_hand_pose",
+            object_id="hand-1",
+            payload={
+                "coordinate_space": "world_norm",
+                "visible": True,
+                "points": {
+                    "wrist": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "thumb_tip": {"x": 0.1, "y": 0.0, "z": 0.0},
+                    "index_tip": {"x": -0.1, "y": 0.0, "z": 0.0},
+                    "anchor": {"x": 0.0, "y": 0.05, "z": 0.0},
+                },
+            },
+        )
+    )
+
+    assert service._virtual_hand.last_points is not None
+    assert service.health()["stats"]["hand_pose_updates"] == 1
+
+
 def test_rendering_reset_restores_cached_scene_pose() -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING
@@ -343,6 +581,7 @@ def test_rendering_reset_restores_cached_scene_pose() -> None:
 
 def test_rendering_step_advances_panda3d_task_manager(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -420,6 +659,7 @@ def test_rendering_core_aspect_lock_prefers_height_when_height_changes_more() ->
 
 def test_rendering_service_registers_quit_callback_with_window_adapter(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.set_quit_callback(lambda: None)

@@ -1,10 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+import math
 import time
 from typing import Any, Optional
 
-from src.constants import BRIDGE_HEARTBEAT_INTERVAL_FRAMES, BRIDGE_MIN_TRACKING_CONFIDENCE, MAX_ERROR_HISTORY
+from src.constants import (
+    BRIDGE_HEARTBEAT_INTERVAL_FRAMES,
+    BRIDGE_MIN_TRACKING_CONFIDENCE,
+    BRIDGE_STATE_IDLE,
+    BRIDGE_STATE_GRABBING,
+    BRIDGE_STATE_PENDING_GRAB,
+    BRIDGE_STATE_ROTATING,
+    HOVER_DISTANCE_THRESHOLD,
+    INTERACTION_IDLE,
+    INTERACTION_GRABBED,
+    INTERACTION_PENDING_GRAB,
+    INTERACTION_ROTATING,
+    MAX_ERROR_HISTORY,
+    PRIMARY_OBJECT_ID,
+)
 from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.ports import BridgeService
 from src.utils.contracts import EXPECTED_CONTRACT_VERSION, validate_gesture_packet, vec3_payload
@@ -19,22 +35,13 @@ from src.utils.runtime import (
     make_command_id,
 )
 
-import math
-import logging
-
 # Create a dedicated logger for bridge service
 logger = logging.getLogger("bridge.service")
 
 # Create a dedicated logger for coordinate transformation
 coordinate_logger = logging.getLogger("bridge.coordinate_transformation")
 
-
-BRIDGE_STATE_IDLE = "idle"
-BRIDGE_STATE_GRABBING = "grabbing"
-
-OBJECT_ID = "primary_cube"
-INTERACTION_IDLE = "idle"
-INTERACTION_GRABBED = "grabbed"
+INITIAL_OBJECT_POSITION = Vec3(0.0, 0.0, 0.0)
 
 
 @dataclass(slots=True)
@@ -48,16 +55,31 @@ class BridgeMetrics:
     pose_updates: int = 0
 
 
+@dataclass(slots=True)
+class ObjectInteractionState:
+    object_id: str
+    world_position: Vec3
+    world_hpr: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    interaction_state: str = BRIDGE_STATE_IDLE
+    grab_offset_world: Vec3 | None = None
+    rotation_reference_hpr: tuple[float, float, float] | None = None
+    rotation_reference_input: tuple[float, float, float] | None = None
+    initialized: bool = False
+
+
 class BridgeServiceImpl(BridgeService):
-    def __init__(self) -> None:
+    def __init__(self, *, input_mirrored: bool = True, rotation_sensitivity: float = 1.0) -> None:
         self.lifecycle_state = LIFECYCLE_STOPPED
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
+        self._input_mirrored = bool(input_mirrored)
+        self._rotation_sensitivity = max(float(rotation_sensitivity), 0.001)
         self._interaction_state = BRIDGE_STATE_IDLE
         self._last_frame_id: int | None = None
         self._last_timestamp_ms: int | None = None
         self._errors: list[dict[str, Any]] = []
         self._metrics = BridgeMetrics()
         self._pending_init = False
+        self._object_states: dict[str, ObjectInteractionState] = {}
 
     def start(self) -> None:
         if self.lifecycle_state == LIFECYCLE_RUNNING:
@@ -70,6 +92,13 @@ class BridgeServiceImpl(BridgeService):
         self._errors = []
         self._metrics = BridgeMetrics()
         self._pending_init = True
+        self._object_states = {}
+        self._ensure_object_state(
+            PRIMARY_OBJECT_ID,
+            world_position=INITIAL_OBJECT_POSITION,
+            interaction_state=BRIDGE_STATE_IDLE,
+            initialized=False,
+        )
         self.lifecycle_state = LIFECYCLE_RUNNING
         return None
 
@@ -137,6 +166,7 @@ class BridgeServiceImpl(BridgeService):
             commands.append(self._make_init_scene(packet))
             self._pending_init = False
 
+        commands.append(self._make_hand_pose(packet))
         commands.extend(self._step_state_machine(packet))
         if packet.frame_id % BRIDGE_HEARTBEAT_INTERVAL_FRAMES == 0:
             commands.append(self._make_heartbeat(packet))
@@ -167,57 +197,92 @@ class BridgeServiceImpl(BridgeService):
     def stop(self) -> None:
         self._pending_init = False
         self._interaction_state = BRIDGE_STATE_IDLE
+        self._object_states = {}
         self.lifecycle_state = LIFECYCLE_STOPPED
         return None
 
     def _step_state_machine(self, packet: GesturePacket) -> list[SceneCommand]:
+        object_state = self._object_state(PRIMARY_OBJECT_ID)
         commands: list[SceneCommand] = []
 
         if packet.tracking_state != "tracked" or packet.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
-            if self._interaction_state == BRIDGE_STATE_GRABBING:
+            if object_state.interaction_state == BRIDGE_STATE_GRABBING:
                 return self._reset_interaction(packet, reason="tracking_lost")
-            self._interaction_state = BRIDGE_STATE_IDLE
+            return self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_IDLE)
+
+        hand_anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
+        is_hovering = self._is_hovering_object(hand_anchor_world, object_state)
+        rotation_mode_active = self._rotation_mode_active(packet)
+
+        if rotation_mode_active:
+            commands.extend(self._handle_rotation_mode(packet, object_state, is_hovering, hand_anchor_world))
             return commands
 
-        if self._interaction_state == BRIDGE_STATE_IDLE:
+        if object_state.interaction_state == BRIDGE_STATE_IDLE:
+            if is_hovering:
+                return self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_PENDING_GRAB)
+            return commands
+
+        if object_state.interaction_state == BRIDGE_STATE_PENDING_GRAB:
+            if not is_hovering:
+                return self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_IDLE)
             if packet.pinch_state == "pinched":
-                self._interaction_state = BRIDGE_STATE_GRABBING
-                commands.append(self._make_object_state(packet, INTERACTION_GRABBED))
-                commands.append(self._make_object_pose(packet))
+                object_state.grab_offset_world = self._subtract_vec3(object_state.world_position, hand_anchor_world)
+                commands.extend(
+                    self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_GRABBING)
+                )
+                commands.append(self._make_object_pose(packet, object_state, hand_anchor_world))
             return commands
 
-        if self._interaction_state == BRIDGE_STATE_GRABBING:
+        if object_state.interaction_state == BRIDGE_STATE_GRABBING:
             if packet.pinch_state == "open":
-                self._interaction_state = BRIDGE_STATE_IDLE
-                commands.append(self._make_object_state(packet, INTERACTION_IDLE))
-                return commands
-
-            commands.append(self._make_object_pose(packet))
+                next_state = BRIDGE_STATE_PENDING_GRAB if is_hovering else BRIDGE_STATE_IDLE
+                return self._set_object_interaction_state(packet, object_state, next_state)
+            commands.append(self._make_object_pose(packet, object_state, hand_anchor_world))
             return commands
 
-        return commands
+        return self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_IDLE)
 
     def _reset_interaction(self, packet: GesturePacket, *, reason: str) -> list[SceneCommand]:
+        object_state = self._object_state(PRIMARY_OBJECT_ID)
+        object_state.interaction_state = BRIDGE_STATE_IDLE
+        object_state.grab_offset_world = None
+        object_state.rotation_reference_hpr = None
+        object_state.rotation_reference_input = None
         self._interaction_state = BRIDGE_STATE_IDLE
         self._metrics.resets_emitted += 1
         return [
             self._make_reset_interaction(packet, reason=reason),
-            self._make_object_state(packet, INTERACTION_IDLE),
+            self._make_object_state(packet, PRIMARY_OBJECT_ID, INTERACTION_IDLE),
         ]
 
     def _make_init_scene(self, packet: GesturePacket) -> SceneCommand:
+        object_state = self._ensure_object_state(
+            PRIMARY_OBJECT_ID,
+            world_position=INITIAL_OBJECT_POSITION,
+            interaction_state=BRIDGE_STATE_IDLE,
+            initialized=True,
+        )
+        object_state.world_position = INITIAL_OBJECT_POSITION
+        object_state.world_hpr = (0.0, 0.0, 0.0)
+        object_state.interaction_state = BRIDGE_STATE_IDLE
+        object_state.grab_offset_world = None
+        object_state.rotation_reference_hpr = None
+        object_state.rotation_reference_input = None
+        object_state.initialized = True
+        self._interaction_state = BRIDGE_STATE_IDLE
         return SceneCommand(
             contract_version=self._expected_contract_version,
             command_id=make_command_id("init-scene", packet.frame_id),
             frame_id=packet.frame_id,
             timestamp_ms=packet.timestamp_ms,
             command_type="init_scene",
-            object_id=OBJECT_ID,
+            object_id=PRIMARY_OBJECT_ID,
             payload={
                 "objects": [
                     {
-                        "object_id": OBJECT_ID,
-                        "init_pos": {"x": 0.0, "y": 0.0, "z": 0.0},
+                        "object_id": PRIMARY_OBJECT_ID,
+                        "init_pos": vec3_payload(object_state.world_position),
                         "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
                         "coordinate_space": "world_norm",
                         "interaction_state": INTERACTION_IDLE,
@@ -226,21 +291,148 @@ class BridgeServiceImpl(BridgeService):
             },
         )
 
-    def _make_object_pose(self, packet: GesturePacket) -> SceneCommand:
+    def _make_object_pose(
+        self,
+        packet: GesturePacket,
+        object_state: ObjectInteractionState,
+        hand_anchor_world: Vec3 | None = None,
+    ) -> SceneCommand:
         self._metrics.pose_updates += 1
-        world_position = self._camera_to_world_position(self._interaction_anchor(packet))
         return SceneCommand(
             contract_version=self._expected_contract_version,
             command_id=make_command_id("set-pose", packet.frame_id),
             frame_id=packet.frame_id,
             timestamp_ms=packet.timestamp_ms,
             command_type="set_object_pose",
-            object_id=OBJECT_ID,
-            payload={
-                "position": vec3_payload(world_position),
-                "coordinate_space": "world_norm",
-            },
+            object_id=object_state.object_id,
+            payload=self._pose_payload(packet, object_state, hand_anchor_world),
         )
+
+    def _pose_payload(
+        self,
+        packet: GesturePacket,
+        object_state: ObjectInteractionState,
+        hand_anchor_world: Vec3 | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"coordinate_space": "world_norm"}
+        rotation_hpr = self._rotation_hpr_payload(packet, object_state)
+        if rotation_hpr is not None:
+            payload["hpr"] = rotation_hpr
+            return payload
+
+        world_position = self._drag_world_position(packet, object_state, hand_anchor_world)
+        object_state.world_position = world_position
+        payload["position"] = vec3_payload(world_position)
+        return payload
+
+    def _make_hand_pose(self, packet: GesturePacket) -> SceneCommand:
+        payload: dict[str, Any] = {
+            "coordinate_space": "world_norm",
+            "visible": False,
+        }
+        if packet.tracking_state == "tracked" and packet.confidence >= BRIDGE_MIN_TRACKING_CONFIDENCE:
+            index_tip_world = self._camera_to_world_position(packet.index_tip)
+            thumb_tip_world = self._camera_to_world_position(packet.thumb_tip)
+            wrist_world = self._camera_to_world_position(packet.wrist)
+            anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
+            payload["visible"] = True
+            payload["points"] = {
+                "wrist": vec3_payload(wrist_world),
+                "thumb_tip": vec3_payload(thumb_tip_world),
+                "index_tip": vec3_payload(index_tip_world),
+                "anchor": vec3_payload(anchor_world),
+            }
+
+        return SceneCommand(
+            contract_version=self._expected_contract_version,
+            command_id=make_command_id("set-hand-pose", packet.frame_id),
+            frame_id=packet.frame_id,
+            timestamp_ms=packet.timestamp_ms,
+            command_type="set_hand_pose",
+            object_id=packet.hand_id,
+            payload=payload,
+        )
+
+    @staticmethod
+    def _rotation_mode_active(packet: GesturePacket) -> bool:
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return False
+
+        rotation = debug_payload.get("rotation")
+        if not isinstance(rotation, dict):
+            return False
+
+        return bool(rotation.get("mode_active", False))
+
+    def _handle_rotation_mode(
+        self,
+        packet: GesturePacket,
+        object_state: ObjectInteractionState,
+        is_hovering: bool,
+        hand_anchor_world: Vec3,
+    ) -> list[SceneCommand]:
+        if packet.pinch_state != "pinched":
+            next_state = BRIDGE_STATE_PENDING_GRAB if is_hovering else BRIDGE_STATE_IDLE
+            object_state.grab_offset_world = None
+            object_state.rotation_reference_hpr = None
+            object_state.rotation_reference_input = None
+            return self._set_object_interaction_state(packet, object_state, next_state)
+
+        commands: list[SceneCommand] = []
+        object_state.grab_offset_world = None
+        commands.extend(self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_ROTATING))
+        commands.append(self._make_object_pose(packet, object_state, hand_anchor_world))
+        return commands
+
+    @staticmethod
+    def _rotation_input_hpr(packet: GesturePacket) -> tuple[float, float, float] | None:
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return None
+
+        rotation = debug_payload.get("rotation")
+        if not isinstance(rotation, dict):
+            return None
+
+        if not bool(rotation.get("mode_active", False)):
+            return None
+
+        return (
+            float(rotation.get("deg_x", 0.0)),
+            float(rotation.get("deg_y", 0.0)),
+            float(rotation.get("deg_z", 0.0)),
+        )
+
+    def _rotation_hpr_payload(
+        self,
+        packet: GesturePacket,
+        object_state: ObjectInteractionState,
+    ) -> dict[str, float] | None:
+        rotation_input = self._rotation_input_hpr(packet)
+        if rotation_input is None:
+            object_state.rotation_reference_hpr = None
+            object_state.rotation_reference_input = None
+            return None
+
+        if object_state.rotation_reference_hpr is None or object_state.rotation_reference_input is None:
+            object_state.rotation_reference_hpr = object_state.world_hpr
+            object_state.rotation_reference_input = rotation_input
+
+        base_h, base_p, base_r = object_state.rotation_reference_hpr
+        ref_h, ref_p, ref_r = object_state.rotation_reference_input
+        cur_h, cur_p, cur_r = rotation_input
+        next_hpr = (
+            base_h + ((cur_h - ref_h) * self._rotation_sensitivity),
+            base_p + ((cur_p - ref_p) * self._rotation_sensitivity),
+            base_r + ((cur_r - ref_r) * self._rotation_sensitivity),
+        )
+        object_state.world_hpr = next_hpr
+        return {
+            "h": next_hpr[0],
+            "p": next_hpr[1],
+            "r": next_hpr[2],
+        }
 
     def _interaction_anchor(self, packet: GesturePacket) -> Vec3:
         return Vec3(
@@ -249,6 +441,17 @@ class BridgeServiceImpl(BridgeService):
             z=(packet.index_tip.z + packet.thumb_tip.z) * 0.5,
         )
 
+    def _drag_world_position(
+        self,
+        packet: GesturePacket,
+        object_state: ObjectInteractionState,
+        hand_anchor_world: Vec3 | None = None,
+    ) -> Vec3:
+        if hand_anchor_world is None:
+            hand_anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
+        if object_state.grab_offset_world is None:
+            return object_state.world_position
+        return self._add_vec3(hand_anchor_world, object_state.grab_offset_world)
 
     def _camera_to_world_position(self, position: Optional[Vec3]) -> Vec3:
         '''
@@ -260,9 +463,9 @@ class BridgeServiceImpl(BridgeService):
         - +z: toward the user/camera (camera depth)
         
         world_norm definition (renderer-facing scene space after bridge mapping):
-        - +x: right (scene horizontal)
-        - +y: up (scene vertical)
-        - +z: toward the user (scene depth)
+        - +x: user-right in the scene
+        - +y: up
+        - +z: out of the screen toward the user
         
         :param position: Original coordinates in camera_norm (Vec3), None is allowed
         :return: Transformed coordinates in world_norm (Vec3), guaranteed to be within [-1.0, 1.0]
@@ -289,14 +492,18 @@ class BridgeServiceImpl(BridgeService):
         y = position.y if is_valid_num(position.y) else 0.0
         z = position.z if is_valid_num(position.z) else 0.0
         
-        # 3. Current contract keeps camera_norm and world_norm aligned.
-        # Preserve the incoming coordinates and only clip them into world_norm.
+        # 3. Convert from camera-centric coordinates into user-centric scene motion.
+        # The scene camera views the origin from +Y, so world +x appears on the
+        # left side of the screen. Mirrored input therefore needs an x inversion
+        # to preserve user-perceived left/right motion, while unmirrored input
+        # should keep x as-is. Positive camera z means "toward camera", which the
+        # scene should interpret as moving farther into the screen.
         def clip(v: float) -> float:
             return max(-1.0, min(1.0, v))
         
-        unclipped_world_x = -x
+        unclipped_world_x = -x if self._input_mirrored else x
         unclipped_world_y = y
-        unclipped_world_z = z
+        unclipped_world_z = -z
 
         final_x = clip(unclipped_world_x)
         final_y = clip(unclipped_world_y)
@@ -329,14 +536,14 @@ class BridgeServiceImpl(BridgeService):
         return Vec3(final_x, final_y, final_z)
 
 
-    def _make_object_state(self, packet: GesturePacket, interaction_state: str) -> SceneCommand:
+    def _make_object_state(self, packet: GesturePacket, object_id: str, interaction_state: str) -> SceneCommand:
         return SceneCommand(
             contract_version=self._expected_contract_version,
             command_id=make_command_id("set-state", packet.frame_id),
             frame_id=packet.frame_id,
             timestamp_ms=packet.timestamp_ms,
             command_type="set_object_state",
-            object_id=OBJECT_ID,
+            object_id=object_id,
             payload={"interaction_state": interaction_state},
         )
 
@@ -347,7 +554,7 @@ class BridgeServiceImpl(BridgeService):
             frame_id=packet.frame_id,
             timestamp_ms=packet.timestamp_ms,
             command_type="heartbeat",
-            object_id=OBJECT_ID,
+            object_id=PRIMARY_OBJECT_ID,
             payload={"interaction_state": self._interaction_state},
         )
 
@@ -358,9 +565,84 @@ class BridgeServiceImpl(BridgeService):
             frame_id=packet.frame_id,
             timestamp_ms=packet.timestamp_ms,
             command_type="reset_interaction",
-            object_id=OBJECT_ID,
+            object_id=PRIMARY_OBJECT_ID,
             payload={"reason": reason},
         )
+
+    def _ensure_object_state(
+        self,
+        object_id: str,
+        *,
+        world_position: Vec3,
+        interaction_state: str,
+        initialized: bool,
+    ) -> ObjectInteractionState:
+        object_state = self._object_states.get(object_id)
+        if object_state is None:
+            object_state = ObjectInteractionState(
+                object_id=object_id,
+                world_position=world_position,
+                interaction_state=interaction_state,
+                initialized=initialized,
+            )
+            self._object_states[object_id] = object_state
+            return object_state
+
+        return object_state
+
+    def _object_state(self, object_id: str) -> ObjectInteractionState:
+        object_state = self._object_states.get(object_id)
+        if object_state is not None:
+            return object_state
+        return self._ensure_object_state(
+            object_id,
+            world_position=INITIAL_OBJECT_POSITION,
+            interaction_state=BRIDGE_STATE_IDLE,
+            initialized=False,
+        )
+
+    def _set_object_interaction_state(
+        self,
+        packet: GesturePacket,
+        object_state: ObjectInteractionState,
+        bridge_state: str,
+    ) -> list[SceneCommand]:
+        if bridge_state == object_state.interaction_state:
+            return []
+
+        object_state.interaction_state = bridge_state
+        if bridge_state != BRIDGE_STATE_GRABBING:
+            object_state.grab_offset_world = None
+        if bridge_state != BRIDGE_STATE_ROTATING:
+            object_state.rotation_reference_hpr = None
+            object_state.rotation_reference_input = None
+        self._interaction_state = bridge_state
+        return [self._make_object_state(packet, object_state.object_id, self._render_state(bridge_state))]
+
+    @staticmethod
+    def _render_state(bridge_state: str) -> str:
+        if bridge_state == BRIDGE_STATE_PENDING_GRAB:
+            return INTERACTION_PENDING_GRAB
+        if bridge_state == BRIDGE_STATE_GRABBING:
+            return INTERACTION_GRABBED
+        if bridge_state == BRIDGE_STATE_ROTATING:
+            return INTERACTION_ROTATING
+        return INTERACTION_IDLE
+
+    @staticmethod
+    def _distance(a: Vec3, b: Vec3) -> float:
+        return math.sqrt(((a.x - b.x) ** 2) + ((a.y - b.y) ** 2) + ((a.z - b.z) ** 2))
+
+    def _is_hovering_object(self, hand_anchor_world: Vec3, object_state: ObjectInteractionState) -> bool:
+        return self._distance(hand_anchor_world, object_state.world_position) <= HOVER_DISTANCE_THRESHOLD
+
+    @staticmethod
+    def _add_vec3(a: Vec3, b: Vec3) -> Vec3:
+        return Vec3(a.x + b.x, a.y + b.y, a.z + b.z)
+
+    @staticmethod
+    def _subtract_vec3(a: Vec3, b: Vec3) -> Vec3:
+        return Vec3(a.x - b.x, a.y - b.y, a.z - b.z)
 
     def _record_error(self, error: dict[str, Any]) -> None:
         payload = dict(error)

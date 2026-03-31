@@ -18,7 +18,7 @@ from src.gesture.constants import (
 from src.contracts import GesturePacket
 from src.gesture.runtime import CaptureRuntime, HandLandmarkerRuntime, RawHandObservation
 from src.gesture.temporal import MotionPreset, TemporalReducer, temporal_tuning_for_motion_preset
-from src.ports import GestureInputPort
+from src.ports import DebugFrameSource, GestureInputPort
 from src.utils.contracts import validate_gesture_packet
 from src.utils.runtime import (
     LIFECYCLE_DEGRADED,
@@ -48,6 +48,7 @@ class GestureMetrics:
 @dataclass(slots=True)
 class GestureConfig:
     camera_index: int = 0
+    flip_camera: bool = True
     target_fps: float = DEFAULT_TARGET_FPS
     frame_width: int = DEFAULT_FRAME_WIDTH
     frame_height: int = DEFAULT_FRAME_HEIGHT
@@ -59,11 +60,12 @@ class GestureConfig:
     aggressive_release_guard: bool = False
 
 
-class GestureServiceImpl(GestureInputPort):
+class GestureServiceImpl(GestureInputPort, DebugFrameSource):
     def __init__(
         self,
         *,
         camera_index: int = 0,
+        flip_camera: bool = True,
         target_fps: float = DEFAULT_TARGET_FPS,
         frame_width: int = DEFAULT_FRAME_WIDTH,
         frame_height: int = DEFAULT_FRAME_HEIGHT,
@@ -80,6 +82,7 @@ class GestureServiceImpl(GestureInputPort):
     ) -> None:
         self._config = GestureConfig(
             camera_index=camera_index,
+            flip_camera=flip_camera,
             target_fps=target_fps,
             frame_width=frame_width,
             frame_height=frame_height,
@@ -248,6 +251,7 @@ class GestureServiceImpl(GestureInputPort):
         try:
             return self._capture_factory(
                 camera_index=self._config.camera_index,
+                flip_horizontal=self._config.flip_camera,
                 frame_width=self._config.frame_width,
                 frame_height=self._config.frame_height,
                 target_fps=self._config.target_fps,

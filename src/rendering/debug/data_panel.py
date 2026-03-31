@@ -18,7 +18,7 @@ class DataPanelManager:
     """Data panel manager, responsible for data panel frame+text initialization, gesture data updates, and scaling adaptation"""
 
     PANEL_WIDTH = 384
-    PANEL_HEIGHT = 180
+    PANEL_HEIGHT = 330
     PANEL_MARGIN = 12
     PANEL_GAP = 12
     TEXT_OFFSET_X = 18
@@ -34,6 +34,17 @@ class DataPanelManager:
         self._status_panel: Optional[OnscreenText] = None
         self._last_world_norm_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        
+        # ========== 新增代码开始 ==========
+        # 新增：交互调试数据存储
+        self._object_world_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._index_tip_world: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._thumb_tip_world: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._distance_to_object: float = 0.0
+        self._interaction_state: str = "idle"
+        self._interaction_mode: str = "normal"
+        # ========== 新增代码结束 ==========
+        
         self.init_panel()
 
     @classmethod
@@ -105,14 +116,71 @@ class DataPanelManager:
                 f"fps: {fps:.1f}",
                 f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
                 f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
-            )
+            ) + self._rotation_lines(packet)
+
+        # ========== 新增代码开始 ==========
+        # 新增：交互调试信息（放在所有内容的最后）
+        interaction_debug_lines = (
+            "--- Interaction Debug ---",
+            f"object_pos: ({self._object_world_pos[0]:+.2f}, {self._object_world_pos[1]:+.2f}, {self._object_world_pos[2]:+.2f})",
+            f"index_tip: ({self._index_tip_world[0]:+.2f}, {self._index_tip_world[1]:+.2f}, {self._index_tip_world[2]:+.2f})",
+            f"thumb_tip: ({self._thumb_tip_world[0]:+.2f}, {self._thumb_tip_world[1]:+.2f}, {self._thumb_tip_world[2]:+.2f})",
+            f"distance: {self._distance_to_object:.3f} | state: {self._interaction_state} | mode: {self._interaction_mode}",
+        )
+        # 合并原有lines和新增的调试信息
+        lines = lines + interaction_debug_lines
+        # ========== 新增代码结束 ==========
         
         self._status_panel.setText("\n".join(lines))
+
+    @staticmethod
+    def _rotation_lines(packet: GesturePacket) -> tuple[str, ...]:
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return ()
+
+        rotation = debug_payload.get("rotation")
+        if not isinstance(rotation, dict):
+            return ()
+
+        deg_x = float(rotation.get("deg_x", 0.0))
+        deg_y = float(rotation.get("deg_y", 0.0))
+        deg_z = float(rotation.get("deg_z", 0.0))
+        enabled = bool(rotation.get("enabled", False))
+        rotating = bool(rotation.get("rotating", False))
+        mode_name = str(rotation.get("mode_name", "MOVE_ONLY"))
+        gate_count = int(rotation.get("gate_count", 0))
+        mode_label = "rot" if enabled else "move"
+        state_label = "live" if rotating else "idle"
+
+        return (
+            f"rot: {mode_name} {mode_label}/{state_label} g{gate_count:02d}",
+            f"xyz: {deg_x:+05.1f} {deg_y:+05.1f} {deg_z:+05.1f}",
+        )
     
     def update_coordinate_data(self, world_norm_pos: tuple, scene_pos: tuple) -> None:
         """Update coordinate data for display"""
         self._last_world_norm_pos = world_norm_pos
         self._last_scene_pos = scene_pos
+
+    # ========== 新增代码开始 ==========
+    def update_interaction_debug_data(
+        self,
+        object_world_pos: tuple[float, float, float],
+        index_tip_world: tuple[float, float, float],
+        thumb_tip_world: tuple[float, float, float],
+        distance_to_object: float,
+        interaction_state: str,
+        interaction_mode: str
+    ) -> None:
+        """更新交互调试数据，用于距离检测功能验证"""
+        self._object_world_pos = object_world_pos
+        self._index_tip_world = index_tip_world
+        self._thumb_tip_world = thumb_tip_world
+        self._distance_to_object = distance_to_object
+        self._interaction_state = interaction_state
+        self._interaction_mode = interaction_mode
+    # ========== 新增代码结束 ==========
     
     def set_ui_scale(self, scale: float) -> None:
         """Set UI scale factor and update size and position of all UI elements"""

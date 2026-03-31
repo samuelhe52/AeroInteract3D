@@ -11,6 +11,7 @@ SceneCommandType = Literal[
     "init_scene",
     "set_object_pose",
     "set_object_state",
+    "set_hand_pose",
     "heartbeat",
     "reset_interaction",
 ]
