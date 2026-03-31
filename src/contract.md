@@ -90,6 +90,7 @@ Current project decision: the rendering consumer is implemented in **Python + Pa
   - MUST include `coordinate_space` (`world_norm`).
   - MUST include `visible: bool`.
   - MUST include `points` with `wrist`, `thumb_tip`, `index_tip`, and `anchor` world-space vectors when `visible` is `true`.
+  - MAY include optional `thumb_base` and `index_base` world-space vectors when the bridge can provide or synthesize them for richer hand rendering.
 - `heartbeat`
   - MUST include minimal liveness payload.
 - `reset_interaction`

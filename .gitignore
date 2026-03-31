@@ -29,3 +29,6 @@ __pycache__/
 
 # Local runtime overrides
 .run.yaml
+
+# Local report/runtime scratch space
+tmp/
