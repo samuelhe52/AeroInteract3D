@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover - fallback for direct script execution
     if project_root_str not in sys.path:
         sys.path.insert(0, project_root_str)
     from src.rendering.debug.auto_scaling import AutoScalingManager
-from src.contracts import GesturePacket
+from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import RawHandObservation
 from src.gesture.debug.live_preview_runtime import HAND_CONNECTIONS, OverlayColors
 
@@ -146,8 +146,7 @@ class CameraPreviewManager:
                 interpolation=cv2.INTER_LINEAR,
             )
 
-            if self._last_observation is not None:
-                frame = self._draw_hand_skeleton(frame, self._last_observation)
+            frame = self._draw_hand_skeletons(frame)
 
             frame = self._draw_rotation_overlay(frame)
 
@@ -162,25 +161,67 @@ class CameraPreviewManager:
             if self._camera_preview_status:
                 self._camera_preview_status.setText("Camera: Error")
 
-    def _draw_hand_skeleton(self, frame: np.ndarray, observation: RawHandObservation) -> np.ndarray:
-        """Draw hand skeleton (reuse live_preview logic)"""
-        height, width = frame.shape[:2]
+    def _draw_hand_skeletons(self, frame: np.ndarray) -> np.ndarray:
+        """Draw primary and secondary hand skeletons in the in-window camera preview."""
+        packet = self._last_packet
+        if packet is None or not isinstance(packet.debug, dict):
+            if self._last_observation is not None:
+                self._draw_landmarks(frame, self._last_observation.landmarks, is_secondary=False)
+            return frame
 
-        # Draw connection lines
-        for start_idx, end_idx in HAND_CONNECTIONS:
-            if start_idx < len(observation.landmarks) and end_idx < len(observation.landmarks):
-                start_point = self._landmark_to_pixel(observation.landmarks[start_idx], width, height)
-                end_point = self._landmark_to_pixel(observation.landmarks[end_idx], width, height)
-                cv2.line(frame, start_point, end_point, self._colors.bones, 2)
+        primary_hand = self._hand_payload(packet, "primary_hand")
+        secondary_hand = self._hand_payload(packet, "secondary_hand")
+        drew_primary = self._draw_payload_landmarks(frame, primary_hand, is_secondary=False)
+        self._draw_payload_landmarks(frame, secondary_hand, is_secondary=True)
 
-        # Draw key points
-        for landmark in observation.landmarks:
-            point = self._landmark_to_pixel(landmark, width, height)
-            cv2.circle(frame, point, 4, self._colors.landmarks, -1)
-
+        if not drew_primary and self._last_observation is not None:
+            self._draw_landmarks(frame, self._last_observation.landmarks, is_secondary=False)
         return frame
 
+    def _draw_payload_landmarks(self, frame: np.ndarray, hand_payload: dict[str, Any] | None, *, is_secondary: bool) -> bool:
+        landmarks = [] if hand_payload is None else hand_payload.get("landmarks")
+        if not isinstance(landmarks, list) or len(landmarks) < 21:
+            return False
+
+        parsed_landmarks: list[Vec3] = []
+        for item in landmarks:
+            if not isinstance(item, dict):
+                return False
+            try:
+                parsed_landmarks.append(Vec3(float(item["x"]), float(item["y"]), float(item["z"])))
+            except (KeyError, TypeError, ValueError):
+                return False
+
+        self._draw_landmarks(frame, parsed_landmarks, is_secondary=is_secondary)
+        return True
+
+    def _draw_landmarks(self, frame: np.ndarray, landmarks: list[Vec3], *, is_secondary: bool) -> None:
+        height, width = frame.shape[:2]
+        bone_color = self._colors.secondary_bones if is_secondary else self._colors.bones
+        landmark_color = self._colors.secondary_landmarks if is_secondary else self._colors.landmarks
+
+        for start_idx, end_idx in HAND_CONNECTIONS:
+            if start_idx < len(landmarks) and end_idx < len(landmarks):
+                start_point = self._landmark_to_pixel(landmarks[start_idx], width, height)
+                end_point = self._landmark_to_pixel(landmarks[end_idx], width, height)
+                cv2.line(frame, start_point, end_point, bone_color, 2)
+
+        for landmark in landmarks:
+            point = self._landmark_to_pixel(landmark, width, height)
+            cv2.circle(frame, point, 4, landmark_color, -1)
+
     def _draw_rotation_overlay(self, frame: np.ndarray) -> np.ndarray:
+        primary_hand = self._hand_payload(self._last_packet, "primary_hand")
+        secondary_hand = self._hand_payload(self._last_packet, "secondary_hand")
+        primary_detected = self._is_hand_detected(primary_hand)
+        secondary_detected = self._is_hand_detected(secondary_hand)
+        primary_state = "DETECTED" if primary_detected else "MISSING"
+        secondary_state = "DETECTED" if secondary_detected else "MISSING"
+        both_hands_recognized = (
+            primary_detected
+            and secondary_detected
+        )
+
         slot = 0
         slot_x = 0
         slot_y = 0
@@ -216,8 +257,8 @@ class CameraPreviewManager:
 
         text = f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})/{slot_count:02d}" if slot_count > 0 else f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})"
         state = "YES" if rotating else "NO"
-        cv2.rectangle(frame, (10, 12), (430, 116), (18, 22, 30), thickness=-1)
-        cv2.rectangle(frame, (10, 12), (430, 116), (86, 96, 118), thickness=1)
+        cv2.rectangle(frame, (10, 12), (430, 184), (18, 22, 30), thickness=-1)
+        cv2.rectangle(frame, (10, 12), (430, 184), (86, 96, 118), thickness=1)
         cv2.putText(frame, text, (18, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (235, 235, 235), 1, cv2.LINE_AA)
         cv2.putText(frame, f"rotating: {state}", (18, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (90, 220, 140) if rotating else (140, 140, 140), 1, cv2.LINE_AA)
         mode_label = "ROTATE_ENABLED" if mode_active else "MOVE_ONLY"
@@ -227,8 +268,41 @@ class CameraPreviewManager:
         cv2.putText(frame, f"Z: {deg_z:6.1f} deg", (236, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 170, 60), 1, cv2.LINE_AA)
         cv2.putText(frame, f"grab: {'YES' if grab_detected else 'NO'}", (18, 93), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 255, 255), 1, cv2.LINE_AA)
         cv2.putText(frame, f"spread: {tip_spread:.3f}  (grab < 0.270)", (108, 93), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (220, 220, 120), 1, cv2.LINE_AA)
-        cv2.putText(frame, "For best results, face the camera and hold a standard OK pose.", (18, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (210, 210, 210), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"primary: {primary_state}", (18, 113), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (220, 220, 220), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"secondary: {secondary_state}", (18, 129), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (220, 220, 220), 1, cv2.LINE_AA)
+        cv2.putText(
+            frame,
+            f"both_hands: {'YES' if both_hands_recognized else 'NO'}",
+            (18, 145),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.36,
+            (80, 220, 160) if both_hands_recognized else (170, 170, 170),
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(frame, "For best results, face the camera and hold a standard OK pose.", (18, 162), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (210, 210, 210), 1, cv2.LINE_AA)
         return frame
+
+    def _hand_payload(self, packet: GesturePacket | None, field_name: str) -> dict[str, Any] | None:
+        if packet is None or not isinstance(packet.debug, dict):
+            return None
+        payload = packet.debug.get(field_name)
+        if isinstance(payload, dict):
+            return payload
+        dual_hand = packet.debug.get("dual_hand")
+        if isinstance(dual_hand, dict):
+            nested = dual_hand.get(field_name)
+            if isinstance(nested, dict):
+                return nested
+        return None
+
+    def _is_hand_detected(self, hand_payload: dict[str, Any] | None) -> bool:
+        if not isinstance(hand_payload, dict):
+            return False
+        tracking_state = hand_payload.get("tracking_state")
+        if not isinstance(tracking_state, str):
+            return True
+        return tracking_state != "not_detected"
 
     def _landmark_to_pixel(self, landmark: Any, width: int, height: int) -> Tuple[int, int]:
         """Convert landmarks coordinates to pixel coordinates"""

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import time
 from typing import Any, Callable
@@ -12,11 +12,12 @@ from src.gesture.constants import (
     DEFAULT_MIN_DETECTION_CONFIDENCE,
     DEFAULT_MIN_TRACKING_CONFIDENCE,
     DEFAULT_TARGET_FPS,
+    GESTURE_DEFAULT_HAND_ID,
     GESTURE_FRAME_SUMMARY_INTERVAL,
     GESTURE_MOTION_PRESET,
 )
 from src.contracts import GesturePacket
-from src.gesture.runtime import CaptureRuntime, HandLandmarkerRuntime, RawHandObservation
+from src.gesture.runtime import CaptureRuntime, HandLandmarkerRuntime, RawHandObservation, distance_2d
 from src.gesture.temporal import MotionPreset, TemporalReducer, temporal_tuning_for_motion_preset
 from src.ports import DebugFrameSource, GestureInputPort
 from src.utils.contracts import validate_gesture_packet
@@ -31,6 +32,8 @@ from src.utils.runtime import (
 
 
 logger = logging.getLogger("gesture.service")
+
+SECONDARY_HAND_ID = "hand-2"
 
 
 @dataclass(slots=True)
@@ -98,10 +101,18 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         self._preview_factory = preview_factory
         self._clock = clock or time.perf_counter
         self.lifecycle_state = LIFECYCLE_STOPPED
-        self._reducer = TemporalReducer(
+        self._primary_reducer = TemporalReducer(
+            hand_id=GESTURE_DEFAULT_HAND_ID,
             tuning=temporal_tuning_for_motion_preset(motion_preset),
             aggressive_release_guard=aggressive_release_guard,
         )
+        self._secondary_reducer = TemporalReducer(
+            hand_id=SECONDARY_HAND_ID,
+            tuning=temporal_tuning_for_motion_preset(motion_preset),
+            aggressive_release_guard=aggressive_release_guard,
+        )
+        # Preserve legacy field name for any internal callers that still rely on it.
+        self._reducer = self._primary_reducer
         self._capture: Any | None = None
         self._detector: Any | None = None
         self._preview: Any | None = None
@@ -110,6 +121,7 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         self._metrics = GestureMetrics()
         self._last_packet: GesturePacket | None = None
         self._last_preview_frame = None
+        self._primary_slot_handedness: str | None = None
         self._frame_id = 0
         self._last_timestamp_ms = 0
 
@@ -121,9 +133,11 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         self._errors = []
         self._logged_error_codes = set()
         self._metrics = GestureMetrics()
-        self._reducer.reset()
+        self._primary_reducer.reset()
+        self._secondary_reducer.reset()
         self._last_packet = None
         self._last_preview_frame = None
+        self._primary_slot_handedness = None
         self._frame_id = 0
         self._last_timestamp_ms = 0
 
@@ -145,18 +159,33 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         self._frame_id += 1
         timestamp_ms = self._next_timestamp_ms()
         frame = self._read_frame()
-        observation: RawHandObservation | None = None
+        observations: list[RawHandObservation] = []
 
         if frame is not None and self._detector is not None:
-            observation = self._detect(frame, timestamp_ms=timestamp_ms)
+            observations = self._detect_all(frame, timestamp_ms=timestamp_ms)
 
-        runtime_hint = self._runtime_hint(observation)
-        packet = self._reducer.reduce(
-            observation,
+        primary_observation, secondary_observation = self._assign_hand_slots(observations)
+
+        runtime_hint = self._runtime_hint(primary_observation)
+        packet = self._primary_reducer.reduce(
+            primary_observation,
             frame_id=self._frame_id,
             timestamp_ms=timestamp_ms,
             runtime_hint=runtime_hint,
         )
+        secondary_packet = self._secondary_reducer.reduce(
+            secondary_observation,
+            frame_id=self._frame_id,
+            timestamp_ms=timestamp_ms,
+            runtime_hint=self._runtime_hint(secondary_observation),
+        )
+        packet = self._attach_dual_hand_debug(
+            primary_packet=packet,
+            secondary_packet=secondary_packet,
+            primary_observation=primary_observation,
+            secondary_observation=secondary_observation,
+        )
+
         validation_errors = validate_gesture_packet(packet)
         if validation_errors:
             self._metrics.validation_failures += len(validation_errors)
@@ -166,9 +195,9 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
 
         self._last_packet = packet
         self._last_frame = frame
-        self._last_observation = observation
+        self._last_observation = primary_observation
         self._record_packet_metrics(packet)
-        self._maybe_render_preview(frame, observation, packet)
+        self._maybe_render_preview(frame, primary_observation, secondary_observation, packet)
 
         if packet.frame_id % GESTURE_FRAME_SUMMARY_INTERVAL == 0:
             logger.debug(
@@ -331,9 +360,13 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
             )
         return frame
 
-    def _detect(self, frame, *, timestamp_ms: int) -> RawHandObservation | None:
+    def _detect_all(self, frame, *, timestamp_ms: int) -> list[RawHandObservation]:
         try:
-            observation = self._detector.detect(frame, timestamp_ms=timestamp_ms)
+            detect_multi = getattr(self._detector, "detect_multi", None)
+            if callable(detect_multi):
+                observed = detect_multi(frame, timestamp_ms=timestamp_ms)
+            else:
+                observed = self._detector.detect(frame, timestamp_ms=timestamp_ms)
         except Exception as exc:
             self._metrics.detector_failures += 1
             self.lifecycle_state = LIFECYCLE_DEGRADED
@@ -353,11 +386,122 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
                     f"will be suppressed. frame_id={self._frame_id} error={exc}"
                 ),
             )
-            return None
+            return []
 
-        if observation is not None and self.lifecycle_state == LIFECYCLE_DEGRADED and self._capture is not None:
+        observations: list[RawHandObservation]
+        if observed is None:
+            observations = []
+        elif isinstance(observed, list):
+            observations = [item for item in observed if isinstance(item, RawHandObservation)][:2]
+        elif isinstance(observed, tuple):
+            observations = [item for item in observed if isinstance(item, RawHandObservation)][:2]
+        elif isinstance(observed, RawHandObservation):
+            observations = [observed]
+        else:
+            observations = []
+
+        if observations and self.lifecycle_state == LIFECYCLE_DEGRADED and self._capture is not None:
             self.lifecycle_state = LIFECYCLE_RUNNING
-        return observation
+        return observations
+
+    def _assign_hand_slots(
+        self,
+        observations: list[RawHandObservation],
+    ) -> tuple[RawHandObservation | None, RawHandObservation | None]:
+        if not observations:
+            return None, None
+
+        if len(observations) == 1:
+            primary = observations[0]
+            self._primary_slot_handedness = self._normalize_handedness(primary.handedness)
+            return primary, None
+
+        primary = self._pick_primary_observation(observations)
+        secondary = next((item for item in observations if item is not primary), None)
+
+        self._primary_slot_handedness = self._normalize_handedness(primary.handedness)
+        return primary, secondary
+
+    def _pick_primary_observation(self, observations: list[RawHandObservation]) -> RawHandObservation:
+        expected_handedness = self._primary_slot_handedness
+        if expected_handedness:
+            matches = [
+                item
+                for item in observations
+                if self._normalize_handedness(item.handedness) == expected_handedness
+            ]
+            if len(matches) == 1:
+                return matches[0]
+
+        if self._last_packet is not None:
+            return min(observations, key=lambda item: distance_2d(item.wrist, self._last_packet.wrist))
+        return max(observations, key=lambda item: item.confidence)
+
+    def _normalize_handedness(self, handedness: str | None) -> str | None:
+        if handedness is None:
+            return None
+        text = handedness.strip().lower()
+        if text in {"left", "right"}:
+            return text
+        return None
+
+    def _attach_dual_hand_debug(
+        self,
+        *,
+        primary_packet: GesturePacket,
+        secondary_packet: GesturePacket,
+        primary_observation: RawHandObservation | None,
+        secondary_observation: RawHandObservation | None,
+    ) -> GesturePacket:
+        include_primary = primary_observation is not None or primary_packet.tracking_state != "not_detected"
+        primary_hand = self._build_hand_payload(primary_packet, primary_observation) if include_primary else None
+        include_secondary = secondary_observation is not None or secondary_packet.tracking_state != "not_detected"
+        secondary_hand = self._build_hand_payload(secondary_packet, secondary_observation) if include_secondary else None
+
+        debug_payload = dict(primary_packet.debug or {})
+        debug_payload["primary_hand"] = primary_hand
+        debug_payload["secondary_hand"] = secondary_hand
+        debug_payload["dual_hand"] = {
+            "primary_hand": primary_hand,
+            "secondary_hand": secondary_hand,
+            "active_hand_count": len(
+                [
+                    payload
+                    for payload in (primary_hand, secondary_hand)
+                    if payload is not None and payload.get("tracking_state") != "not_detected"
+                ]
+            ),
+        }
+        return replace(primary_packet, debug=debug_payload)
+
+    def _build_hand_payload(
+        self,
+        packet: GesturePacket,
+        observation: RawHandObservation | None,
+    ) -> dict[str, Any]:
+        landmarks_payload = None
+        if observation is not None:
+            landmarks_payload = [
+                {"x": landmark.x, "y": landmark.y, "z": landmark.z}
+                for landmark in observation.landmarks
+            ]
+        return {
+            "hand_id": packet.hand_id,
+            "handedness": self._normalize_handedness(None if observation is None else observation.handedness) or "unknown",
+            "tracking_state": packet.tracking_state,
+            "confidence": packet.confidence,
+            "pinch_state": packet.pinch_state,
+            "index_tip": {"x": packet.index_tip.x, "y": packet.index_tip.y, "z": packet.index_tip.z},
+            "thumb_tip": {"x": packet.thumb_tip.x, "y": packet.thumb_tip.y, "z": packet.thumb_tip.z},
+            "wrist": {"x": packet.wrist.x, "y": packet.wrist.y, "z": packet.wrist.z},
+            "pinch_distance": packet.pinch_distance,
+            "velocity": None
+            if packet.velocity is None
+            else {"x": packet.velocity.x, "y": packet.velocity.y, "z": packet.velocity.z},
+            "smoothing_hint": packet.smoothing_hint,
+            "landmarks": landmarks_payload,
+            "debug": packet.debug,
+        }
 
     def _record_packet_metrics(self, packet: GesturePacket) -> None:
         if packet.tracking_state == "tracked":
@@ -367,11 +511,22 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         else:
             self._metrics.not_detected_packets += 1
 
-    def _maybe_render_preview(self, frame, observation: RawHandObservation | None, packet: GesturePacket) -> None:
+    def _maybe_render_preview(
+        self,
+        frame,
+        observation: RawHandObservation | None,
+        secondary_observation: RawHandObservation | None,
+        packet: GesturePacket,
+    ) -> None:
         if self._preview is None or frame is None:
             return None
         try:
-            self._preview.render(frame, observation=observation, packet=packet)
+            self._preview.render(
+                frame,
+                observation=observation,
+                packet=packet,
+                secondary_observation=secondary_observation,
+            )
         except Exception as exc:
             self._record_error(
                 error_entry(
