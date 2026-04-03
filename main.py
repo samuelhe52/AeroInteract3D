@@ -71,7 +71,7 @@ def _built_in_run_defaults() -> dict[str, object]:
         "target_fps": DEFAULT_TARGET_FPS,
         "frame_width": DEFAULT_FRAME_WIDTH,
         "frame_height": DEFAULT_FRAME_HEIGHT,
-        "debug_stats": True,
+        "debug_stats": False,
         "render_position_sensitivity": 1.35,
         "bridge_rotation_sensitivity": 1.5,
         "motion_preset": GESTURE_MOTION_PRESET,
@@ -409,7 +409,7 @@ def build_app(config: AppConfig) -> App:
         rotation_sensitivity=config.bridge_rotation_sensitivity,
     )
     render_output = RenderingServiceImpl(
-        debug_stats_enabled=config.debug_stats,
+        debug_stats_enabled=False,
         position_sensitivity=config.render_position_sensitivity,
         virtual_hand_config=config.virtual_hand,
     )

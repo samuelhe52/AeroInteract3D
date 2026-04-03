@@ -32,7 +32,9 @@ class CameraPreviewManager:
     """Camera preview manager, responsible for camera texture initialization, frame updates, GPU flipping, and position adaptation"""
 
     PREVIEW_WIDTH = 384
-    PREVIEW_HEIGHT = 216
+    VIDEO_HEIGHT = 216
+    OVERLAY_HEIGHT = 184
+    PREVIEW_HEIGHT = VIDEO_HEIGHT + OVERLAY_HEIGHT
     PREVIEW_MARGIN = 12
     TITLE_OFFSET_X = 18
     TITLE_OFFSET_Y = 20
@@ -142,15 +144,17 @@ class CameraPreviewManager:
         try:
             frame = cv2.resize(
                 self._camera_frame,
-                (self.PREVIEW_WIDTH, self.PREVIEW_HEIGHT),
+                (self.PREVIEW_WIDTH, self.VIDEO_HEIGHT),
                 interpolation=cv2.INTER_LINEAR,
             )
 
             frame = self._draw_hand_skeletons(frame)
+            canvas = np.zeros((self.PREVIEW_HEIGHT, self.PREVIEW_WIDTH, 3), dtype=np.uint8)
+            canvas[: self.OVERLAY_HEIGHT, :, :] = (12, 12, 14)
+            canvas[self.OVERLAY_HEIGHT :, :, :] = frame
+            self._draw_rotation_overlay(canvas)
 
-            frame = self._draw_rotation_overlay(frame)
-
-            self._camera_texture.setRamImageAs(np.ascontiguousarray(frame), "BGR")
+            self._camera_texture.setRamImageAs(np.ascontiguousarray(canvas), "BGR")
 
             # Update status text
             if self._camera_preview_status:
@@ -257,8 +261,9 @@ class CameraPreviewManager:
 
         text = f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})/{slot_count:02d}" if slot_count > 0 else f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})"
         state = "YES" if rotating else "NO"
-        cv2.rectangle(frame, (10, 12), (430, 184), (18, 22, 30), thickness=-1)
-        cv2.rectangle(frame, (10, 12), (430, 184), (86, 96, 118), thickness=1)
+        panel_bottom = min(self.OVERLAY_HEIGHT - 8, 184)
+        cv2.rectangle(frame, (10, 12), (430, panel_bottom), (18, 22, 30), thickness=-1)
+        cv2.rectangle(frame, (10, 12), (430, panel_bottom), (86, 96, 118), thickness=1)
         cv2.putText(frame, text, (18, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (235, 235, 235), 1, cv2.LINE_AA)
         cv2.putText(frame, f"rotating: {state}", (18, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (90, 220, 140) if rotating else (140, 140, 140), 1, cv2.LINE_AA)
         mode_label = "ROTATE_ENABLED" if mode_active else "MOVE_ONLY"
