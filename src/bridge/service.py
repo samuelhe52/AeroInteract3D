@@ -136,12 +136,28 @@ class ObjectInteractionState:
     world_position: Vec3
     interaction_radius: float = HOVER_DISTANCE_THRESHOLD
     half_height: float = 0.1
+    world_scale: tuple[float, float, float] = (0.2, 0.2, 0.2)
     world_hpr: tuple[float, float, float] = (0.0, 0.0, 0.0)
     interaction_state: str = BRIDGE_STATE_IDLE
     grab_offset_world: Vec3 | None = None
     rotation_reference_hpr: tuple[float, float, float] | None = None
     rotation_reference_input: tuple[float, float, float] | None = None
     initialized: bool = False
+
+
+@dataclass(slots=True)
+class SecondaryHandState:
+    tracking_state: str
+    confidence: float
+    pinch_state: str
+    index_tip: Vec3
+    thumb_tip: Vec3
+    wrist: Vec3
+
+
+DUAL_SCALE_RATIO_MIN = 0.35
+DUAL_SCALE_RATIO_MAX = 2.80
+DUAL_SCALE_RATIO_EXPONENT = 0.85
 
 
 class BridgeServiceImpl(BridgeService):
@@ -160,6 +176,13 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id: str | None = None
         self._grabbed_object_id: str | None = None
         self._rotation_object_id: str | None = None
+        self._dual_scale_active = False
+        self._dual_scale_object_id: str | None = None
+        self._dual_scale_baseline_distance_xy: float | None = None
+        self._dual_scale_baseline_scale: tuple[float, float, float] | None = None
+        self._dual_scale_ratio: float = 1.0
+        self._pinch_capture_lock_object_id: str | None = None
+        self._dual_scale_rotation_blocked_until_open: bool = False
 
     def start(self) -> None:
         if self.lifecycle_state == LIFECYCLE_RUNNING:
@@ -176,11 +199,19 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id = None
         self._grabbed_object_id = None
         self._rotation_object_id = None
+        self._dual_scale_active = False
+        self._dual_scale_object_id = None
+        self._dual_scale_baseline_distance_xy = None
+        self._dual_scale_baseline_scale = None
+        self._dual_scale_ratio = 1.0
+        self._pinch_capture_lock_object_id = None
+        self._dual_scale_rotation_blocked_until_open = False
         self._ensure_object_state(
             PRIMARY_OBJECT_ID,
             world_position=INITIAL_OBJECT_POSITION,
             interaction_radius=HOVER_DISTANCE_THRESHOLD,
             half_height=0.1,
+            world_scale=(0.22, 0.22, 0.22),
             interaction_state=BRIDGE_STATE_IDLE,
             initialized=False,
         )
@@ -252,6 +283,9 @@ class BridgeServiceImpl(BridgeService):
             self._pending_init = False
 
         commands.append(self._make_hand_pose(packet))
+        secondary_hand_pose = self._make_secondary_hand_pose(packet)
+        if secondary_hand_pose is not None:
+            commands.append(secondary_hand_pose)
         commands.extend(self._step_state_machine(packet))
         if packet.frame_id % BRIDGE_HEARTBEAT_INTERVAL_FRAMES == 0:
             commands.append(self._make_heartbeat(packet))
@@ -269,6 +303,8 @@ class BridgeServiceImpl(BridgeService):
                 "last_frame_id": self._last_frame_id,
                 "last_timestamp_ms": self._last_timestamp_ms,
                 "pending_init": self._pending_init,
+                "dual_scale_active": self._dual_scale_active,
+                "dual_scale_ratio": self._dual_scale_ratio,
                 "packets_seen": self._metrics.packets_seen,
                 "commands_emitted": self._metrics.commands_emitted,
                 "duplicate_packets": self._metrics.duplicate_packets,
@@ -286,20 +322,112 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id = None
         self._grabbed_object_id = None
         self._rotation_object_id = None
+        self._dual_scale_active = False
+        self._dual_scale_object_id = None
+        self._dual_scale_baseline_distance_xy = None
+        self._dual_scale_baseline_scale = None
+        self._dual_scale_ratio = 1.0
+        self._pinch_capture_lock_object_id = None
+        self._dual_scale_rotation_blocked_until_open = False
         self.lifecycle_state = LIFECYCLE_STOPPED
         return None
 
     def _step_state_machine(self, packet: GesturePacket) -> list[SceneCommand]:
         commands: list[SceneCommand] = []
+        secondary_hand = self._secondary_hand_state(packet)
+
+        if packet.pinch_state == "open":
+            self._pinch_capture_lock_object_id = None
+            self._dual_scale_rotation_blocked_until_open = False
 
         if packet.tracking_state != "tracked" or packet.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
             if self._grabbed_object_id is not None or self._hovered_object_id is not None:
                 return self._release_interaction(packet)
+            self._stop_dual_scale_mode()
             return commands
 
         hand_anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
         hovered_object = self._select_hovered_object(hand_anchor_world)
         hovered_object_id = hovered_object.object_id if hovered_object is not None else None
+        secondary_hovered_object_id = self._secondary_hovered_object_id(secondary_hand)
+        secondary_detected = self._secondary_detected(secondary_hand)
+
+        # Hard gate: as long as a secondary hand is detected, disable rotation and
+        # translation entirely. Only dual-scale path is allowed.
+        if secondary_detected:
+            if self._rotation_object_id is not None:
+                rotating_object = self._object_state(self._rotation_object_id)
+                self._rotation_object_id = None
+                next_state = BRIDGE_STATE_GRABBING if packet.pinch_state == "pinched" else BRIDGE_STATE_IDLE
+                commands.extend(self._set_object_interaction_state(packet, rotating_object, next_state))
+
+        # Dual-scale object lock: once scaling starts, remain bound to the same object
+        # until pinch opens, and suppress any rotation/translation side effects while
+        # pinched after scaling interruption.
+        if self._dual_scale_active and self._dual_scale_object_id is not None:
+            lock_matches = (
+                packet.pinch_state == "pinched"
+                and secondary_hand is not None
+                and secondary_hand.pinch_state == "pinched"
+                and secondary_hand.tracking_state == "tracked"
+                and secondary_hand.confidence >= BRIDGE_MIN_TRACKING_CONFIDENCE
+                and hovered_object_id == self._dual_scale_object_id
+                and secondary_hovered_object_id == self._dual_scale_object_id
+            )
+            if lock_matches:
+                target_object = self._object_state(self._dual_scale_object_id)
+                commands.extend(
+                    self._handle_dual_scale_mode(
+                        packet,
+                        target_object,
+                        hand_anchor_world,
+                        secondary_hand,
+                    )
+                )
+                return commands
+
+            self._stop_dual_scale_mode()
+            self._dual_scale_rotation_blocked_until_open = packet.pinch_state == "pinched"
+            if self._grabbed_object_id is not None or secondary_detected:
+                # Keep object frozen and do not allow mode switching while still pinched.
+                return commands
+
+        dual_scale_target = self._dual_scale_target_object(
+            packet,
+            hovered_object_id=hovered_object_id,
+            secondary_hovered_object_id=secondary_hovered_object_id,
+            secondary_hand=secondary_hand,
+        )
+        if dual_scale_target is not None:
+            commands.extend(
+                self._handle_dual_scale_mode(
+                    packet,
+                    dual_scale_target,
+                    hand_anchor_world,
+                    secondary_hand,
+                )
+            )
+            return commands
+
+        self._stop_dual_scale_mode()
+        if secondary_detected:
+            if packet.pinch_state == "pinched" and self._grabbed_object_id is None and hovered_object_id is not None:
+                self._grabbed_object_id = hovered_object_id
+                self._hovered_object_id = hovered_object_id
+                self._pinch_capture_lock_object_id = hovered_object_id
+                commands.extend(
+                    self._set_object_interaction_state(
+                        packet,
+                        self._object_state(hovered_object_id),
+                        BRIDGE_STATE_GRABBING,
+                    )
+                )
+            # Freeze while two hands are present: no rotation and no translation.
+            return commands
+
+        if self._dual_scale_rotation_blocked_until_open and packet.pinch_state == "pinched":
+            return commands
+
         rotation_mode_active = self._rotation_mode_active(packet)
 
         if rotation_mode_active:
@@ -321,6 +449,10 @@ class BridgeServiceImpl(BridgeService):
             if hovered_object is None:
                 return commands
             if packet.pinch_state == "pinched":
+                if self._pinch_capture_lock_object_id is None:
+                    self._pinch_capture_lock_object_id = hovered_object.object_id
+                if hovered_object.object_id != self._pinch_capture_lock_object_id:
+                    return commands
                 self._grabbed_object_id = hovered_object.object_id
                 self._hovered_object_id = hovered_object.object_id
                 hovered_object.grab_offset_world = self._subtract_vec3(hovered_object.world_position, hand_anchor_world)
@@ -331,6 +463,7 @@ class BridgeServiceImpl(BridgeService):
             return commands
 
         grabbed_object = self._object_state(self._grabbed_object_id)
+        self._pinch_capture_lock_object_id = grabbed_object.object_id
         if packet.pinch_state == "open":
             self._grabbed_object_id = None
             commands.extend(self._set_object_interaction_state(packet, grabbed_object, BRIDGE_STATE_IDLE))
@@ -366,6 +499,9 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id = None
         self._grabbed_object_id = None
         self._rotation_object_id = None
+        self._pinch_capture_lock_object_id = None
+        self._dual_scale_rotation_blocked_until_open = False
+        self._stop_dual_scale_mode()
         self._interaction_state = BRIDGE_STATE_IDLE
         self._metrics.resets_emitted += 1
         return commands
@@ -381,6 +517,9 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id = None
         self._grabbed_object_id = None
         self._rotation_object_id = None
+        self._pinch_capture_lock_object_id = None
+        self._dual_scale_rotation_blocked_until_open = False
+        self._stop_dual_scale_mode()
         self._interaction_state = BRIDGE_STATE_IDLE
         return commands
 
@@ -389,6 +528,9 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id = None
         self._grabbed_object_id = None
         self._rotation_object_id = None
+        self._pinch_capture_lock_object_id = None
+        self._dual_scale_rotation_blocked_until_open = False
+        self._stop_dual_scale_mode()
         for descriptor in TABLE_SCENE_OBJECTS:
             if not bool(descriptor.get("interactable", True)):
                 continue
@@ -401,6 +543,11 @@ class BridgeServiceImpl(BridgeService):
                 ),
                 interaction_radius=float(descriptor.get("interaction_radius", HOVER_DISTANCE_THRESHOLD)),
                 half_height=float(descriptor["scale"]["y"]) * 0.5,
+                world_scale=(
+                    float(descriptor["scale"]["x"]),
+                    float(descriptor["scale"]["y"]),
+                    float(descriptor["scale"]["z"]),
+                ),
                 interaction_state=BRIDGE_STATE_IDLE,
                 initialized=True,
             )
@@ -494,6 +641,84 @@ class BridgeServiceImpl(BridgeService):
             payload=payload,
         )
 
+    def _make_secondary_hand_pose(self, packet: GesturePacket) -> SceneCommand | None:
+        secondary_hand = self._secondary_hand_state(packet)
+        if secondary_hand is None:
+            return None
+
+        payload: dict[str, Any] = {
+            "coordinate_space": "world_norm",
+            "visible": False,
+        }
+        if (
+            secondary_hand.tracking_state == "tracked"
+            and secondary_hand.confidence >= BRIDGE_MIN_TRACKING_CONFIDENCE
+        ):
+            index_tip_world = self._camera_to_world_position(secondary_hand.index_tip)
+            thumb_tip_world = self._camera_to_world_position(secondary_hand.thumb_tip)
+            wrist_world = self._camera_to_world_position(secondary_hand.wrist)
+            anchor_world = self._camera_to_world_position(self._anchor_from_tips(secondary_hand.index_tip, secondary_hand.thumb_tip))
+            thumb_base_world, index_base_world = self._finger_base_points(
+                wrist_world,
+                anchor_world,
+                thumb_tip_world,
+                index_tip_world,
+            )
+            payload["visible"] = True
+            payload["points"] = {
+                "wrist": vec3_payload(wrist_world),
+                "thumb_tip": vec3_payload(thumb_tip_world),
+                "index_tip": vec3_payload(index_tip_world),
+                "anchor": vec3_payload(anchor_world),
+                "thumb_base": vec3_payload(thumb_base_world),
+                "index_base": vec3_payload(index_base_world),
+            }
+
+        return SceneCommand(
+            contract_version=self._expected_contract_version,
+            command_id=make_command_id("set-hand-pose-secondary", packet.frame_id),
+            frame_id=packet.frame_id,
+            timestamp_ms=packet.timestamp_ms,
+            command_type="set_hand_pose",
+            object_id="hand-2",
+            payload=payload,
+        )
+
+    def _make_dual_scale_pose(
+        self,
+        packet: GesturePacket,
+        object_state: ObjectInteractionState,
+        *,
+        ratio: float,
+        distance_xy: float,
+    ) -> SceneCommand:
+        self._metrics.pose_updates += 1
+        return SceneCommand(
+            contract_version=self._expected_contract_version,
+            command_id=make_command_id("set-pose-scale", packet.frame_id),
+            frame_id=packet.frame_id,
+            timestamp_ms=packet.timestamp_ms,
+            command_type="set_object_pose",
+            object_id=object_state.object_id,
+            payload={
+                "coordinate_space": "world_norm",
+                # Keep position frozen while dual-scale is active.
+                "position": vec3_payload(object_state.world_position),
+                "scale": {
+                    "x": object_state.world_scale[0],
+                    "y": object_state.world_scale[1],
+                    "z": object_state.world_scale[2],
+                },
+                "debug": {
+                    "dual_scale": {
+                        "active": True,
+                        "ratio": ratio,
+                        "distance_xy": distance_xy,
+                    }
+                },
+            },
+        )
+
     def _finger_base_points(
         self,
         wrist_world: Vec3,
@@ -513,6 +738,169 @@ class BridgeServiceImpl(BridgeService):
         thumb_base = self._add_vec3(anchor_world, self._add_vec3(palm_pull, thumb_forward))
         index_base = self._add_vec3(anchor_world, self._add_vec3(palm_pull, index_forward))
         return thumb_base, index_base
+
+    @staticmethod
+    def _anchor_from_tips(index_tip: Vec3, thumb_tip: Vec3) -> Vec3:
+        return Vec3(
+            x=(index_tip.x + thumb_tip.x) * 0.5,
+            y=(index_tip.y + thumb_tip.y) * 0.5,
+            z=(index_tip.z + thumb_tip.z) * 0.5,
+        )
+
+    @staticmethod
+    def _vec3_from_payload(payload: dict[str, Any] | None) -> Vec3 | None:
+        if not isinstance(payload, dict):
+            return None
+        try:
+            return Vec3(float(payload["x"]), float(payload["y"]), float(payload["z"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _secondary_hand_payload(self, packet: GesturePacket) -> dict[str, Any] | None:
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return None
+        secondary = debug_payload.get("secondary_hand")
+        if isinstance(secondary, dict):
+            return secondary
+        dual_hand = debug_payload.get("dual_hand")
+        if isinstance(dual_hand, dict):
+            nested = dual_hand.get("secondary_hand")
+            if isinstance(nested, dict):
+                return nested
+        return None
+
+    def _secondary_hand_state(self, packet: GesturePacket) -> SecondaryHandState | None:
+        payload = self._secondary_hand_payload(packet)
+        if payload is None:
+            return None
+
+        index_tip = self._vec3_from_payload(payload.get("index_tip"))
+        thumb_tip = self._vec3_from_payload(payload.get("thumb_tip"))
+        wrist = self._vec3_from_payload(payload.get("wrist"))
+        if index_tip is None or thumb_tip is None or wrist is None:
+            return None
+
+        tracking_state = str(payload.get("tracking_state", "not_detected"))
+        pinch_state = str(payload.get("pinch_state", "open"))
+        try:
+            confidence = float(payload.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return SecondaryHandState(
+            tracking_state=tracking_state,
+            confidence=confidence,
+            pinch_state=pinch_state,
+            index_tip=index_tip,
+            thumb_tip=thumb_tip,
+            wrist=wrist,
+        )
+
+    def _secondary_hovered_object_id(self, secondary_hand: SecondaryHandState | None) -> str | None:
+        if secondary_hand is None:
+            return None
+        if (
+            secondary_hand.tracking_state != "tracked"
+            or secondary_hand.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE
+        ):
+            return None
+        secondary_anchor_world = self._camera_to_world_position(
+            self._anchor_from_tips(secondary_hand.index_tip, secondary_hand.thumb_tip)
+        )
+        secondary_hovered = self._select_hovered_object(secondary_anchor_world)
+        return None if secondary_hovered is None else secondary_hovered.object_id
+
+    @staticmethod
+    def _secondary_detected(secondary_hand: SecondaryHandState | None) -> bool:
+        if secondary_hand is None:
+            return False
+        if secondary_hand.tracking_state != "tracked":
+            return False
+        return True
+
+    def _dual_scale_target_object(
+        self,
+        packet: GesturePacket,
+        *,
+        hovered_object_id: str | None,
+        secondary_hovered_object_id: str | None,
+        secondary_hand: SecondaryHandState | None,
+    ) -> ObjectInteractionState | None:
+        if packet.pinch_state != "pinched":
+            return None
+        if secondary_hand is None or secondary_hand.pinch_state != "pinched":
+            return None
+        if secondary_hand.tracking_state != "tracked" or secondary_hand.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
+            return None
+        if hovered_object_id is None or secondary_hovered_object_id is None:
+            return None
+        if hovered_object_id != secondary_hovered_object_id:
+            return None
+        return self._object_state(hovered_object_id)
+
+    @staticmethod
+    def _distance_xy(a: Vec3, b: Vec3) -> float:
+        return math.sqrt(((a.x - b.x) ** 2) + ((a.y - b.y) ** 2))
+
+    def _stop_dual_scale_mode(self) -> None:
+        self._dual_scale_active = False
+        self._dual_scale_object_id = None
+        self._dual_scale_baseline_distance_xy = None
+        self._dual_scale_baseline_scale = None
+
+    def _handle_dual_scale_mode(
+        self,
+        packet: GesturePacket,
+        object_state: ObjectInteractionState,
+        primary_anchor_world: Vec3,
+        secondary_hand: SecondaryHandState | None,
+    ) -> list[SceneCommand]:
+        if secondary_hand is None:
+            self._stop_dual_scale_mode()
+            return []
+
+        secondary_anchor_world = self._camera_to_world_position(
+            self._anchor_from_tips(secondary_hand.index_tip, secondary_hand.thumb_tip)
+        )
+        distance_xy = self._distance_xy(primary_anchor_world, secondary_anchor_world)
+
+        if not self._dual_scale_active or self._dual_scale_object_id != object_state.object_id:
+            self._dual_scale_active = True
+            self._dual_scale_object_id = object_state.object_id
+            self._dual_scale_baseline_distance_xy = max(distance_xy, 1e-4)
+            self._dual_scale_baseline_scale = object_state.world_scale
+
+        baseline_distance = max(self._dual_scale_baseline_distance_xy or 1e-4, 1e-4)
+        baseline_scale = self._dual_scale_baseline_scale or object_state.world_scale
+        ratio_raw = distance_xy / baseline_distance
+        ratio = max(
+            DUAL_SCALE_RATIO_MIN,
+            min(DUAL_SCALE_RATIO_MAX, ratio_raw ** DUAL_SCALE_RATIO_EXPONENT),
+        )
+        self._dual_scale_ratio = ratio
+        object_state.world_scale = (
+            baseline_scale[0] * ratio,
+            baseline_scale[1] * ratio,
+            baseline_scale[2] * ratio,
+        )
+        self._grabbed_object_id = object_state.object_id
+        self._hovered_object_id = object_state.object_id
+        self._rotation_object_id = None
+        object_state.grab_offset_world = None
+        object_state.rotation_reference_hpr = None
+        object_state.rotation_reference_input = None
+
+        commands: list[SceneCommand] = []
+        commands.extend(self._set_object_interaction_state(packet, object_state, BRIDGE_STATE_GRABBING))
+        commands.append(
+            self._make_dual_scale_pose(
+                packet,
+                object_state,
+                ratio=ratio,
+                distance_xy=distance_xy,
+            )
+        )
+        return commands
 
     @staticmethod
     def _rotation_mode_active(packet: GesturePacket) -> bool:
@@ -753,6 +1141,7 @@ class BridgeServiceImpl(BridgeService):
         world_position: Vec3,
         interaction_radius: float,
         half_height: float,
+        world_scale: tuple[float, float, float],
         interaction_state: str,
         initialized: bool,
     ) -> ObjectInteractionState:
@@ -763,6 +1152,7 @@ class BridgeServiceImpl(BridgeService):
                 world_position=world_position,
                 interaction_radius=interaction_radius,
                 half_height=half_height,
+                world_scale=world_scale,
                 interaction_state=interaction_state,
                 initialized=initialized,
             )
@@ -772,6 +1162,7 @@ class BridgeServiceImpl(BridgeService):
         object_state.world_position = world_position
         object_state.interaction_radius = interaction_radius
         object_state.half_height = half_height
+        object_state.world_scale = world_scale
         object_state.interaction_state = interaction_state
         object_state.initialized = initialized
         return object_state
@@ -785,6 +1176,7 @@ class BridgeServiceImpl(BridgeService):
             world_position=INITIAL_OBJECT_POSITION,
             interaction_radius=HOVER_DISTANCE_THRESHOLD,
             half_height=0.1,
+            world_scale=(0.2, 0.2, 0.2),
             interaction_state=BRIDGE_STATE_IDLE,
             initialized=False,
         )

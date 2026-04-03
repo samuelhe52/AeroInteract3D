@@ -235,7 +235,8 @@ class App:
             packet = self.gesture_input.poll()
             if packet is not None:
                 self.render_output.update_gesture_data(packet)
-                rotation = packet.debug.get("rotation") if isinstance(packet.debug, dict) else None
+                packet_debug = getattr(packet, "debug", None)
+                rotation = packet_debug.get("rotation") if isinstance(packet_debug, dict) else None
                 if isinstance(rotation, dict):
                     self._rotation_log_counter += 1
                     if self._rotation_log_counter >= 6:
@@ -403,13 +404,15 @@ def build_app(config: AppConfig) -> App:
         frame_width=config.frame_width,
         frame_height=config.frame_height,
         preview_enabled=False,
+        motion_preset=config.motion_preset,
+        aggressive_release_guard=config.aggressive_release_guard,
     )
     bridge = BridgeServiceImpl(
         input_mirrored=config.flip_camera,
         rotation_sensitivity=config.bridge_rotation_sensitivity,
     )
     render_output = RenderingServiceImpl(
-        debug_stats_enabled=False,
+        debug_stats_enabled=config.debug_stats,
         position_sensitivity=config.render_position_sensitivity,
         virtual_hand_config=config.virtual_hand,
     )

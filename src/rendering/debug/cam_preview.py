@@ -240,6 +240,8 @@ class CameraPreviewManager:
         mode_target = 1
         tip_spread = 0.0
         grab_detected = False
+        scale_ratio = 1.0
+        scaling_active = False
         packet = self._last_packet
         if packet is not None and isinstance(packet.debug, dict):
             rotation = packet.debug.get("rotation")
@@ -258,6 +260,15 @@ class CameraPreviewManager:
                 mode_target = int(rotation.get("mode_target", 1))
                 tip_spread = float(rotation.get("tip_spread", 0.0))
                 grab_detected = bool(rotation.get("grab_detected", False))
+
+            dual_hand = packet.debug.get("dual_hand")
+            if isinstance(dual_hand, dict):
+                ratio = dual_hand.get("scale_ratio")
+                if isinstance(ratio, (int, float)):
+                    scale_ratio = float(ratio)
+                both_pinched = dual_hand.get("both_pinched")
+                if isinstance(both_pinched, bool):
+                    scaling_active = both_pinched
 
         text = f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})/{slot_count:02d}" if slot_count > 0 else f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})"
         state = "YES" if rotating else "NO"
@@ -285,7 +296,23 @@ class CameraPreviewManager:
             1,
             cv2.LINE_AA,
         )
-        cv2.putText(frame, "For best results, face the camera and hold a standard OK pose.", (18, 162), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (210, 210, 210), 1, cv2.LINE_AA)
+        if scale_ratio > 1.02:
+            scale_color = (90, 235, 120)
+        elif scale_ratio < 0.98:
+            scale_color = (255, 170, 90)
+        else:
+            scale_color = (220, 220, 220)
+        cv2.putText(
+            frame,
+            f"scale_ratio: {scale_ratio:.2f}x | scaling: {'YES' if scaling_active else 'NO'}",
+            (18, 162),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.34,
+            scale_color,
+            1,
+            cv2.LINE_AA,
+        )
+        cv2.putText(frame, "For best results, face the camera and hold a standard OK pose.", (18, 178), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (210, 210, 210), 1, cv2.LINE_AA)
         return frame
 
     def _hand_payload(self, packet: GesturePacket | None, field_name: str) -> dict[str, Any] | None:

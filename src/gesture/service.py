@@ -16,7 +16,7 @@ from src.gesture.constants import (
     GESTURE_FRAME_SUMMARY_INTERVAL,
     GESTURE_MOTION_PRESET,
 )
-from src.contracts import GesturePacket
+from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import CaptureRuntime, HandLandmarkerRuntime, RawHandObservation, distance_2d
 from src.gesture.temporal import MotionPreset, TemporalReducer, temporal_tuning_for_motion_preset
 from src.ports import DebugFrameSource, GestureInputPort
@@ -124,6 +124,8 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         self._primary_slot_handedness: str | None = None
         self._frame_id = 0
         self._last_timestamp_ms = 0
+        self._dual_scale_ratio: float = 1.0
+        self._dual_scale_baseline_distance_xy: float | None = None
 
     def start(self) -> None:
         if self.lifecycle_state == LIFECYCLE_RUNNING:
@@ -140,6 +142,8 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         self._primary_slot_handedness = None
         self._frame_id = 0
         self._last_timestamp_ms = 0
+        self._dual_scale_ratio = 1.0
+        self._dual_scale_baseline_distance_xy = None
 
         self._capture = self._build_capture()
         self._detector = self._build_detector()
@@ -459,11 +463,24 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         secondary_hand = self._build_hand_payload(secondary_packet, secondary_observation) if include_secondary else None
 
         debug_payload = dict(primary_packet.debug or {})
+        pinch_distance_xy = self._dual_pinch_distance_xy(primary_packet, secondary_packet)
+        both_pinched = self._both_hands_pinched(primary_packet, secondary_packet)
+        if both_pinched and pinch_distance_xy is not None:
+            if self._dual_scale_baseline_distance_xy is None:
+                self._dual_scale_baseline_distance_xy = max(pinch_distance_xy, 1e-4)
+            ratio_raw = pinch_distance_xy / max(self._dual_scale_baseline_distance_xy, 1e-4)
+            self._dual_scale_ratio = max(0.35, min(2.80, ratio_raw ** 0.85))
+        else:
+            self._dual_scale_baseline_distance_xy = None
+
         debug_payload["primary_hand"] = primary_hand
         debug_payload["secondary_hand"] = secondary_hand
         debug_payload["dual_hand"] = {
             "primary_hand": primary_hand,
             "secondary_hand": secondary_hand,
+            "pinch_distance_xy": pinch_distance_xy,
+            "both_pinched": both_pinched,
+            "scale_ratio": self._dual_scale_ratio,
             "active_hand_count": len(
                 [
                     payload
@@ -473,6 +490,36 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
             ),
         }
         return replace(primary_packet, debug=debug_payload)
+
+    @staticmethod
+    def _pinch_anchor(packet: GesturePacket) -> Vec3:
+        return Vec3(
+            x=(packet.index_tip.x + packet.thumb_tip.x) * 0.5,
+            y=(packet.index_tip.y + packet.thumb_tip.y) * 0.5,
+            z=(packet.index_tip.z + packet.thumb_tip.z) * 0.5,
+        )
+
+    def _dual_pinch_distance_xy(
+        self,
+        primary_packet: GesturePacket,
+        secondary_packet: GesturePacket,
+    ) -> float | None:
+        if primary_packet.tracking_state != "tracked" or secondary_packet.tracking_state != "tracked":
+            return None
+        primary_anchor = self._pinch_anchor(primary_packet)
+        secondary_anchor = self._pinch_anchor(secondary_packet)
+        dx = primary_anchor.x - secondary_anchor.x
+        dy = primary_anchor.y - secondary_anchor.y
+        return (dx ** 2 + dy ** 2) ** 0.5
+
+    @staticmethod
+    def _both_hands_pinched(primary_packet: GesturePacket, secondary_packet: GesturePacket) -> bool:
+        return (
+            primary_packet.tracking_state == "tracked"
+            and secondary_packet.tracking_state == "tracked"
+            and primary_packet.pinch_state == "pinched"
+            and secondary_packet.pinch_state == "pinched"
+        )
 
     def _build_hand_payload(
         self,

@@ -109,8 +109,12 @@ class RenderingServiceImpl(RenderOutputPort):
         self._last_gesture_packet = None
         self._last_observation = None
         self._last_hand_points_world: Dict[str, tuple[float, float, float]] = {}
+        self._last_hand_points_world_by_id: Dict[str, Dict[str, tuple[float, float, float]]] = {}
         # Virtual hand configuration
         self._virtual_hand_config = virtual_hand_config or {}
+        self._virtual_hands: Dict[str, VirtualHand] = {}
+        self._dual_scale_ratio: float = 1.0
+        self._dual_scale_active: bool = False
         self._last_fps = 0.0
         # FPS calculation related
         self._frame_times = []
@@ -399,6 +403,14 @@ class RenderingServiceImpl(RenderOutputPort):
                 root_np=base.render,
                 config=self._virtual_hand_config
             )
+            self._virtual_hands = {
+                "hand-1": self._virtual_hand,
+                "hand-2": VirtualHand(
+                    base=base,
+                    root_np=base.render,
+                    config=self._virtual_hand_config,
+                ),
+            }
             logger.info("Virtual hand initialized successfully with base.render as parent")
             
             # Switch state to RUNNING
@@ -596,9 +608,14 @@ class RenderingServiceImpl(RenderOutputPort):
         self._data_panel = None
         self._camera_preview = None
         self._auto_scaling = None
-        # Clean up virtual hand
+        # Clean up virtual hands
+        for virtual_hand in list(getattr(self, "_virtual_hands", {}).values()):
+            try:
+                virtual_hand.root.removeNode()
+            except Exception:
+                logger.exception("Failed to remove virtual hand node")
+        self._virtual_hands = {}
         if hasattr(self, '_virtual_hand') and self._virtual_hand:
-            self._virtual_hand.root.removeNode()
             self._virtual_hand = None
         self._status = LIFECYCLE_STOPPED
         logger.info("Rendering module stopped, all resources released")
@@ -612,6 +629,7 @@ class RenderingServiceImpl(RenderOutputPort):
             # 1. Parse command parameters.
             object_id = command.object_id
             payload = command.payload
+            self._update_dual_scale_status_from_pose_payload(payload)
 
             has_position = "position" in payload
             has_hpr = "hpr" in payload
@@ -863,13 +881,19 @@ class RenderingServiceImpl(RenderOutputPort):
     def _handle_set_hand_pose(self, command: SceneCommand) -> None:
         try:
             payload = command.payload
-            if not hasattr(self, "_virtual_hand") or self._virtual_hand is None:
+            if command.object_id == "hand-1":
+                # Reset scale-active flag every frame; dual-scale object pose may set it back to true.
+                self._set_dual_scale_status(ratio=self._dual_scale_ratio, active=False)
+
+            virtual_hand = self._resolve_virtual_hand(command.object_id)
+            if virtual_hand is None:
                 return
 
             visible = bool(payload.get("visible", False))
             if not visible:
+                self._last_hand_points_world_by_id[command.object_id] = {}
                 self._last_hand_points_world = {}
-                self._virtual_hand.update_points(None)
+                virtual_hand.update_points(None)
                 self._metrics.hand_pose_updates += 1
                 self._metrics.commands_applied += 1
                 return
@@ -929,8 +953,9 @@ class RenderingServiceImpl(RenderOutputPort):
                 scene_points[point_name] = PandaVec3(*scene_point)
                 cached_points[point_name] = tuple(clipped)
 
+            self._last_hand_points_world_by_id[command.object_id] = cached_points
             self._last_hand_points_world = cached_points
-            self._virtual_hand.update_points(scene_points)
+            virtual_hand.update_points(scene_points)
             self._metrics.hand_pose_updates += 1
             self._metrics.commands_applied += 1
         except Exception as e:
@@ -1139,6 +1164,14 @@ class RenderingServiceImpl(RenderOutputPort):
             logger.warning(f"Command ID {command.command_id} frame_id={command.frame_id} outdated (latest={self._latest_frame_id}), ignoring")
             return False
 
+        # Same-frame commands are expected (e.g., hand-1 and hand-2 poses in one frame).
+        if frame_status == "duplicate":
+            logger.debug(
+                "Accepting same-frame command id=%s frame_id=%s",
+                command.command_id,
+                command.frame_id,
+            )
+
         self._executed_command_ids.add(command.command_id)
         self._latest_frame_id = command.frame_id
         logger.debug(f"Updated latest frame_id: {self._latest_frame_id} (command ID: {command.command_id})")
@@ -1171,10 +1204,41 @@ class RenderingServiceImpl(RenderOutputPort):
         self._suppressed_pose_logs = 0
         self._last_gesture_packet = None
         self._last_hand_points_world = {}
+        self._last_hand_points_world_by_id = {}
+        self._dual_scale_ratio = 1.0
+        self._dual_scale_active = False
         self._last_fps = 0.0
         self._frame_times = []
         self._last_world_norm_pos = (0.0, 0.0, 0.0)
         self._last_scene_pos = (0.0, 0.0, 0.0)
+
+    def _resolve_virtual_hand(self, hand_id: str) -> VirtualHand | None:
+        if hand_id in self._virtual_hands:
+            return self._virtual_hands[hand_id]
+        if hasattr(self, "_virtual_hand") and self._virtual_hand is not None:
+            if hand_id == "hand-1":
+                self._virtual_hands[hand_id] = self._virtual_hand
+                return self._virtual_hand
+        return None
+
+    def _set_dual_scale_status(self, *, ratio: float, active: bool) -> None:
+        self._dual_scale_ratio = float(ratio)
+        self._dual_scale_active = bool(active)
+        if self._data_panel is not None:
+            self._data_panel.update_scale_status(scale_ratio=self._dual_scale_ratio, scaling_active=self._dual_scale_active)
+
+    def _update_dual_scale_status_from_pose_payload(self, payload: dict[str, Any]) -> None:
+        debug_payload = payload.get("debug")
+        if not isinstance(debug_payload, dict):
+            return None
+        dual_scale = debug_payload.get("dual_scale")
+        if not isinstance(dual_scale, dict):
+            return None
+        ratio = dual_scale.get("ratio", self._dual_scale_ratio)
+        active = dual_scale.get("active", False)
+        if isinstance(ratio, (int, float)):
+            self._set_dual_scale_status(ratio=float(ratio), active=bool(active))
+        return None
 
     @staticmethod
     def _supports_debug_overlay(rendering_core: RenderingCoreManager) -> bool:

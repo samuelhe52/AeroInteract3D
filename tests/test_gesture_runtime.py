@@ -264,3 +264,35 @@ def test_detect_reuses_single_gray_conversion_for_fallback_frames(monkeypatch: p
     assert calls.count(cv2.COLOR_BGR2RGB) == 1
     assert len(captured_gray) == 1
     assert captured_gray[0].shape == frame.shape[:2]
+
+
+def test_preview_window_draws_colored_scale_ratio_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    window = GesturePreviewWindow()
+    canvas = np.zeros((64, 64, 3), dtype=np.uint8)
+    text_calls: list[tuple[str, tuple[int, int, int]]] = []
+
+    def capture_text(image, text, org, font_face, font_scale, color, thickness=1, lineType=cv2.LINE_AA):
+        text_calls.append((text, color))
+
+    monkeypatch.setattr(cv2, "putText", capture_text)
+
+    packet = GesturePacket(
+        contract_version="2.0.0",
+        frame_id=3,
+        timestamp_ms=140,
+        hand_id="hand-1",
+        tracking_state="tracked",
+        confidence=0.95,
+        pinch_state="pinched",
+        index_tip=Vec3(0.0, 0.0, 0.0),
+        thumb_tip=Vec3(0.0, 0.0, 0.0),
+        wrist=Vec3(0.0, 0.0, 0.0),
+        coordinate_space="camera_norm",
+        debug={"dual_hand": {"scale_ratio": 1.23}},
+    )
+
+    window._draw_status_text(canvas, packet=packet, fps=30.0)
+
+    scale_lines = [entry for entry in text_calls if entry[0].startswith("scale_ratio:")]
+    assert scale_lines
+    assert scale_lines[-1][1] == window._colors.scale_up

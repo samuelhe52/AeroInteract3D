@@ -563,6 +563,73 @@ def test_rendering_updates_virtual_hand_from_scene_command() -> None:
     assert service.health()["stats"]["hand_pose_updates"] == 1
 
 
+def test_rendering_routes_hand_pose_to_both_virtual_hands() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    service._virtual_hands = {
+        "hand-1": FakeVirtualHand(),
+        "hand-2": FakeVirtualHand(),
+    }
+
+    base_payload = {
+        "coordinate_space": "world_norm",
+        "visible": True,
+        "points": {
+            "wrist": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "thumb_tip": {"x": 0.1, "y": 0.0, "z": 0.0},
+            "index_tip": {"x": -0.1, "y": 0.0, "z": 0.0},
+            "anchor": {"x": 0.0, "y": 0.05, "z": 0.0},
+        },
+    }
+
+    service.push(
+        make_command(
+            command_id="hand-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_hand_pose",
+            object_id="hand-1",
+            payload=base_payload,
+        )
+    )
+    service.push(
+        make_command(
+            command_id="hand-2",
+            frame_id=2,
+            timestamp_ms=120,
+            command_type="set_hand_pose",
+            object_id="hand-2",
+            payload=base_payload,
+        )
+    )
+
+    assert service._virtual_hands["hand-1"].last_points is not None
+    assert service._virtual_hands["hand-2"].last_points is not None
+
+
+def test_rendering_tracks_dual_scale_status_from_pose_payload() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    service._object_cache["primary_cube"] = FakeObjectNode()
+
+    service.push(
+        make_command(
+            command_id="pose-scale-debug",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={
+                "coordinate_space": "world_norm",
+                "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "debug": {"dual_scale": {"active": True, "ratio": 1.42, "distance_xy": 0.12}},
+            },
+        )
+    )
+
+    assert service._dual_scale_active is True
+    assert service._dual_scale_ratio == pytest.approx(1.42)
+
+
 def test_rendering_reset_restores_cached_scene_pose() -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING

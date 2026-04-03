@@ -45,6 +45,9 @@ class OverlayColors:
     secondary_bones: tuple[int, int, int] = (170, 90, 255)
     text: tuple[int, int, int] = (240, 240, 240)
     panel: tuple[int, int, int] = (20, 24, 32)
+    scale_neutral: tuple[int, int, int] = (220, 220, 220)
+    scale_up: tuple[int, int, int] = (90, 240, 120)
+    scale_down: tuple[int, int, int] = (255, 165, 80)
 
 
 class GesturePreviewWindow:
@@ -142,6 +145,42 @@ class GesturePreviewWindow:
                 1,
                 cv2.LINE_AA,
             )
+
+        scale_ratio = self._scale_ratio(packet)
+        scale_color = self._scale_ratio_color(scale_ratio)
+        cv2.putText(
+            canvas,
+            f"scale_ratio: {scale_ratio:.2f}x",
+            (24, 34 + (len(lines) * 18)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            scale_color,
+            2,
+            cv2.LINE_AA,
+        )
+
+    def _scale_ratio(self, packet: GesturePacket) -> float:
+        debug_payload = packet.debug if isinstance(packet.debug, dict) else {}
+        dual_scale = debug_payload.get("dual_scale") if isinstance(debug_payload, dict) else None
+        if isinstance(dual_scale, dict):
+            ratio = dual_scale.get("ratio")
+            if isinstance(ratio, (int, float)):
+                return float(ratio)
+
+        dual_hand = debug_payload.get("dual_hand") if isinstance(debug_payload, dict) else None
+        if isinstance(dual_hand, dict):
+            ratio = dual_hand.get("scale_ratio")
+            if isinstance(ratio, (int, float)):
+                return float(ratio)
+
+        return 1.0
+
+    def _scale_ratio_color(self, ratio: float) -> tuple[int, int, int]:
+        if ratio > 1.02:
+            return self._colors.scale_up
+        if ratio < 0.98:
+            return self._colors.scale_down
+        return self._colors.scale_neutral
 
     def _draw_landmarks(
         self,

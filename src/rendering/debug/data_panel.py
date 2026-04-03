@@ -32,8 +32,11 @@ class DataPanelManager:
         self._ui_scale: float = auto_scaling.get_ui_scale()
         self._status_frame: Optional[DirectFrame] = None
         self._status_panel: Optional[OnscreenText] = None
+        self._scale_panel: Optional[OnscreenText] = None
         self._last_world_norm_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._scale_ratio: float = 1.0
+        self._scaling_active: bool = False
         
         # ========== 新增代码开始 ==========
         # 新增：交互调试数据存储
@@ -85,6 +88,16 @@ class DataPanelManager:
                 fps: 0.0""",  # Text content (original logic preserved)
                 mayChange=True
             )
+
+            self._scale_panel = OnscreenText(
+                parent=self._pixel2d,
+                pos=(self.TEXT_OFFSET_X * self._ui_scale, -20 * self._ui_scale),
+                align=TextNode.ALeft,
+                scale=(self.TEXT_SCALE - 2) * self._ui_scale,
+                fg=(0.86, 0.86, 0.86, 1.0),
+                text="scale_ratio: 1.00x | scaling: NO",
+                mayChange=True,
+            )
             logger.info("Data panel initialized successfully")
         except Exception as e:
             logger.error(f"Data panel initialization failed: {str(e)}")
@@ -132,6 +145,8 @@ class DataPanelManager:
         # ========== 新增代码结束 ==========
         
         self._status_panel.setText("\n".join(lines))
+        self._update_scale_from_packet(packet)
+        self._refresh_scale_panel()
 
     @staticmethod
     def _rotation_lines(packet: GesturePacket) -> tuple[str, ...]:
@@ -162,6 +177,45 @@ class DataPanelManager:
         """Update coordinate data for display"""
         self._last_world_norm_pos = world_norm_pos
         self._last_scene_pos = scene_pos
+
+    def update_scale_status(self, *, scale_ratio: float, scaling_active: bool) -> None:
+        self._scale_ratio = float(scale_ratio)
+        self._scaling_active = bool(scaling_active)
+        self._refresh_scale_panel()
+
+    def _update_scale_from_packet(self, packet: Optional[GesturePacket]) -> None:
+        if packet is None:
+            return
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return
+        dual_hand = debug_payload.get("dual_hand")
+        if not isinstance(dual_hand, dict):
+            return
+
+        ratio = dual_hand.get("scale_ratio")
+        if isinstance(ratio, (int, float)):
+            self._scale_ratio = float(ratio)
+
+        # Fallback state when bridge-level dual-scale status is not available.
+        both_pinched = dual_hand.get("both_pinched")
+        if isinstance(both_pinched, bool) and not self._scaling_active:
+            self._scaling_active = both_pinched
+
+    def _refresh_scale_panel(self) -> None:
+        if self._scale_panel is None:
+            return
+
+        if self._scale_ratio > 1.02:
+            color = (0.42, 0.95, 0.48, 1.0)
+        elif self._scale_ratio < 0.98:
+            color = (1.0, 0.62, 0.35, 1.0)
+        else:
+            color = (0.86, 0.86, 0.86, 1.0)
+
+        status_text = "YES" if self._scaling_active else "NO"
+        self._scale_panel["fg"] = color
+        self._scale_panel.setText(f"scale_ratio: {self._scale_ratio:.2f}x | scaling: {status_text}")
 
     # ========== 新增代码开始 ==========
     def update_interaction_debug_data(
@@ -205,12 +259,18 @@ class DataPanelManager:
             new_scale = original_scale * scale
             self._status_panel['pos'] = new_pos
             self._status_panel['scale'] = new_scale
+        if self._scale_panel:
+            self._scale_panel['pos'] = (self.TEXT_OFFSET_X * scale, -20 * scale)
+            self._scale_panel['scale'] = (self.TEXT_SCALE - 2) * scale
     
     def destroy(self) -> None:
         """Clean up resources"""
         if self._status_panel:
             self._status_panel.destroy()
             self._status_panel = None
+        if self._scale_panel:
+            self._scale_panel.destroy()
+            self._scale_panel = None
         
         if self._status_frame:
             self._status_frame.destroy()

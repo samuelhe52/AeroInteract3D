@@ -7,6 +7,7 @@ import numpy as np
 import src.gesture.service as gesture_service
 from src.gesture.runtime import RawHandObservation
 from src.gesture.service import GestureServiceImpl
+from src.gesture.constants import ROT_SLOT_COUNT
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
 from src.contracts import Vec3
 
@@ -224,3 +225,10 @@ def test_gesture_service_emits_both_hands_in_debug_payload() -> None:
     assert packet.debug["dual_hand"]["active_hand_count"] == 2
     assert packet.debug["primary_hand"] is not None
     assert packet.debug["secondary_hand"] is not None
+    assert isinstance(packet.debug["dual_hand"]["pinch_distance_xy"], float)
+    assert packet.debug["dual_hand"]["both_pinched"] is False
+    assert packet.debug["dual_hand"]["scale_ratio"] == 1.0
+
+
+def test_rotation_slot_count_is_24() -> None:
+    assert ROT_SLOT_COUNT == 24
