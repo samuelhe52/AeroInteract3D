@@ -288,7 +288,7 @@ class GesturePreviewWindow:
             return False
         tracking_state = hand_payload.get("tracking_state")
         if not isinstance(tracking_state, str):
-            return True
+            return False
         return tracking_state != "not_detected"
 
     def _image_point(self, landmark: Vec3, *, width: int, height: int) -> tuple[int, int]:
