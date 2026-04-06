@@ -300,8 +300,8 @@ class CameraPreviewManager:
             return False
         tracking_state = hand_payload.get("tracking_state")
         if not isinstance(tracking_state, str):
-            return True
-        return tracking_state != "not_detected"
+            return False
+        return tracking_state == "tracked"
 
     def _landmark_to_pixel(self, landmark: Any, width: int, height: int) -> Tuple[int, int]:
         """Convert landmarks coordinates to pixel coordinates"""
