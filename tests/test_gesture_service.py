@@ -7,6 +7,7 @@ import numpy as np
 import src.gesture.service as gesture_service
 from src.gesture.runtime import RawHandObservation
 from src.gesture.service import GestureServiceImpl
+from src.gesture.constants import ROT_SLOT_COUNT
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
 from src.contracts import Vec3
 
@@ -53,12 +54,28 @@ class FakeDetector:
         self.closed = True
 
 
+class FakeDualHandDetector:
+    def __init__(self, **_: object) -> None:
+        self.closed = False
+
+    def detect_multi(self, frame, *, timestamp_ms: int):
+        assert frame is not None
+        assert timestamp_ms > 0
+        return [
+            make_observation(wrist_x=0.0),
+            make_observation(wrist_x=0.4),
+        ]
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class FakePreview:
     def __init__(self) -> None:
         self.calls = 0
         self.is_open = True
 
-    def render(self, frame, *, observation, packet) -> None:
+    def render(self, frame, *, observation, packet, secondary_observation=None) -> None:
         assert frame is not None
         assert packet.frame_id > 0
         self.calls += 1
@@ -191,3 +208,27 @@ def test_gesture_service_passes_flip_camera_setting_to_capture() -> None:
     service.start()
 
     assert captured_kwargs["flip_horizontal"] is False
+
+
+def test_gesture_service_emits_both_hands_in_debug_payload() -> None:
+    service = GestureServiceImpl(
+        capture_factory=FakeCapture,
+        detector_factory=FakeDualHandDetector,
+        clock=iter([7.0]).__next__,
+    )
+
+    service.start()
+    packet = service.poll()
+
+    assert packet is not None
+    assert packet.debug is not None
+    assert packet.debug["dual_hand"]["active_hand_count"] == 2
+    assert packet.debug["primary_hand"] is not None
+    assert packet.debug["secondary_hand"] is not None
+    assert isinstance(packet.debug["dual_hand"]["pinch_distance_xy"], float)
+    assert packet.debug["dual_hand"]["both_pinched"] is False
+    assert packet.debug["dual_hand"]["scale_ratio"] == 1.0
+
+
+def test_rotation_slot_count_is_24() -> None:
+    assert ROT_SLOT_COUNT == 24
