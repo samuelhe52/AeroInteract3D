@@ -386,7 +386,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 self._camera_preview = CameraPreviewManager(
                     self._auto_scaling,
                     top_margin=camera_top_margin,
-                    show_debug_chrome=self._debug_stats_enabled,
+                    show_debug_chrome=False,
                 )
             else:
                 logger.info("Rendering adapter does not expose pixel2d; skipping debug overlay initialization")

@@ -33,8 +33,7 @@ class CameraPreviewManager:
 
     PREVIEW_WIDTH = 384
     VIDEO_HEIGHT = 216
-    OVERLAY_HEIGHT = 184
-    PREVIEW_HEIGHT = VIDEO_HEIGHT + OVERLAY_HEIGHT
+    PREVIEW_HEIGHT = VIDEO_HEIGHT
     PREVIEW_MARGIN = 12
     TITLE_OFFSET_X = 18
     TITLE_OFFSET_Y = 20
@@ -144,17 +143,12 @@ class CameraPreviewManager:
         try:
             frame = cv2.resize(
                 self._camera_frame,
-                (self.PREVIEW_WIDTH, self.VIDEO_HEIGHT),
+                (self.PREVIEW_WIDTH, self.PREVIEW_HEIGHT),
                 interpolation=cv2.INTER_LINEAR,
             )
 
             frame = self._draw_hand_skeletons(frame)
-            canvas = np.zeros((self.PREVIEW_HEIGHT, self.PREVIEW_WIDTH, 3), dtype=np.uint8)
-            canvas[: self.OVERLAY_HEIGHT, :, :] = (12, 12, 14)
-            canvas[self.OVERLAY_HEIGHT :, :, :] = frame
-            self._draw_rotation_overlay(canvas)
-
-            self._camera_texture.setRamImageAs(np.ascontiguousarray(canvas), "BGR")
+            self._camera_texture.setRamImageAs(np.ascontiguousarray(frame), "BGR")
 
             # Update status text
             if self._camera_preview_status:
@@ -240,8 +234,6 @@ class CameraPreviewManager:
         mode_target = 1
         tip_spread = 0.0
         grab_detected = False
-        scale_ratio = 1.0
-        scaling_active = False
         packet = self._last_packet
         if packet is not None and isinstance(packet.debug, dict):
             rotation = packet.debug.get("rotation")
@@ -261,18 +253,9 @@ class CameraPreviewManager:
                 tip_spread = float(rotation.get("tip_spread", 0.0))
                 grab_detected = bool(rotation.get("grab_detected", False))
 
-            dual_hand = packet.debug.get("dual_hand")
-            if isinstance(dual_hand, dict):
-                ratio = dual_hand.get("scale_ratio")
-                if isinstance(ratio, (int, float)):
-                    scale_ratio = float(ratio)
-                both_pinched = dual_hand.get("both_pinched")
-                if isinstance(both_pinched, bool):
-                    scaling_active = both_pinched
-
         text = f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})/{slot_count:02d}" if slot_count > 0 else f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})"
         state = "YES" if rotating else "NO"
-        panel_bottom = min(self.OVERLAY_HEIGHT - 8, 184)
+        panel_bottom = min(self.PREVIEW_HEIGHT - 8, 184)
         cv2.rectangle(frame, (10, 12), (430, panel_bottom), (18, 22, 30), thickness=-1)
         cv2.rectangle(frame, (10, 12), (430, panel_bottom), (86, 96, 118), thickness=1)
         cv2.putText(frame, text, (18, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (235, 235, 235), 1, cv2.LINE_AA)
@@ -296,23 +279,7 @@ class CameraPreviewManager:
             1,
             cv2.LINE_AA,
         )
-        if scale_ratio > 1.02:
-            scale_color = (90, 235, 120)
-        elif scale_ratio < 0.98:
-            scale_color = (255, 170, 90)
-        else:
-            scale_color = (220, 220, 220)
-        cv2.putText(
-            frame,
-            f"scale_ratio: {scale_ratio:.2f}x | scaling: {'YES' if scaling_active else 'NO'}",
-            (18, 162),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.34,
-            scale_color,
-            1,
-            cv2.LINE_AA,
-        )
-        cv2.putText(frame, "For best results, face the camera and hold a standard OK pose.", (18, 178), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (210, 210, 210), 1, cv2.LINE_AA)
+        cv2.putText(frame, "For best results, face the camera and hold a standard OK pose.", (18, 162), cv2.FONT_HERSHEY_SIMPLEX, 0.30, (210, 210, 210), 1, cv2.LINE_AA)
         return frame
 
     def _hand_payload(self, packet: GesturePacket | None, field_name: str) -> dict[str, Any] | None:

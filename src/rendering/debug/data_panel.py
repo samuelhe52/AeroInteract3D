@@ -89,15 +89,6 @@ class DataPanelManager:
                 mayChange=True
             )
 
-            self._scale_panel = OnscreenText(
-                parent=self._pixel2d,
-                pos=(self.TEXT_OFFSET_X * self._ui_scale, -20 * self._ui_scale),
-                align=TextNode.ALeft,
-                scale=(self.TEXT_SCALE - 2) * self._ui_scale,
-                fg=(0.86, 0.86, 0.86, 1.0),
-                text="scale_ratio: 1.00x | scaling: NO",
-                mayChange=True,
-            )
             logger.info("Data panel initialized successfully")
         except Exception as e:
             logger.error(f"Data panel initialization failed: {str(e)}")
@@ -107,8 +98,12 @@ class DataPanelManager:
         """Update data panel display (original logic preserved)"""
         if not self._status_panel:
             return
-        
+
+        # Update scaling state first so the panel shows the latest ratio.
+        self._update_scale_from_packet(packet)
+
         if packet is None:
+            rotation_lines = self._default_rotation_lines()
             lines = (
                 "frame: 0",
                 "tracking: idle",
@@ -117,8 +112,12 @@ class DataPanelManager:
                 "pinch_distance: 0.000",
                 "wrist: (+0.00, +0.00, +0.00)",
                 f"fps: {fps:.1f}",
-            )
+                f"scale_ratio: {self._scale_ratio:.2f}x | scaling: {'YES' if self._scaling_active else 'NO'}",
+                f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
+                f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
+            ) + rotation_lines
         else:
+            rotation_lines = self._rotation_lines(packet) or self._default_rotation_lines()
             lines = (
                 f"frame: {packet.frame_id}",
                 f"tracking: {packet.tracking_state}",
@@ -127,9 +126,10 @@ class DataPanelManager:
                 f"pinch_distance: {0.0 if packet.pinch_distance is None else packet.pinch_distance:.3f}",
                 f"wrist: ({packet.wrist.x:+.2f}, {packet.wrist.y:+.2f}, {packet.wrist.z:+.2f})",
                 f"fps: {fps:.1f}",
+                f"scale_ratio: {self._scale_ratio:.2f}x | scaling: {'YES' if self._scaling_active else 'NO'}",
                 f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
                 f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
-            ) + self._rotation_lines(packet)
+            ) + rotation_lines
 
         # ========== 新增代码开始 ==========
         # 新增：交互调试信息（放在所有内容的最后）
@@ -143,10 +143,16 @@ class DataPanelManager:
         # 合并原有lines和新增的调试信息
         lines = lines + interaction_debug_lines
         # ========== 新增代码结束 ==========
-        
+
         self._status_panel.setText("\n".join(lines))
-        self._update_scale_from_packet(packet)
         self._refresh_scale_panel()
+
+    @staticmethod
+    def _default_rotation_lines() -> tuple[str, str]:
+        return (
+            "rot: MOVE_ONLY move/idle g00",
+            "xyz: +00.0 +00.0 +00.0",
+        )
 
     @staticmethod
     def _rotation_lines(packet: GesturePacket) -> tuple[str, ...]:
@@ -259,9 +265,6 @@ class DataPanelManager:
             new_scale = original_scale * scale
             self._status_panel['pos'] = new_pos
             self._status_panel['scale'] = new_scale
-        if self._scale_panel:
-            self._scale_panel['pos'] = (self.TEXT_OFFSET_X * scale, -20 * scale)
-            self._scale_panel['scale'] = (self.TEXT_SCALE - 2) * scale
     
     def destroy(self) -> None:
         """Clean up resources"""
