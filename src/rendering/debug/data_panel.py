@@ -99,9 +99,6 @@ class DataPanelManager:
         if not self._status_panel:
             return
 
-        # Update scaling state first so the panel shows the latest ratio.
-        self._update_scale_from_packet(packet)
-
         if packet is None:
             rotation_lines = self._default_rotation_lines()
             lines = (
