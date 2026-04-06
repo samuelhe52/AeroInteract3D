@@ -7,9 +7,7 @@ import numpy as np
 from typing import Optional, Any, Tuple
 from pathlib import Path
 
-from panda3d.core import Texture, CardMaker, TextNode, NodePath
-from direct.gui.OnscreenText import OnscreenText
-from direct.gui.DirectFrame import DirectFrame
+from panda3d.core import Texture, CardMaker, NodePath
 
 # Allow this module to be imported both as a package module and from direct script execution.
 try:
@@ -44,22 +42,17 @@ class CameraPreviewManager:
         auto_scaling: AutoScalingManager,
         *,
         top_margin: int = PREVIEW_MARGIN,
-        show_debug_chrome: bool = False,
     ):
         """Initialize camera preview manager (dependency injection: auto_scaling)"""
         self._auto_scaling: AutoScalingManager = auto_scaling
         self._pixel2d = auto_scaling._rendering_core.get_pixel2d()
         self._ui_scale: float = auto_scaling.get_ui_scale()
         self._top_margin = top_margin
-        self._show_debug_chrome = show_debug_chrome
         self._camera_frame: Optional[np.ndarray] = None
         self._last_observation: Optional[RawHandObservation] = None
         self._last_packet: Optional[GesturePacket] = None
         self._camera_texture: Optional[Texture] = None
         self._camera_preview_node: Optional[NodePath] = None
-        self._camera_preview_frame: Optional[DirectFrame] = None
-        self._camera_preview_title: Optional[OnscreenText] = None
-        self._camera_preview_status: Optional[OnscreenText] = None
         self._camera_preview_enabled: bool = False
         self._last_camera_update_time: float = 0
         self._camera_update_interval: float = 0.033  # 30fps
@@ -69,27 +62,6 @@ class CameraPreviewManager:
     def init_preview(self, data_panel_raw_params=None) -> None:
         """Initialize camera preview window (original logic preserved)"""
         try:
-            if self._show_debug_chrome:
-                self._camera_preview_frame = DirectFrame(
-                    parent=self._pixel2d,
-                    pos=(self.PREVIEW_MARGIN * self._ui_scale, 0, -self._top_margin * self._ui_scale),
-                    frameSize=(0, self.PREVIEW_WIDTH * self._ui_scale, -self.PREVIEW_HEIGHT * self._ui_scale, 0),
-                    frameColor=(0.08, 0.09, 0.13, 0.96),
-                    relief=1,
-                    borderWidth=(1, 1),
-                    color=(20 / 255, 24 / 255, 32 / 255, 1.0),
-                )
-
-                self._camera_preview_status = OnscreenText(
-                    parent=self._pixel2d,
-                    pos=((self.PREVIEW_MARGIN + self.TITLE_OFFSET_X) * self._ui_scale, -(self._top_margin + self.STATUS_OFFSET_Y) * self._ui_scale),
-                    align=TextNode.ALeft,
-                    scale=12 * self._ui_scale,
-                    fg=(0.8, 0.8, 0.8, 1.0),
-                    text="Camera: Not Connected",
-                    mayChange=True,
-                )
-
             # Create camera preview texture and node
             self._camera_texture = Texture("camera_preview")
             self._camera_texture.setup2dTexture(
@@ -150,14 +122,8 @@ class CameraPreviewManager:
             frame = self._draw_hand_skeletons(frame)
             self._camera_texture.setRamImageAs(np.ascontiguousarray(frame), "BGR")
 
-            # Update status text
-            if self._camera_preview_status:
-                self._camera_preview_status.setText("Camera: Active")
-
         except Exception as e:
             logger.warning(f"Camera preview update failed: {str(e)}")
-            if self._camera_preview_status:
-                self._camera_preview_status.setText("Camera: Error")
 
     def _draw_hand_skeletons(self, frame: np.ndarray) -> np.ndarray:
         """Draw primary and secondary hand skeletons in the in-window camera preview."""
@@ -311,45 +277,12 @@ class CameraPreviewManager:
         """Set UI scale factor and update size and position of all UI elements"""
         self._ui_scale = scale
 
-        # Scale camera preview window
-        if self._camera_preview_frame:
-            original_pos = (self.PREVIEW_MARGIN, 0, -self._top_margin)
-            original_size = (0, self.PREVIEW_WIDTH, -self.PREVIEW_HEIGHT, 0)
-            new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
-            new_size = (original_size[0], original_size[1] * scale, original_size[2] * scale, original_size[3])
-            self._camera_preview_frame.setPos(*new_pos)
-            self._camera_preview_frame['frameSize'] = new_size
-
-        # Scale camera preview title
-        if self._camera_preview_title:
-            try:
-                original_pos = (self.PREVIEW_MARGIN + self.TITLE_OFFSET_X, -(self._top_margin + self.TITLE_OFFSET_Y))
-                original_scale = 16
-                new_pos = (original_pos[0] * scale, original_pos[1] * scale)
-                new_scale = original_scale * scale
-                self._camera_preview_title['pos'] = (new_pos[0], 0, new_pos[1])
-                self._camera_preview_title['scale'] = new_scale
-            except Exception as e:
-                logger.warning(f"Failed to scale camera preview title: {e}")
-
         # Scale camera preview node
         if self._camera_preview_node:
             try:
                 self._apply_preview_node_transform(scale)
             except Exception as e:
                 logger.warning(f"Failed to scale camera preview node: {e}")
-
-        # Scale camera preview status text
-        if self._camera_preview_status:
-            try:
-                original_pos = (self.PREVIEW_MARGIN + self.TITLE_OFFSET_X, -(self._top_margin + self.STATUS_OFFSET_Y))
-                original_scale = 12
-                new_pos = (original_pos[0] * scale, original_pos[1] * scale)
-                new_scale = original_scale * scale
-                self._camera_preview_status['pos'] = (new_pos[0], 0, new_pos[1])
-                self._camera_preview_status['scale'] = new_scale
-            except Exception as e:
-                logger.warning(f"Failed to scale camera preview status: {e}")
 
     def _apply_preview_node_transform(self, scale: float | None = None) -> None:
         if self._camera_preview_node is None:
@@ -369,18 +302,6 @@ class CameraPreviewManager:
         if self._camera_preview_node is not None:
             self._camera_preview_node.removeNode()
             self._camera_preview_node = None
-
-        if self._camera_preview_frame:
-            self._camera_preview_frame.destroy()
-            self._camera_preview_frame = None
-
-        if self._camera_preview_title:
-            self._camera_preview_title.destroy()
-            self._camera_preview_title = None
-
-        if self._camera_preview_status:
-            self._camera_preview_status.destroy()
-            self._camera_preview_status = None
 
         self._camera_frame = None
         self._last_observation = None
