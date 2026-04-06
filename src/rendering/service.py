@@ -27,7 +27,7 @@ from .interaction import VirtualHand
 logger = logging.getLogger("rendering_service")
 VALID_PAYLOAD_KEYS = {
     "init_scene": {"objects"},
-    "set_object_pose": {"coordinate_space", "position", "hpr"},
+    "set_object_pose": {"coordinate_space", "position", "hpr", "scale", "debug"},
     "set_object_state": {"interaction_state"},
     "set_hand_pose": {"coordinate_space", "visible", "points"},
     "reset_interaction": set(),
@@ -632,6 +632,7 @@ class RenderingServiceImpl(RenderOutputPort):
 
             has_position = "position" in payload
             has_hpr = "hpr" in payload
+            has_scale = "scale" in payload
 
             # 2. Parse position parameters (support dict{x,y,z} or 3D list/tuple).
             pos: list[float] | None = None
@@ -700,7 +701,23 @@ class RenderingServiceImpl(RenderOutputPort):
                     )
                     logger.warning(f"set_object_pose command format error: hpr must be dict or 3-dimensional list (ID: {command.command_id}")
                     return
-            
+
+            # 3b. Parse scale parameters (support dict{x,y,z} or 3D list/tuple).
+            scale: list[float] | None = None
+            if has_scale:
+                scale_data = payload["scale"]
+                if isinstance(scale_data, dict):
+                    parsed = self._parse_xyz_dict(scale_data, keys=("x", "y", "z"))
+                    if parsed is not None:
+                        scale = list(parsed)
+                    else:
+                        logger.warning(f"set_object_pose scale dict missing required keys (ID: {command.command_id})")
+                elif isinstance(scale_data, (list, tuple)) and len(scale_data) == 3:
+                    try:
+                        scale = [float(v) for v in scale_data]
+                    except (TypeError, ValueError):
+                        scale = None
+
             # 4. Validate format and convert to float
             def validate_and_convert_to_float(values):
                 if len(values) != 3:
@@ -784,6 +801,9 @@ class RenderingServiceImpl(RenderOutputPort):
                 obj_np.setPos(*scene_pos)
             if hpr_float is not None:
                 obj_np.setHpr(*clipped_hpr)
+            if scale is not None and all(v > 0.0 for v in scale):
+                scene_scale = self._world_norm_to_scene_scale(scale)
+                obj_np.setScale(*scene_scale)
             self._metrics.pose_updates += 1
             self._metrics.commands_applied += 1
             
