@@ -6,7 +6,7 @@ import logging
 from typing import List, Dict, Optional, Set, Any, Callable
 
 from panda3d.core import (
-    Material, Vec4, NodePath, Vec3 as PandaVec3
+    Material, Vec4, NodePath, Vec3 as PandaVec3, Loader
 )
 
 from src.constants import MAX_ERROR_HISTORY, RENDER_POSE_LOG_DEBOUNCE_MS
@@ -70,6 +70,235 @@ class RenderingMetrics:
     heartbeats_received: int = 0
     render_steps: int = 0
 
+@dataclass(slots=True)
+class ModelTemplate:
+    """模型模板元数据，注册时定义，一次注册永久复用"""
+    shape_id: str  # 唯一标识，和Bridge配置里的shape字段一一对应
+    model_path: str  # 模型文件路径（支持glb/egg/bam，内置模型用models/xxx）
+    center_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)  # 锚点居中修正，和现有box_offset兼容
+    default_scale: tuple[float, float, float] = (1.0, 1.0, 1.0)  # 默认缩放
+    two_sided: bool = False  # 是否开启双面渲染
+    preload: bool = False  # 是否启动时预加载，默认懒加载
+    use_builtin_materials: bool = True
+
+
+class ModelResourceFactory:
+    """
+    通用模型资源工厂
+    核心能力：注册一次模型，全场景复用，新增模型仅需一行register代码
+    """
+    def __init__(self, loader: Loader, auto_scan_dir: str | None = None):
+        self._loader = loader
+        self._template_registry: Dict[str, ModelTemplate] = {}
+        self._model_cache: Dict[str, NodePath] = {}
+        # 新增：保存材质缓存的引用，后续自动绑定材质用
+        self._material_cache: Dict[str, Material] = {}
+        self._init_builtin_templates()
+        
+        # 新增：如果指定了自动扫描文件夹，启动时自动扫描
+        if auto_scan_dir:
+            self.auto_scan_and_register(auto_scan_dir)
+
+
+    def _init_builtin_templates(self):
+        """初始化内置基础形状，100%兼容现有代码的shape约定"""
+        # 兼容现有shape：cube/tile/pillar/plane
+        self.register_template(ModelTemplate(
+            shape_id="cube",
+            model_path="models/box",
+            center_offset=(-0.5, -0.5, -0.5)  # 兼容现有box锚点修正逻辑
+        ))
+        self.register_template(ModelTemplate(
+            shape_id="tile",
+            model_path="models/box",
+            center_offset=(-0.5, -0.5, -0.5)
+        ))
+        self.register_template(ModelTemplate(
+            shape_id="pillar",
+            model_path="models/cylinder",
+            center_offset=(0.0, 0.0, -0.5)
+        ))
+        self.register_template(ModelTemplate(
+            shape_id="plane",
+            model_path="models/plane",
+            center_offset=(0.0, 0.0, 0.0)
+        ))
+        # 内置额外基础形状，开箱即用
+        self.register_template(ModelTemplate(
+            shape_id="sphere",
+            model_path="models/sphere",
+            center_offset=(0.0, 0.0, 0.0)
+        ))
+        self.register_template(ModelTemplate(
+            shape_id="cylinder",
+            model_path="models/cylinder",
+            center_offset=(0.0, 0.0, -0.5)
+        ))
+        logger.info("Built-in model templates initialized")
+
+    def set_material_cache(self, material_cache: Dict[str, Material]) -> None:
+        """
+        【重要】绑定RenderingServiceImpl的材质缓存
+        必须在工厂初始化后、创建实例前调用
+        """
+        self._material_cache = material_cache
+        logger.info("材质缓存已绑定到模型工厂")
+
+    def auto_scan_and_register(self, models_dir: str) -> None:
+        """
+        自动扫描指定文件夹，注册所有 glb/egg/bam 模型
+        文件名（不含后缀）自动作为 shape_id
+        """
+        import os
+
+        print(f"[DEBUG] 传入的 models_dir: {models_dir}")
+        print(f"[DEBUG] 绝对路径: {os.path.abspath(models_dir)}")
+        print(f"[DEBUG] 文件夹是否存在: {os.path.isdir(models_dir)}")
+        print(f"[DEBUG] 文件夹里的文件列表: {os.listdir(models_dir) if os.path.isdir(models_dir) else 'N/A'}")
+        
+        if not os.path.isdir(models_dir):
+            logger.warning(f"自动扫描文件夹不存在：{models_dir}，跳过自动注册")
+            return
+        
+        supported_formats = (".glb", ".egg", ".bam")
+        registered_count = 0
+        
+        for filename in os.listdir(models_dir):
+            file_path = os.path.join(models_dir, filename)
+            if not os.path.isfile(file_path):
+                continue
+            
+            # 检查文件格式
+            if filename.lower().endswith(supported_formats):
+                # 提取文件名（不含后缀）作为 shape_id
+                shape_id = os.path.splitext(filename)[0]
+                # 自动注册，默认使用内置四态材质
+                self.register_template(ModelTemplate(
+                    shape_id=shape_id,
+                    model_path=file_path,
+                    center_offset=(0.0, 0.0, 0.0),
+                    use_builtin_materials=True
+                ))
+                registered_count += 1
+        
+        logger.info(f"自动扫描完成，共注册 {registered_count} 个自定义模型")
+
+    def register_template(self, template: ModelTemplate) -> None:
+        """
+        注册新模型模板，【新增自定义模型的核心入口，仅需这一行】
+        示例：factory.register_template(ModelTemplate(shape_id="teapot", model_path="models/teapot.glb"))
+        """
+        if template.shape_id in self._template_registry:
+            logger.warning(f"Shape ID {template.shape_id} already registered, overwriting")
+        
+        self._template_registry[template.shape_id] = template
+        # 预加载模型
+        if template.preload:
+            self._load_model_template(template.shape_id)
+        logger.info(f"Model template registered: {template.shape_id}")
+
+    def _load_model_template(self, shape_id: str) -> Optional[NodePath]:
+        """内部方法：懒加载模型模板，仅第一次使用时加载"""
+        # 命中缓存直接返回
+        if shape_id in self._model_cache:
+            return self._model_cache[shape_id]
+        
+        # 检查模板是否注册
+        if shape_id not in self._template_registry:
+            logger.error(f"Shape ID {shape_id} not registered, fallback to cube")
+            return self._load_model_template("cube")
+        
+        template = self._template_registry[shape_id]
+        try:
+            # ========== 修复：区分内置模型和自定义模型 ==========
+            import os
+            from panda3d.core import Filename
+            
+            # 判断是否是绝对路径（自定义模型）
+            is_custom_model = os.path.isabs(template.model_path) or template.model_path.startswith("\\\\")
+            
+            if is_custom_model:
+                # 【自定义模型】用Panda3D的Filename处理，兼容WSL/Windows混合环境
+                model_filename = Filename.fromOsSpecific(template.model_path)
+                model_filename.makeAbsolute()
+                print(f"[DEBUG] 加载自定义模型，规范化路径: {model_filename}")
+                print(f"[DEBUG] 路径是否存在: {model_filename.exists()}")
+                model = self._loader.loadModel(model_filename)
+            else:
+                # 【内置模型】直接传原字符串，让Panda3D在model-path里找
+                print(f"[DEBUG] 加载内置模型: {template.model_path}")
+                model = self._loader.loadModel(template.model_path)
+            
+            if model.isEmpty():
+                raise RuntimeError(f"模型文件 {template.model_path} 无效或为空")
+            # ========== 路径处理结束 ==========
+            
+            # 关闭默认纹理，避免材质冲突，兼容现有代码逻辑
+            model.setTextureOff(1)
+            # 应用锚点修正
+            model.setPos(*template.center_offset)
+            # 双面渲染设置
+            if template.two_sided:
+                model.setTwoSided(True)
+            
+            # 存入缓存
+            self._model_cache[shape_id] = model
+            logger.info(f"Model template loaded and cached: {shape_id}")
+            return model
+        
+        except Exception as e:
+            logger.error(f"Failed to load model {shape_id}: {str(e)}, fallback to cube", exc_info=True)
+            return self._load_model_template("cube")
+
+    def create_instance(
+        self,
+        shape_id: str,
+        parent: NodePath,
+        object_id: str,
+        scale: tuple[float, float, float],
+        color: tuple[float, float, float, float],
+        interactable: bool
+    ) -> NodePath:
+        """
+        创建模型实例，自动绑定内置四态材质
+        """
+        # 1. 加载模型模板
+        template_model = self._load_model_template(shape_id)
+        if template_model is None:
+            raise RuntimeError(f"模型 {shape_id} 模板加载失败")
+        
+        # 2. 创建节点树
+        object_np = parent.attachNewNode(object_id)
+        visual_np = object_np.attachNewNode(f"{object_id}_visual")
+        
+        # 3. 复制模型模板
+        template_model.copyTo(visual_np)
+
+        visual_np.setScale(*scale)
+
+        
+        # 4. 应用颜色和透明度
+        visual_np.setColorScale(*color)
+        visual_np.setTransparency(1)
+        
+        # 5. 【新增】自动绑定默认 idle 材质
+        if self._material_cache and "idle" in self._material_cache:
+            visual_np.setMaterial(self._material_cache["idle"], 1)
+        
+        # 6. 应用标签
+        object_np.setTag("shape", shape_id)
+        object_np.setTag("interactable", "1" if interactable else "0")
+        
+        logger.debug(f"模型实例创建成功：{object_id}, shape={shape_id}，材质已绑定")
+        return object_np
+
+    def clear_cache(self) -> None:
+        """清空模型缓存，场景重置时调用，兼容现有reset逻辑"""
+        for model in self._model_cache.values():
+            model.removeNode()
+        self._model_cache.clear()
+        logger.info("Model cache cleared")
+
 
 class RenderingServiceImpl(RenderOutputPort):
     """Core RenderOutputPort implementation for rendering SceneCommand stream (integrates all submodules)"""
@@ -81,8 +310,31 @@ class RenderingServiceImpl(RenderOutputPort):
         debug_stats_enabled: bool = False,
         position_sensitivity: float = 1.0,
         virtual_hand_config: dict | None = None,
+        custom_models_dir: str | None = None,
     ):
         super().__init__()
+        # ========== 100%正确的路径计算，无拼写错误 ==========
+        import os
+        import sys
+        # 直接从main.py所在目录获取项目根目录，兼容WSL环境
+        if hasattr(sys.modules['__main__'], '__file__'):
+            main_file_path = sys.modules['__main__'].__file__
+            project_root = os.path.dirname(os.path.abspath(main_file_path))
+        else:
+            project_root = os.getcwd()
+        
+        # 拼接默认的自定义模型文件夹绝对路径
+        DEFAULT_MODELS_DIR = os.path.join(project_root, "assets", "custom_models")
+        # 【修复】正确赋值给self._custom_models_dir，无拼写错误
+        self._custom_models_dir = custom_models_dir or DEFAULT_MODELS_DIR
+        
+        # 【新增】打印确认，确保路径正确
+        print("="*50)
+        print(f"[DEBUG] 最终传入工厂的自定义模型路径: {self._custom_models_dir}")
+        print(f"[DEBUG] 路径是否存在: {os.path.isdir(self._custom_models_dir)}")
+        print("="*50)
+        # ========== 路径计算结束 ==========
+
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
         self._window_adapter_factory = window_adapter_factory or RenderingCoreManager
         self._window_adapter = self._window_adapter_factory()
@@ -124,6 +376,8 @@ class RenderingServiceImpl(RenderOutputPort):
         self._auto_scaling: Optional[AutoScalingManager] = None
         self._last_world_norm_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        # 初始化模型工厂占位符
+        self._model_factory: Optional[ModelResourceFactory] = None
 
     @staticmethod
     def _box_model_center_offset() -> tuple[float, float, float]:
@@ -292,9 +546,8 @@ class RenderingServiceImpl(RenderOutputPort):
             return None
 
         shape = str(obj_data.get("shape", "cube")).lower()
-        if shape not in {"cube", "tile", "pillar", "plane"}:
-            logger.warning(f"Unknown init_scene shape '{shape}' for {object_id}, defaulting to cube")
-            shape = "cube"
+        logger.info(f"解析到模型shape: {shape}，object_id: {object_id}")
+
 
         scale_data = obj_data.get("scale", {"x": 0.2, "y": 0.2, "z": 0.2})
         if isinstance(scale_data, dict):
@@ -336,16 +589,26 @@ class RenderingServiceImpl(RenderOutputPort):
             interactable=interactable,
         )
 
-    def _create_scene_object(self, descriptor: SceneObjectDescriptor, box_template: NodePath) -> NodePath:
-        object_np = self._scene_root.attachNewNode(descriptor.object_id)
-        visual_np = object_np.attachNewNode(f"{descriptor.object_id}_visual")
-        model_np = box_template.copyTo(visual_np)
-        model_np.setPos(*self._box_model_center_offset())
-        model_np.setColorScale(*descriptor.color)
-        model_np.setTransparency(1)
-        object_np.setScale(*self._world_norm_to_scene_scale(descriptor.scale))
-        object_np.setTag("shape", descriptor.shape)
-        object_np.setTag("interactable", "1" if descriptor.interactable else "0")
+    def _create_scene_object(self, descriptor: SceneObjectDescriptor, box_template: NodePath = None) -> NodePath:
+        """
+        替换原有硬编码实现，改为工厂模式创建
+        入参、返回值完全兼容原有代码，无需修改其他逻辑
+        """
+        if self._model_factory is None:
+            raise RuntimeError("Model factory not initialized, call start() first")
+        
+        # 先做坐标转换，把world_norm的scale转成Panda3D场景scale
+        scene_scale = self._world_norm_to_scene_scale(descriptor.scale)
+        
+        # 【修复】传入转换后的scene_scale，而不是原始的descriptor.scale
+        object_np = self._model_factory.create_instance(
+            shape_id=descriptor.shape,
+            parent=self._scene_root,
+            object_id=descriptor.object_id,
+            scale=scene_scale,
+            color=descriptor.color,
+            interactable=descriptor.interactable
+        )
         return object_np
     
     def start(self) -> None:
@@ -387,6 +650,26 @@ class RenderingServiceImpl(RenderOutputPort):
             else:
                 logger.info("Rendering adapter does not expose pixel2d; skipping debug overlay initialization")
             
+            # 实例化模型工厂，开启自动扫描
+            base = self._rendering_core.get_base()
+            
+            # ========== 新增：把自定义模型文件夹添加到Panda3D的模型搜索路径 ==========
+            from panda3d.core import Filename, getModelPath
+            model_path = getModelPath()
+            # 把我们的文件夹添加到搜索路径最前面
+            custom_models_filename = Filename.fromOsSpecific(self._custom_models_dir)
+            custom_models_filename.makeAbsolute()
+            model_path.prependDirectory(custom_models_filename)
+            print(f"[DEBUG] Panda3D模型搜索路径已更新: {model_path}")
+            # ========== 搜索路径添加结束 ==========
+            
+            self._model_factory = ModelResourceFactory(
+                loader=base.loader,
+                auto_scan_dir=self._custom_models_dir
+            )
+            # 绑定材质缓存
+            self._model_factory.set_material_cache(self._material_cache)
+
             # Create scene root node
             self._scene_root = NodePath("scene_root")
             self._scene_root.reparentTo(self._rendering_core.get_base().render)
@@ -400,7 +683,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 config=self._virtual_hand_config
             )
             logger.info("Virtual hand initialized successfully with base.render as parent")
-            
+
             # Switch state to RUNNING
             self._status = LIFECYCLE_RUNNING
             logger.info("Rendering module started successfully, state switched to RUNNING")
@@ -1012,6 +1295,9 @@ class RenderingServiceImpl(RenderOutputPort):
             # Reset scene
             if self._scene_root is not None and not self._scene_root.isEmpty():
                 self._rendering_core.reset_scene(self._scene_root)
+                # 清空模型缓存，避免重复加载
+                if self._model_factory:
+                    self._model_factory.clear_cache()
                 self._object_cache.clear()
                 self._object_initial_states.clear()
                 logger.info("Duplicate init_scene received, scene cache reset")

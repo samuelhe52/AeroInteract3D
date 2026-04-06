@@ -115,6 +115,32 @@ TABLE_SCENE_OBJECTS: tuple[dict[str, Any], ...] = (
         "interactable": True,
         "interaction_radius": 0.16,
     },
+        # 新增自定义模型配置，和原有格式完全一致
+    {
+        "object_id": "my_teapot",
+        "init_pos": {"x": 0.5, "y": -0.08, "z": 0.18},
+        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": "idle",
+        "shape": "teapot",  # 和Rendering侧注册的shape_id完全一致
+        "scale": {"x": 0.2, "y": 0.2, "z": 0.2},
+        "color": {"r": 0.2, "g": 0.6, "b": 0.9, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.18,
+    },
+        # 新增测试用金字塔模型
+    {
+        "object_id": "test_pyramid",
+        "init_pos": {"x": 0.0, "y": -0.08, "z": 0.3},  # 放在主立方体上方
+        "init_hpr": {"h": 45.0, "p": 0.0, "r": 0.0},     # 初始旋转45度
+        "coordinate_space": "world_norm",
+        "interaction_state": "idle",
+        "shape": "pyramid",  # 直接填文件名（不含后缀）
+        "scale": {"x": 0.15, "y": 0.15, "z": 0.15},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},  # 纯白，显示模型自带的橙色
+        "interactable": True,
+        "interaction_radius": 0.18,
+    },
 )
 TABLE_SURFACE_Y = float(TABLE_SCENE_OBJECTS[0]["init_pos"]["y"]) + (float(TABLE_SCENE_OBJECTS[0]["scale"]["y"]) * 0.5)
 
