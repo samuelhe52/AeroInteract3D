@@ -405,8 +405,8 @@ class BridgeServiceImpl(BridgeService):
             and secondary_pinched
         )
 
-        # Hard gate: as long as a secondary hand is detected, disable rotation and
-        # translation entirely. Only dual-scale path is allowed.
+        # Hard gate: while both hands are available and both are pinched, disable
+        # rotation and translation entirely. Only dual-scale path is allowed.
         if dual_scale_gate_active:
             if self._rotation_object_id is not None:
                 rotating_object = self._object_state(self._rotation_object_id)
