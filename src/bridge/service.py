@@ -117,6 +117,7 @@ TABLE_SCENE_OBJECTS: tuple[dict[str, Any], ...] = (
     },
 )
 TABLE_SURFACE_Y = float(TABLE_SCENE_OBJECTS[0]["init_pos"]["y"]) + (float(TABLE_SCENE_OBJECTS[0]["scale"]["y"]) * 0.5)
+DEFAULT_INTERACTABLE_OBJECT_SCALE = (0.22, 0.22, 0.22)
 
 
 @dataclass(slots=True)
@@ -136,8 +137,8 @@ class ObjectInteractionState:
     world_position: Vec3
     interaction_radius: float = HOVER_DISTANCE_THRESHOLD
     half_height: float = 0.1
-    world_scale: tuple[float, float, float] = (0.2, 0.2, 0.2)
-    initial_world_scale: tuple[float, float, float] = (0.2, 0.2, 0.2)
+    world_scale: tuple[float, float, float] = DEFAULT_INTERACTABLE_OBJECT_SCALE
+    initial_world_scale: tuple[float, float, float] = DEFAULT_INTERACTABLE_OBJECT_SCALE
     absolute_scale_ratio: float = 1.0
     world_hpr: tuple[float, float, float] = (0.0, 0.0, 0.0)
     interaction_state: str = BRIDGE_STATE_IDLE
@@ -217,7 +218,7 @@ class BridgeServiceImpl(BridgeService):
             world_position=INITIAL_OBJECT_POSITION,
             interaction_radius=HOVER_DISTANCE_THRESHOLD,
             half_height=0.1,
-            world_scale=(0.22, 0.22, 0.22),
+            world_scale=DEFAULT_INTERACTABLE_OBJECT_SCALE,
             interaction_state=BRIDGE_STATE_IDLE,
             initialized=False,
         )
@@ -1285,7 +1286,7 @@ class BridgeServiceImpl(BridgeService):
             world_position=INITIAL_OBJECT_POSITION,
             interaction_radius=HOVER_DISTANCE_THRESHOLD,
             half_height=0.1,
-            world_scale=(0.2, 0.2, 0.2),
+            world_scale=DEFAULT_INTERACTABLE_OBJECT_SCALE,
             interaction_state=BRIDGE_STATE_IDLE,
             initialized=False,
         )
