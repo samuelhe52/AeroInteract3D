@@ -692,7 +692,7 @@ class RenderingServiceImpl(RenderOutputPort):
             if self._supports_debug_overlay(self._rendering_core):
                 pixel2d = self._rendering_core.get_pixel2d()
                 if pixel2d is not None:
-                    self._home_view = HomeUIView(pixel2d)
+                    self._home_view = HomeUIView(pixel2d, self._window_size)
                 if self._debug_stats_enabled:
                     self._data_panel = DataPanelManager(self._auto_scaling)
                 camera_top_margin = (
@@ -766,6 +766,24 @@ class RenderingServiceImpl(RenderOutputPort):
             self._data_panel.set_ui_scale(scale)
         if self._camera_preview:
             self._camera_preview.set_ui_scale(scale)
+        if self._home_view:
+            self._home_view.update_layout(force=True)
+
+    def _window_size(self) -> tuple[int, int]:
+        if self._rendering_core is None:
+            return (1600, 900)
+
+        base = self._rendering_core.get_base()
+        win = getattr(base, "win", None) if base is not None else None
+        if win is None:
+            return (1600, 900)
+
+        get_x_size = getattr(win, "getXSize", None)
+        get_y_size = getattr(win, "getYSize", None)
+        if not callable(get_x_size) or not callable(get_y_size):
+            return (1600, 900)
+
+        return (int(get_x_size()), int(get_y_size()))
 
     @property
     def active_view(self) -> str:
@@ -898,6 +916,8 @@ class RenderingServiceImpl(RenderOutputPort):
         # Main window size monitoring + auto-scaling logic
         if self._auto_scaling:
             self._auto_scaling.update_window_scale()
+        if self._home_view:
+            self._home_view.update_layout()
 
         if hasattr(self._rendering_core, "step"):
             self._rendering_core.step()

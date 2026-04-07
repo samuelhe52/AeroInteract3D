@@ -287,13 +287,20 @@ class FakeVisibilityController:
 
 
 class FakeHomeView:
-    def __init__(self, pixel2d) -> None:
+    def __init__(self, pixel2d, window_size_provider) -> None:
         self.pixel2d = pixel2d
+        self.window_size_provider = window_size_provider
         self.visible = True
         self.destroyed = False
+        self.layout_updates = 0
+        self.last_window_size = window_size_provider()
 
     def set_visible(self, visible: bool) -> None:
         self.visible = visible
+
+    def update_layout(self, force: bool = False) -> None:
+        self.layout_updates += 1
+        self.last_window_size = self.window_size_provider()
 
     def destroy(self) -> None:
         self.destroyed = True
@@ -820,11 +827,12 @@ def test_rendering_initializes_home_view_on_start(monkeypatch) -> None:
 
     assert isinstance(service._home_view, FakeHomeView)
     assert service._home_view.visible is True
+    assert service._home_view.last_window_size == (1600, 900)
 
 
 def test_rendering_view_switch_updates_home_view_visibility() -> None:
     service = RenderingServiceImpl()
-    service._home_view = FakeHomeView(pixel2d=None)
+    service._home_view = FakeHomeView(pixel2d=None, window_size_provider=lambda: (1600, 900))
     service._scene_root = FakeNodePath("scene_root")
     service._data_panel = FakeVisibilityController()
     service._camera_preview = FakeVisibilityController()
@@ -836,6 +844,22 @@ def test_rendering_view_switch_updates_home_view_visibility() -> None:
     service.set_active_view("home")
 
     assert service._home_view.visible is True
+
+
+def test_rendering_step_updates_home_view_layout_for_window_size_changes(monkeypatch) -> None:
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service._window_adapter.get_base().win.width = 1280
+    service._window_adapter.get_base().win.height = 720
+
+    service.step()
+
+    assert service._home_view.last_window_size == (1280, 720)
+    assert service._home_view.layout_updates >= 1
 
 
 def test_rendering_core_registers_quit_shortcuts() -> None:
