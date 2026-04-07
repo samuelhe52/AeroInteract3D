@@ -378,7 +378,11 @@ class BridgeServiceImpl(BridgeService):
 
         # Single-hand control arbitration: if primary is open/unavailable and the
         # secondary hand is pinched, let secondary drive grab/move exactly like primary.
-        controls_from_secondary = secondary_available and secondary_pinched and (not primary_available or not primary_pinched)
+        controls_from_secondary = (
+            secondary_available
+            and secondary_pinched
+            and (not primary_available or not primary_dual_scale_pinched)
+        )
         if controls_from_secondary and secondary_anchor_world is not None:
             hand_anchor_world = secondary_anchor_world
             hovered_object_id = secondary_hovered_object_id
@@ -912,20 +916,6 @@ class BridgeServiceImpl(BridgeService):
             return False
         return True
 
-    @staticmethod
-    def _primary_allows_dual_scale(packet: GesturePacket) -> bool:
-        if packet.pinch_state == "pinched":
-            return True
-        if packet.pinch_state != "pinch_candidate":
-            return False
-        if packet.tracking_state != "tracked":
-            return False
-        if packet.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
-            return False
-        if packet.pinch_distance is None:
-            return False
-        return packet.pinch_distance <= PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE
-
     def _secondary_is_pinched(self, secondary_hand: SecondaryHandState | None) -> bool:
         if secondary_hand is None:
             return False
@@ -968,11 +958,12 @@ class BridgeServiceImpl(BridgeService):
         if secondary_hand.tracking_state != "tracked" or secondary_hand.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
             return None
 
-        if hovered_object_id is None or secondary_hovered_object_id is None:
+        # Enter dual-scale when at least one hand hovers an object.
+        # Prefer the primary-hovered object when both hands hover different objects.
+        target_id = hovered_object_id or secondary_hovered_object_id
+        if target_id is None:
             return None
-        if hovered_object_id != secondary_hovered_object_id:
-            return None
-        return self._object_state(hovered_object_id)
+        return self._object_state(target_id)
 
     @staticmethod
     def _distance_xy(a: Vec3, b: Vec3) -> float:

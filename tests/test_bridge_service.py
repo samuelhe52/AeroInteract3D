@@ -5,8 +5,6 @@ import logging
 import numpy as np
 import pytest
 
-from src.gesture.runtime import RawHandObservation
-from src.gesture.service import GestureServiceImpl
 from src.bridge.service import BridgeServiceImpl
 from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import RawHandObservation
@@ -601,7 +599,6 @@ def test_bridge_dual_scale_accepts_primary_pinch_candidate_from_gesture_service(
             return None
 
     gesture = GestureServiceImpl(
-        emit_debug_payload=True,
         capture_factory=FakeCapture,
         detector_factory=FakeDualPinchDetector,
         clock=iter([1.0, 1.01]).__next__,
@@ -623,6 +620,68 @@ def test_bridge_dual_scale_accepts_primary_pinch_candidate_from_gesture_service(
         command.command_type == "set_object_pose" and "scale" in command.payload
         for command in commands
     )
+
+
+def test_bridge_dual_scale_tracks_distance_during_primary_pinch_candidate_frames() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+
+    first_packet = make_packet(
+        frame_id=2,
+        timestamp_ms=120,
+        pinch_state="pinch_candidate",
+        index_tip=Vec3(0.02, -0.08, -0.18),
+        thumb_tip=Vec3(-0.02, -0.08, -0.18),
+    )
+    first_packet.pinch_distance = 0.04
+    first_packet = with_secondary_hand(
+        first_packet,
+        pinch_state="open",
+        pinch_distance=0.05,
+        index_tip=Vec3(0.06, -0.08, -0.18),
+        thumb_tip=Vec3(0.02, -0.08, -0.18),
+        wrist=Vec3(0.04, -0.12, -0.18),
+    )
+
+    first_commands = bridge.process(first_packet)
+    first_pose = [
+        command
+        for command in first_commands
+        if command.command_type == "set_object_pose" and "scale" in command.payload
+    ][-1]
+
+    assert first_pose.payload["debug"]["dual_scale"]["distance_xy"] > 0.0
+    assert first_pose.payload["debug"]["dual_scale"]["ratio"] == pytest.approx(1.0)
+
+    second_packet = make_packet(
+        frame_id=3,
+        timestamp_ms=140,
+        pinch_state="pinch_candidate",
+        index_tip=Vec3(0.00, -0.08, -0.18),
+        thumb_tip=Vec3(-0.04, -0.08, -0.18),
+    )
+    second_packet.pinch_distance = 0.04
+    second_packet = with_secondary_hand(
+        second_packet,
+        pinch_state="open",
+        pinch_distance=0.05,
+        index_tip=Vec3(0.08, -0.08, -0.18),
+        thumb_tip=Vec3(0.04, -0.08, -0.18),
+        wrist=Vec3(0.06, -0.12, -0.18),
+    )
+
+    second_commands = bridge.process(second_packet)
+    second_pose = [
+        command
+        for command in second_commands
+        if command.command_type == "set_object_pose" and "scale" in command.payload
+    ][-1]
+
+    assert second_pose.payload["debug"]["dual_scale"]["distance_xy"] > first_pose.payload["debug"]["dual_scale"]["distance_xy"]
+    assert second_pose.payload["debug"]["dual_scale"]["ratio"] > first_pose.payload["debug"]["dual_scale"]["ratio"]
+    assert second_pose.payload["debug"]["dual_scale"]["ratio"] < 2.8
 
 
 def test_bridge_dual_scale_uses_xy_distance_only() -> None:
@@ -694,6 +753,56 @@ def test_bridge_dual_scale_blocks_rotation_mode_even_when_rotation_debug_is_acti
     assert pose_commands
     assert any("scale" in command.payload for command in pose_commands)
     assert all("hpr" not in command.payload for command in pose_commands)
+
+
+def test_bridge_dual_scale_activates_when_only_primary_hovers_object() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    # Primary hand hovers the object; secondary hand is pinched but far from any object.
+    primary_pinched = hover_packet(frame_id=2, timestamp_ms=120, pinch_state="pinched")
+    packet = with_secondary_hand(
+        primary_pinched,
+        pinch_state="pinched",
+        index_tip=Vec3(0.90, 0.90, -0.18),
+        thumb_tip=Vec3(0.88, 0.90, -0.18),
+        wrist=Vec3(0.90, 0.85, -0.18),
+    )
+    commands = bridge.process(packet)
+
+    assert any(
+        command.command_type == "set_object_pose" and "scale" in command.payload
+        for command in commands
+    )
+
+
+def test_bridge_dual_scale_activates_when_only_secondary_hovers_object() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    # Primary hand is pinched but far from any object; secondary hand hovers the object.
+    far_primary = make_packet(
+        frame_id=2,
+        timestamp_ms=120,
+        pinch_state="pinched",
+        index_tip=Vec3(0.90, 0.90, -0.18),
+        thumb_tip=Vec3(0.88, 0.90, -0.18),
+    )
+    packet = with_secondary_hand(
+        far_primary,
+        pinch_state="pinched",
+        index_tip=Vec3(0.02, -0.08, -0.18),
+        thumb_tip=Vec3(-0.02, -0.08, -0.18),
+        wrist=Vec3(0.0, -0.12, -0.18),
+    )
+    commands = bridge.process(packet)
+
+    assert any(
+        command.command_type == "set_object_pose" and "scale" in command.payload
+        for command in commands
+    )
 
 
 def test_bridge_two_hand_detected_does_not_block_primary_translation_without_dual_pinch() -> None:
