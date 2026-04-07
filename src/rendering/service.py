@@ -693,7 +693,7 @@ class RenderingServiceImpl(RenderOutputPort):
             if self._supports_debug_overlay(self._rendering_core):
                 pixel2d = self._rendering_core.get_pixel2d()
                 if pixel2d is not None:
-                    self._home_view = HomeUIView(pixel2d, self._window_size)
+                    self._home_view = HomeUIView(pixel2d, self._window_size, self._handle_home_button_activated)
                 if self._debug_stats_enabled:
                     self._data_panel = DataPanelManager(self._auto_scaling)
                 camera_top_margin = (
@@ -795,6 +795,15 @@ class RenderingServiceImpl(RenderOutputPort):
         self._sync_view_visibility()
         logger.info("Rendering view switched to %s", next_view.value)
         return next_view.value
+
+    def _handle_home_button_activated(self, action: str) -> None:
+        if action == RenderView.TABLE.value:
+            self.set_active_view(RenderView.TABLE)
+            return
+        if action == RenderView.SETTING.value:
+            self.set_active_view(RenderView.SETTING)
+            return
+        logger.warning("Unknown home button action ignored: %s", action)
 
     def _sync_view_visibility(self) -> None:
         home_visible = self._view_state.active_view == RenderView.HOME
@@ -1590,7 +1599,7 @@ class RenderingServiceImpl(RenderOutputPort):
             self._home_view.update_layout()
             window_size = self._window_size()
             ui_input = self._ui_input_adapter.to_ui_input(packet, window_size=window_size)
-            self._home_view.update_cursor(ui_input)
+            self._home_view.update_cursor(ui_input, pinch_state=getattr(packet, "pinch_state", None))
     
     def update_camera_frame(self, frame, observation=None, packet=None) -> None:
         """Update camera frame data"""
