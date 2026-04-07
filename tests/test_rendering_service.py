@@ -110,9 +110,43 @@ class FakeRenderRoot:
         return child
 
 
+class FakeLoader:
+    def loadModel(self, model_path):
+        return FakeLoadedModel(model_path)
+
+
+class FakeLoadedModel:
+    def __init__(self, model_path) -> None:
+        self.model_path = model_path
+        self.texture_off = False
+        self.pos = None
+        self.two_sided = False
+
+    def isEmpty(self) -> bool:
+        return False
+
+    def setTextureOff(self, priority: int) -> None:
+        self.texture_off = True
+
+    def setPos(self, *values: float) -> None:
+        self.pos = values
+
+    def setTwoSided(self, enabled: bool) -> None:
+        self.two_sided = enabled
+
+    def copyTo(self, parent):
+        child = FakeNodePath(getattr(self.model_path, "cStr", lambda: str(self.model_path))())
+        child.parent = parent
+        return child
+
+    def removeNode(self) -> None:
+        return None
+
+
 class FakeBase:
     def __init__(self) -> None:
         self.render = FakeRenderRoot()
+        self.loader = FakeLoader()
         self.taskMgr = FakeTaskManager()
         self.win = FakeWindow()
         self.destroyed = False
@@ -205,6 +239,8 @@ class FakeObjectNode:
         self.hpr = None
         self.material = None
         self.scale = None
+        self.color_scale = None
+        self.material_cleared = False
 
     def setPos(self, *values: float) -> None:
         self.pos = values
@@ -217,6 +253,13 @@ class FakeObjectNode:
 
     def setScale(self, value: float) -> None:
         self.scale = value
+
+    def setColorScale(self, *values: float) -> None:
+        self.color_scale = values
+
+    def clearMaterial(self) -> None:
+        self.material = None
+        self.material_cleared = True
 
 
 class FakeVirtualHand:
@@ -513,6 +556,41 @@ def test_rendering_applies_pending_grab_material_state() -> None:
     )
 
     assert obj.material is not None
+
+
+def test_auto_scanned_custom_models_preserve_authored_materials(tmp_path) -> None:
+    custom_model = tmp_path / "teapot.egg"
+    custom_model.write_text("placeholder", encoding="utf-8")
+
+    factory = rendering_service.ModelResourceFactory(loader=None, auto_scan_dir=str(tmp_path))
+
+    assert factory.uses_builtin_materials("teapot") is False
+
+
+def test_rendering_uses_color_scale_for_custom_model_states() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["custom_model"] = obj
+    service._object_visual_profiles["custom_model"] = rendering_service.ObjectVisualProfile(
+        base_color=(1.0, 1.0, 1.0, 1.0),
+        use_builtin_materials=False,
+    )
+
+    service.push(
+        make_command(
+            command_id="state-custom-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_state",
+            object_id="custom_model",
+            payload={"interaction_state": "grabbed"},
+        )
+    )
+
+    assert obj.material is None
+    assert obj.material_cleared is True
+    assert obj.color_scale == pytest.approx((1.0, 0.58, 0.58, 0.92))
 
 
 def test_rendering_applies_rotating_material_state() -> None:

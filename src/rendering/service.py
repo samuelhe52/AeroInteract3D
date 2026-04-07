@@ -56,6 +56,12 @@ class SceneObjectDescriptor:
 
 
 @dataclass(slots=True)
+class ObjectVisualProfile:
+    base_color: tuple[float, float, float, float]
+    use_builtin_materials: bool
+
+
+@dataclass(slots=True)
 class RenderingMetrics:
     commands_seen: int = 0
     commands_applied: int = 0
@@ -150,11 +156,12 @@ class ModelResourceFactory:
         文件名（不含后缀）自动作为 shape_id
         """
         import os
-
-        print(f"[DEBUG] 传入的 models_dir: {models_dir}")
-        print(f"[DEBUG] 绝对路径: {os.path.abspath(models_dir)}")
-        print(f"[DEBUG] 文件夹是否存在: {os.path.isdir(models_dir)}")
-        print(f"[DEBUG] 文件夹里的文件列表: {os.listdir(models_dir) if os.path.isdir(models_dir) else 'N/A'}")
+        logger.debug(
+            "Auto-scanning custom model directory: path=%s abs=%s exists=%s",
+            models_dir,
+            os.path.abspath(models_dir),
+            os.path.isdir(models_dir),
+        )
         
         if not os.path.isdir(models_dir):
             logger.warning(f"自动扫描文件夹不存在：{models_dir}，跳过自动注册")
@@ -177,11 +184,19 @@ class ModelResourceFactory:
                     shape_id=shape_id,
                     model_path=file_path,
                     center_offset=(0.0, 0.0, 0.0),
-                    use_builtin_materials=True
+                    use_builtin_materials=False
                 ))
                 registered_count += 1
         
         logger.info(f"自动扫描完成，共注册 {registered_count} 个自定义模型")
+
+    def _resolve_template(self, shape_id: str) -> ModelTemplate:
+        template = self._template_registry.get(shape_id)
+        if template is not None:
+            return template
+
+        logger.error(f"Shape ID {shape_id} not registered, fallback to cube")
+        return self._template_registry["cube"]
 
     def register_template(self, template: ModelTemplate) -> None:
         """
@@ -202,13 +217,8 @@ class ModelResourceFactory:
         # 命中缓存直接返回
         if shape_id in self._model_cache:
             return self._model_cache[shape_id]
-        
-        # 检查模板是否注册
-        if shape_id not in self._template_registry:
-            logger.error(f"Shape ID {shape_id} not registered, fallback to cube")
-            return self._load_model_template("cube")
-        
-        template = self._template_registry[shape_id]
+
+        template = self._resolve_template(shape_id)
         try:
             # ========== 修复：区分内置模型和自定义模型 ==========
             import os
@@ -221,20 +231,24 @@ class ModelResourceFactory:
                 # 【自定义模型】用Panda3D的Filename处理，兼容WSL/Windows混合环境
                 model_filename = Filename.fromOsSpecific(template.model_path)
                 model_filename.makeAbsolute()
-                print(f"[DEBUG] 加载自定义模型，规范化路径: {model_filename}")
-                print(f"[DEBUG] 路径是否存在: {model_filename.exists()}")
+                logger.debug(
+                    "Loading custom model: path=%s exists=%s",
+                    model_filename,
+                    model_filename.exists(),
+                )
                 model = self._loader.loadModel(model_filename)
             else:
                 # 【内置模型】直接传原字符串，让Panda3D在model-path里找
-                print(f"[DEBUG] 加载内置模型: {template.model_path}")
+                logger.debug("Loading built-in model: path=%s", template.model_path)
                 model = self._loader.loadModel(template.model_path)
             
             if model.isEmpty():
                 raise RuntimeError(f"模型文件 {template.model_path} 无效或为空")
             # ========== 路径处理结束 ==========
             
-            # 关闭默认纹理，避免材质冲突，兼容现有代码逻辑
-            model.setTextureOff(1)
+            if template.use_builtin_materials:
+                # 内置几何体继续关闭默认纹理，保持交互材质表现稳定。
+                model.setTextureOff(1)
             # 应用锚点修正
             model.setPos(*template.center_offset)
             # 双面渲染设置
@@ -249,6 +263,9 @@ class ModelResourceFactory:
         except Exception as e:
             logger.error(f"Failed to load model {shape_id}: {str(e)}, fallback to cube", exc_info=True)
             return self._load_model_template("cube")
+
+    def uses_builtin_materials(self, shape_id: str) -> bool:
+        return self._resolve_template(shape_id).use_builtin_materials
 
     def create_instance(
         self,
@@ -266,6 +283,7 @@ class ModelResourceFactory:
         template_model = self._load_model_template(shape_id)
         if template_model is None:
             raise RuntimeError(f"模型 {shape_id} 模板加载失败")
+        template = self._resolve_template(shape_id)
         
         # 2. 创建节点树
         object_np = parent.attachNewNode(object_id)
@@ -278,12 +296,12 @@ class ModelResourceFactory:
 
         
         # 4. 应用颜色和透明度
-        visual_np.setColorScale(*color)
-        visual_np.setTransparency(1)
+        object_np.setColorScale(*color)
+        object_np.setTransparency(1)
         
         # 5. 【新增】自动绑定默认 idle 材质
-        if self._material_cache and "idle" in self._material_cache:
-            visual_np.setMaterial(self._material_cache["idle"], 1)
+        if template.use_builtin_materials and self._material_cache and "idle" in self._material_cache:
+            object_np.setMaterial(self._material_cache["idle"], 1)
         
         # 6. 应用标签
         object_np.setTag("shape", shape_id)
@@ -328,11 +346,11 @@ class RenderingServiceImpl(RenderOutputPort):
         # 【修复】正确赋值给self._custom_models_dir，无拼写错误
         self._custom_models_dir = custom_models_dir or DEFAULT_MODELS_DIR
         
-        # 【新增】打印确认，确保路径正确
-        print("="*50)
-        print(f"[DEBUG] 最终传入工厂的自定义模型路径: {self._custom_models_dir}")
-        print(f"[DEBUG] 路径是否存在: {os.path.isdir(self._custom_models_dir)}")
-        print("="*50)
+        logger.debug(
+            "Resolved custom models directory: path=%s exists=%s",
+            self._custom_models_dir,
+            os.path.isdir(self._custom_models_dir),
+        )
         # ========== 路径计算结束 ==========
 
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
@@ -378,6 +396,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         # 初始化模型工厂占位符
         self._model_factory: Optional[ModelResourceFactory] = None
+        self._object_visual_profiles: Dict[str, ObjectVisualProfile] = {}
 
     @staticmethod
     def _box_model_center_offset() -> tuple[float, float, float]:
@@ -589,7 +608,7 @@ class RenderingServiceImpl(RenderOutputPort):
             interactable=interactable,
         )
 
-    def _create_scene_object(self, descriptor: SceneObjectDescriptor, box_template: NodePath = None) -> NodePath:
+    def _create_scene_object(self, descriptor: SceneObjectDescriptor) -> NodePath:
         """
         替换原有硬编码实现，改为工厂模式创建
         入参、返回值完全兼容原有代码，无需修改其他逻辑
@@ -610,6 +629,39 @@ class RenderingServiceImpl(RenderOutputPort):
             interactable=descriptor.interactable
         )
         return object_np
+
+    @staticmethod
+    def _state_color_scale(
+        base_color: tuple[float, float, float, float],
+        state: str,
+    ) -> tuple[float, float, float, float]:
+        state_multipliers = {
+            "idle": (1.0, 1.0, 1.0, 1.0),
+            "pending_grab": (1.18, 1.05, 0.62, 0.88),
+            "grabbed": (1.0, 0.58, 0.58, 0.92),
+            "rotating": (0.62, 1.0, 1.0, 0.9),
+        }
+        multiplier = state_multipliers.get(state, state_multipliers["idle"])
+        return tuple(
+            max(0.0, min(1.0, float(channel) * float(scale)))
+            for channel, scale in zip(base_color, multiplier)
+        )
+
+    def _apply_object_visual_state(self, object_id: str, state: str) -> None:
+        obj_np = self._object_cache[object_id]
+        profile = self._object_visual_profiles.get(object_id)
+
+        if profile is None or profile.use_builtin_materials:
+            obj_np.setMaterial(self._material_cache[state], 1)
+            return
+
+        clear_material = getattr(obj_np, "clearMaterial", None)
+        if callable(clear_material):
+            clear_material()
+
+        set_color_scale = getattr(obj_np, "setColorScale", None)
+        if callable(set_color_scale):
+            set_color_scale(*self._state_color_scale(profile.base_color, state))
     
     def start(self) -> None:
         """Start module and initialize environment to RUNNING or DEGRADED (original logic preserved)"""
@@ -660,7 +712,7 @@ class RenderingServiceImpl(RenderOutputPort):
             custom_models_filename = Filename.fromOsSpecific(self._custom_models_dir)
             custom_models_filename.makeAbsolute()
             model_path.prependDirectory(custom_models_filename)
-            print(f"[DEBUG] Panda3D模型搜索路径已更新: {model_path}")
+            logger.debug("Panda3D model path updated: %s", model_path)
             # ========== 搜索路径添加结束 ==========
             
             self._model_factory = ModelResourceFactory(
@@ -1122,9 +1174,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 return
             
             # 4. Update object state
-            obj_np = self._object_cache[object_id]
-            mat = self._material_cache[state]
-            obj_np.setMaterial(mat, 1)  # 1=force replace material
+            self._apply_object_visual_state(object_id, state)
             self._metrics.state_updates += 1
             self._metrics.commands_applied += 1
             
@@ -1254,7 +1304,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 # Restore rotation
                 obj_np.setHpr(*init_state.hpr)
                 # Restore state (idle)
-                obj_np.setMaterial(self._material_cache[init_state.state], 1)
+                self._apply_object_visual_state(object_id, init_state.state)
                 logger.debug(f"Reset object {object_id} to initial state: pos={init_state.pos}, hpr={init_state.hpr}, state={init_state.state}")
             
             # 4. Clear command cache (deduplication/outdated frames)
@@ -1299,15 +1349,9 @@ class RenderingServiceImpl(RenderOutputPort):
                 if self._model_factory:
                     self._model_factory.clear_cache()
                 self._object_cache.clear()
+                self._object_visual_profiles.clear()
                 self._object_initial_states.clear()
                 logger.info("Duplicate init_scene received, scene cache reset")
-            
-            # Load cube model
-            base = self._rendering_core.get_base()
-            cube_model = base.loader.loadModel("box")
-            if cube_model.isEmpty():
-                raise RuntimeError("Failed to load cube model")
-            cube_model.setTextureOff(1)
             
             # Parse objects from payload
             objects = command.payload.get("objects", [])
@@ -1344,15 +1388,20 @@ class RenderingServiceImpl(RenderOutputPort):
                 if descriptor is None:
                     continue
 
-                object_np = self._create_scene_object(descriptor, cube_model)
+                object_np = self._create_scene_object(descriptor)
                 scene_init_pos = self._world_norm_to_scene_pos(
                     self._scale_world_norm_position(descriptor.init_pos)
                 )
                 object_np.setPos(*scene_init_pos)
                 object_np.setHpr(*descriptor.init_hpr)
-                object_np.setMaterial(self._material_cache.get(descriptor.interaction_state, self._material_cache["idle"]), 1)
 
                 self._object_cache[descriptor.object_id] = object_np
+                self._object_visual_profiles[descriptor.object_id] = ObjectVisualProfile(
+                    base_color=descriptor.color,
+                    use_builtin_materials=self._model_factory.uses_builtin_materials(descriptor.shape),
+                )
+                effective_state = descriptor.interaction_state if descriptor.interaction_state in self._material_cache else "idle"
+                self._apply_object_visual_state(descriptor.object_id, effective_state)
                 self._object_initial_states[descriptor.object_id] = ObjectInitialState(
                     pos=scene_init_pos,
                     hpr=descriptor.init_hpr,
@@ -1448,6 +1497,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._last_command_ts = None
         self._scene_root = None
         self._object_cache.clear()
+        self._object_visual_profiles.clear()
         self._object_initial_states.clear()
         self._executed_command_ids.clear()
         self._latest_frame_id = None
