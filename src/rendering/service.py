@@ -23,6 +23,7 @@ from .debug.auto_scaling import AutoScalingManager
 from .debug.data_panel import DataPanelManager
 from .debug.cam_preview import CameraPreviewManager
 from .interaction import VirtualHand
+from .ui import HomeUIView, RenderView, RenderingViewState
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
 VALID_PAYLOAD_KEYS = {
@@ -397,6 +398,8 @@ class RenderingServiceImpl(RenderOutputPort):
         # 初始化模型工厂占位符
         self._model_factory: Optional[ModelResourceFactory] = None
         self._object_visual_profiles: Dict[str, ObjectVisualProfile] = {}
+        self._view_state = RenderingViewState()
+        self._home_view: Optional[HomeUIView] = None
 
     @staticmethod
     def _box_model_center_offset() -> tuple[float, float, float]:
@@ -687,6 +690,9 @@ class RenderingServiceImpl(RenderOutputPort):
             self._auto_scaling = AutoScalingManager(self._rendering_core)
             self._auto_scaling.set_scale_callback(self._handle_scale_change)
             if self._supports_debug_overlay(self._rendering_core):
+                pixel2d = self._rendering_core.get_pixel2d()
+                if pixel2d is not None:
+                    self._home_view = HomeUIView(pixel2d)
                 if self._debug_stats_enabled:
                     self._data_panel = DataPanelManager(self._auto_scaling)
                 camera_top_margin = (
@@ -735,6 +741,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 config=self._virtual_hand_config
             )
             logger.info("Virtual hand initialized successfully with base.render as parent")
+            self._sync_view_visibility()
 
             # Switch state to RUNNING
             self._status = LIFECYCLE_RUNNING
@@ -759,6 +766,32 @@ class RenderingServiceImpl(RenderOutputPort):
             self._data_panel.set_ui_scale(scale)
         if self._camera_preview:
             self._camera_preview.set_ui_scale(scale)
+
+    @property
+    def active_view(self) -> str:
+        return self._view_state.active_view.value
+
+    def set_active_view(self, view: RenderView | str) -> str:
+        next_view = self._view_state.set_active_view(view)
+        self._sync_view_visibility()
+        logger.info("Rendering view switched to %s", next_view.value)
+        return next_view.value
+
+    def _sync_view_visibility(self) -> None:
+        home_visible = self._view_state.active_view == RenderView.HOME
+        table_visible = self._view_state.active_view == RenderView.TABLE
+
+        if self._home_view:
+            self._home_view.set_visible(home_visible)
+
+        if self._scene_root is not None and not self._scene_root.isEmpty():
+            self._scene_root.show() if table_visible else self._scene_root.hide()
+
+        if self._data_panel:
+            self._data_panel.set_visible(table_visible)
+
+        if self._camera_preview:
+            self._camera_preview.set_visible(table_visible)
     
     def push(self, command: SceneCommand) -> None:
         """Push a command through the main entry point with fault-tolerant handling."""
@@ -884,6 +917,8 @@ class RenderingServiceImpl(RenderOutputPort):
             lifecycle_state=self._status,
             errors=self._errors,
             stats={
+                "active_view": self.active_view,
+                "available_views": [view.value for view in RenderView],
                 "commands_seen": self._metrics.commands_seen,
                 "commands_applied": self._metrics.commands_applied,
                 "duplicate_commands": self._metrics.duplicate_commands,
@@ -913,6 +948,9 @@ class RenderingServiceImpl(RenderOutputPort):
         self._flush_pose_log_summary()
         
         # Clean up submodules
+        if self._home_view:
+            self._home_view.destroy()
+            self._home_view = None
         if self._camera_preview:
             self._camera_preview.destroy()
         if self._data_panel:
@@ -1494,6 +1532,7 @@ class RenderingServiceImpl(RenderOutputPort):
         return True
 
     def _reset_runtime_state(self) -> None:
+        self._view_state.set_active_view(RenderView.HOME)
         self._last_command_ts = None
         self._scene_root = None
         self._object_cache.clear()

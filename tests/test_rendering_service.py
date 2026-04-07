@@ -146,6 +146,7 @@ class FakeLoadedModel:
 class FakeBase:
     def __init__(self) -> None:
         self.render = FakeRenderRoot()
+        self.pixel2d = FakeNodePath("pixel2d")
         self.loader = FakeLoader()
         self.taskMgr = FakeTaskManager()
         self.win = FakeWindow()
@@ -182,6 +183,11 @@ class FakeWindowAdapter:
     def get_base(self) -> FakeBase:
         return self._base
 
+    def get_pixel2d(self):
+        if not self._is_initialized:
+            return None
+        return self._base.pixel2d
+
     def is_initialized(self) -> bool:
         return self._is_initialized
 
@@ -199,6 +205,7 @@ class FakeNodePath:
     def __init__(self, name: str) -> None:
         self.name = name
         self.parent = None
+        self.hidden = False
 
     def reparentTo(self, parent: object) -> None:
         self.parent = parent
@@ -215,10 +222,10 @@ class FakeNodePath:
         return None
 
     def hide(self) -> None:
-        return None
+        self.hidden = True
 
     def show(self) -> None:
-        return None
+        self.hidden = False
 
     def setPos(self, *values: float) -> None:
         self.pos = values
@@ -271,9 +278,31 @@ class FakeVirtualHand:
         self.last_points = points
 
 
+class FakeVisibilityController:
+    def __init__(self) -> None:
+        self.visible = True
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = visible
+
+
+class FakeHomeView:
+    def __init__(self, pixel2d) -> None:
+        self.pixel2d = pixel2d
+        self.visible = True
+        self.destroyed = False
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = visible
+
+    def destroy(self) -> None:
+        self.destroyed = True
+
+
 def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
     monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service._errors = [{"code": "stale"}]
@@ -284,6 +313,7 @@ def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     service.start()
 
     assert service.health()["lifecycle_state"] == LIFECYCLE_RUNNING
+    assert service.active_view == "home"
     assert service.health()["errors"] == []
     assert service._last_command_ts is None
     assert service._executed_command_ids == set()
@@ -296,6 +326,37 @@ def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     service.start()
 
     assert service.health()["lifecycle_state"] == LIFECYCLE_RUNNING
+    assert service.active_view == "home"
+
+
+def test_rendering_defaults_to_home_view_in_health_stats() -> None:
+    service = RenderingServiceImpl()
+
+    stats = service.health()["stats"]
+
+    assert stats["active_view"] == "home"
+    assert stats["available_views"] == ["home", "table", "setting"]
+
+
+def test_rendering_view_switch_toggles_table_visibility() -> None:
+    service = RenderingServiceImpl()
+    service._scene_root = FakeNodePath("scene_root")
+    service._data_panel = FakeVisibilityController()
+    service._camera_preview = FakeVisibilityController()
+
+    service.set_active_view("table")
+
+    assert service.active_view == "table"
+    assert service._scene_root.hidden is False
+    assert service._data_panel.visible is True
+    assert service._camera_preview.visible is True
+
+    service.set_active_view("setting")
+
+    assert service.active_view == "setting"
+    assert service._scene_root.hidden is True
+    assert service._data_panel.visible is False
+    assert service._camera_preview.visible is False
 
 
 def test_data_panel_formats_rotation_lines_from_packet_debug() -> None:
@@ -660,6 +721,7 @@ def test_rendering_reset_restores_cached_scene_pose() -> None:
 def test_rendering_step_advances_panda3d_task_manager(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
     monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -738,12 +800,42 @@ def test_rendering_core_aspect_lock_prefers_height_when_height_changes_more() ->
 def test_rendering_service_registers_quit_callback_with_window_adapter(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
     monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.set_quit_callback(lambda: None)
     service.start()
 
     assert service._window_adapter.quit_callback is not None
+
+
+def test_rendering_initializes_home_view_on_start(monkeypatch) -> None:
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+
+    service.start()
+
+    assert isinstance(service._home_view, FakeHomeView)
+    assert service._home_view.visible is True
+
+
+def test_rendering_view_switch_updates_home_view_visibility() -> None:
+    service = RenderingServiceImpl()
+    service._home_view = FakeHomeView(pixel2d=None)
+    service._scene_root = FakeNodePath("scene_root")
+    service._data_panel = FakeVisibilityController()
+    service._camera_preview = FakeVisibilityController()
+
+    service.set_active_view("table")
+
+    assert service._home_view.visible is False
+
+    service.set_active_view("home")
+
+    assert service._home_view.visible is True
 
 
 def test_rendering_core_registers_quit_shortcuts() -> None:

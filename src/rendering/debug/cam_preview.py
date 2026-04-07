@@ -225,6 +225,18 @@ class CameraPreviewManager:
             -(self._top_margin + self.PREVIEW_HEIGHT) * active_scale,
         )
 
+    def set_visible(self, visible: bool) -> None:
+        widgets = (
+            self._camera_preview_node,
+            self._camera_preview_frame,
+            self._camera_preview_title,
+            self._camera_preview_status,
+        )
+        for widget in widgets:
+            if widget is None:
+                continue
+            widget.show() if visible else widget.hide()
+
     def destroy(self) -> None:
         """Clean up camera preview resources"""
         if self._camera_preview_node is not None:

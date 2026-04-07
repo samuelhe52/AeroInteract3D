@@ -205,6 +205,12 @@ class DataPanelManager:
             new_scale = original_scale * scale
             self._status_panel['pos'] = new_pos
             self._status_panel['scale'] = new_scale
+
+    def set_visible(self, visible: bool) -> None:
+        if self._status_frame:
+            self._status_frame.show() if visible else self._status_frame.hide()
+        if self._status_panel:
+            self._status_panel.show() if visible else self._status_panel.hide()
     
     def destroy(self) -> None:
         """Clean up resources"""
