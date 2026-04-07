@@ -721,14 +721,14 @@ class BridgeServiceImpl(BridgeService):
 
     def _make_secondary_hand_pose(self, packet: GesturePacket) -> SceneCommand | None:
         secondary_hand = self._secondary_hand_state(packet)
-        if secondary_hand is None:
+        if secondary_hand is None and not self._has_secondary_hand_slot(packet):
             return None
 
         payload: dict[str, Any] = {
             "coordinate_space": "world_norm",
             "visible": False,
         }
-        if (
+        if secondary_hand is not None and (
             secondary_hand.tracking_state == "tracked"
             and secondary_hand.confidence >= BRIDGE_MIN_TRACKING_CONFIDENCE
         ):
@@ -761,6 +761,15 @@ class BridgeServiceImpl(BridgeService):
             object_id="hand-2",
             payload=payload,
         )
+
+    def _has_secondary_hand_slot(self, packet: GesturePacket) -> bool:
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return False
+        if "secondary_hand" in debug_payload:
+            return True
+        dual_hand = debug_payload.get("dual_hand")
+        return isinstance(dual_hand, dict) and "secondary_hand" in dual_hand
 
     def _make_dual_scale_pose(
         self,

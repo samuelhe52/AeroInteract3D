@@ -125,6 +125,8 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         self._last_packet: GesturePacket | None = None
         self._last_preview_frame = None
         self._primary_slot_handedness: str | None = None
+        self._secondary_slot_handedness: str | None = None
+        self._last_secondary_wrist: Vec3 | None = None
         self._frame_id = 0
         self._last_timestamp_ms = 0
         self._dual_scale_ratio: float = 1.0
@@ -143,6 +145,8 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         self._last_packet = None
         self._last_preview_frame = None
         self._primary_slot_handedness = None
+        self._secondary_slot_handedness = None
+        self._last_secondary_wrist = None
         self._frame_id = 0
         self._last_timestamp_ms = 0
         self._dual_scale_ratio = 1.0
@@ -423,15 +427,65 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
             return None, None
 
         if len(observations) == 1:
-            primary = observations[0]
-            self._primary_slot_handedness = self._normalize_handedness(primary.handedness)
-            return primary, None
+            return self._assign_single_observation(observations[0])
 
         primary = self._pick_primary_observation(observations)
         secondary = next((item for item in observations if item is not primary), None)
-
-        self._primary_slot_handedness = self._normalize_handedness(primary.handedness)
+        self._remember_slot_observations(primary, secondary)
         return primary, secondary
+
+    def _assign_single_observation(
+        self,
+        observation: RawHandObservation,
+    ) -> tuple[RawHandObservation | None, RawHandObservation | None]:
+        observation_handedness = self._normalize_handedness(observation.handedness)
+        primary_matches = (
+            observation_handedness is not None
+            and observation_handedness == self._primary_slot_handedness
+        )
+        secondary_matches = (
+            observation_handedness is not None
+            and observation_handedness == self._secondary_slot_handedness
+        )
+
+        if primary_matches and not secondary_matches:
+            primary, secondary = observation, None
+        elif secondary_matches and not primary_matches:
+            primary, secondary = None, observation
+        elif self._pick_single_observation_slot(observation) == "secondary":
+            primary, secondary = None, observation
+        else:
+            primary, secondary = observation, None
+
+        self._remember_slot_observations(primary, secondary)
+        return primary, secondary
+
+    def _pick_single_observation_slot(self, observation: RawHandObservation) -> str:
+        slot_distances: list[tuple[str, float]] = []
+        if self._last_packet is not None:
+            slot_distances.append(("primary", distance_2d(observation.wrist, self._last_packet.wrist)))
+        if self._last_secondary_wrist is not None:
+            slot_distances.append(("secondary", distance_2d(observation.wrist, self._last_secondary_wrist)))
+        if slot_distances:
+            return min(slot_distances, key=lambda item: item[1])[0]
+        return "primary"
+
+    def _remember_slot_observations(
+        self,
+        primary: RawHandObservation | None,
+        secondary: RawHandObservation | None,
+    ) -> None:
+        if primary is not None:
+            normalized = self._normalize_handedness(primary.handedness)
+            if normalized is not None:
+                self._primary_slot_handedness = normalized
+        if secondary is not None:
+            normalized = self._normalize_handedness(secondary.handedness)
+            if normalized is not None:
+                self._secondary_slot_handedness = normalized
+            self._last_secondary_wrist = secondary.wrist
+        elif primary is not None and self._secondary_slot_handedness is None:
+            self._last_secondary_wrist = None
 
     def _pick_primary_observation(self, observations: list[RawHandObservation]) -> RawHandObservation:
         expected_handedness = self._primary_slot_handedness

@@ -499,6 +499,28 @@ def test_bridge_emits_secondary_hand_pose_when_secondary_is_present() -> None:
     assert hand_pose_commands[1].payload["visible"] is True
 
 
+def test_bridge_emits_hidden_secondary_hand_pose_when_secondary_slot_clears() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(with_secondary_hand(make_packet(frame_id=1, timestamp_ms=100)))
+
+    packet = make_packet(
+        frame_id=2,
+        timestamp_ms=120,
+        debug={
+            "secondary_hand": None,
+            "dual_hand": {"secondary_hand": None},
+        },
+    )
+    commands = bridge.process(packet)
+
+    hand_pose_commands = [command for command in commands if command.command_type == "set_hand_pose"]
+    assert len(hand_pose_commands) == 2
+    assert hand_pose_commands[1].object_id == "hand-2"
+    assert hand_pose_commands[1].payload["visible"] is False
+
+
 def test_bridge_secondary_hand_does_not_trigger_rotation_mode() -> None:
     bridge = BridgeServiceImpl()
     bridge.start()
