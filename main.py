@@ -210,7 +210,6 @@ class App:
         self.debug_frame_source = debug_frame_source
         self.lifecycle_state = LIFECYCLE_INITIALIZING
         self._running = False
-        self._rotation_log_counter = 0
 
     def initialize(self) -> None:
         logging.info("Initializing application")
@@ -235,20 +234,6 @@ class App:
             packet = self.gesture_input.poll()
             if packet is not None:
                 self.render_output.update_gesture_data(packet)
-                packet_debug = getattr(packet, "debug", None)
-                rotation = packet_debug.get("rotation") if isinstance(packet_debug, dict) else None
-                if isinstance(rotation, dict):
-                    self._rotation_log_counter += 1
-                    if self._rotation_log_counter >= 6:
-                        self._rotation_log_counter = 0
-                        logging.info(
-                            "rotation enabled=%s rotating=%s slot=%s/%s src=%s",
-                            bool(rotation.get("enabled", False)),
-                            bool(rotation.get("rotating", False)),
-                            int(rotation.get("slot", 0)),
-                            int(rotation.get("slot_count", 0)),
-                            str(rotation.get("source", "none")),
-                        )
 
                 if self.debug_frame_source is not None:
                     camera_frame, observation = self.debug_frame_source.get_camera_data()
@@ -406,6 +391,7 @@ def build_app(config: AppConfig) -> App:
         preview_enabled=False,
         motion_preset=config.motion_preset,
         aggressive_release_guard=config.aggressive_release_guard,
+        emit_debug_payload=True,
     )
     bridge = BridgeServiceImpl(
         input_mirrored=config.flip_camera,

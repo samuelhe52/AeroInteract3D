@@ -230,5 +230,22 @@ def test_gesture_service_emits_both_hands_in_debug_payload() -> None:
     assert packet.debug["dual_hand"]["scale_ratio"] == 1.0
 
 
+def test_gesture_service_skips_debug_payload_when_disabled() -> None:
+    service = GestureServiceImpl(
+        emit_debug_payload=False,
+        capture_factory=FakeCapture,
+        detector_factory=FakeDetector,
+        clock=iter([8.0]).__next__,
+    )
+
+    service.start()
+    packet = service.poll()
+
+    assert packet is not None
+    assert packet.debug is None
+    assert isinstance(packet.rotation, dict)
+    assert service.health()["stats"]["emit_debug_payload"] is False
+
+
 def test_rotation_slot_count_is_24() -> None:
     assert ROT_SLOT_COUNT == 24

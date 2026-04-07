@@ -61,6 +61,7 @@ class GestureConfig:
     preview_enabled: bool = False
     motion_preset: MotionPreset = GESTURE_MOTION_PRESET
     aggressive_release_guard: bool = False
+    emit_debug_payload: bool = True
 
 
 class GestureServiceImpl(GestureInputPort, DebugFrameSource):
@@ -78,6 +79,7 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         preview_enabled: bool = False,
         motion_preset: MotionPreset = GESTURE_MOTION_PRESET,
         aggressive_release_guard: bool = False,
+        emit_debug_payload: bool = True,
         capture_factory: Callable[..., Any] = CaptureRuntime,
         detector_factory: Callable[..., Any] = HandLandmarkerRuntime,
         preview_factory: Callable[[], Any] | None = None,
@@ -95,6 +97,7 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
             preview_enabled=preview_enabled,
             motion_preset=motion_preset,
             aggressive_release_guard=aggressive_release_guard,
+            emit_debug_payload=emit_debug_payload,
         )
         self._capture_factory = capture_factory
         self._detector_factory = detector_factory
@@ -176,19 +179,22 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
             frame_id=self._frame_id,
             timestamp_ms=timestamp_ms,
             runtime_hint=runtime_hint,
+            emit_debug=self._config.emit_debug_payload,
         )
-        secondary_packet = self._secondary_reducer.reduce(
-            secondary_observation,
-            frame_id=self._frame_id,
-            timestamp_ms=timestamp_ms,
-            runtime_hint=self._runtime_hint(secondary_observation),
-        )
-        packet = self._attach_dual_hand_debug(
-            primary_packet=packet,
-            secondary_packet=secondary_packet,
-            primary_observation=primary_observation,
-            secondary_observation=secondary_observation,
-        )
+        if self._config.emit_debug_payload:
+            secondary_packet = self._secondary_reducer.reduce(
+                secondary_observation,
+                frame_id=self._frame_id,
+                timestamp_ms=timestamp_ms,
+                runtime_hint=self._runtime_hint(secondary_observation),
+                emit_debug=True,
+            )
+            packet = self._attach_dual_hand_debug(
+                primary_packet=packet,
+                secondary_packet=secondary_packet,
+                primary_observation=primary_observation,
+                secondary_observation=secondary_observation,
+            )
 
         validation_errors = validate_gesture_packet(packet)
         if validation_errors:
@@ -239,6 +245,7 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
                 "preview_enabled": self._config.preview_enabled,
                 "motion_preset": self._config.motion_preset,
                 "aggressive_release_guard": self._config.aggressive_release_guard,
+                "emit_debug_payload": self._config.emit_debug_payload,
                 "last_frame_id": None if self._last_packet is None else self._last_packet.frame_id,
                 "last_tracking_state": None if self._last_packet is None else self._last_packet.tracking_state,
                 "last_pinch_state": None if self._last_packet is None else self._last_packet.pinch_state,
@@ -546,6 +553,7 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
             if packet.velocity is None
             else {"x": packet.velocity.x, "y": packet.velocity.y, "z": packet.velocity.z},
             "smoothing_hint": packet.smoothing_hint,
+            "rotation": packet.rotation,
             "landmarks": landmarks_payload,
             "debug": packet.debug,
         }

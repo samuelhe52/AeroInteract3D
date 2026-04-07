@@ -5,6 +5,8 @@ import logging
 import numpy as np
 import pytest
 
+from src.gesture.runtime import RawHandObservation
+from src.gesture.service import GestureServiceImpl
 from src.bridge.service import BridgeServiceImpl
 from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import RawHandObservation
@@ -599,6 +601,7 @@ def test_bridge_dual_scale_accepts_primary_pinch_candidate_from_gesture_service(
             return None
 
     gesture = GestureServiceImpl(
+        emit_debug_payload=True,
         capture_factory=FakeCapture,
         detector_factory=FakeDualPinchDetector,
         clock=iter([1.0, 1.01]).__next__,
@@ -608,14 +611,13 @@ def test_bridge_dual_scale_accepts_primary_pinch_candidate_from_gesture_service(
     gesture.start()
     bridge.start()
 
-    packet = gesture.poll()
+    first_packet = gesture.poll()
+    assert first_packet is not None
+    assert first_packet.pinch_state == "pinch_candidate"
+    assert first_packet.debug is not None
+    assert first_packet.debug["secondary_hand"]["pinch_state"] == "pinch_candidate"
 
-    assert packet is not None
-    assert packet.pinch_state == "pinch_candidate"
-    assert packet.debug is not None
-    assert packet.debug["secondary_hand"]["pinch_state"] == "pinch_candidate"
-
-    commands = bridge.process(packet)
+    commands = bridge.process(first_packet)
 
     assert any(
         command.command_type == "set_object_pose" and "scale" in command.payload

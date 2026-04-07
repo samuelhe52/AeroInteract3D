@@ -51,6 +51,7 @@ class GesturePacket:
     pinch_distance: float | None = None
     velocity: Vec3 | None = None
     smoothing_hint: dict[str, Any] | None = None
+    rotation: dict[str, Any] | None = None
     debug: dict[str, Any] | None = None
     camera_frame: Optional[CameraFrame] = None
 

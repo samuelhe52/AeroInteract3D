@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import main
 import pytest
 
@@ -125,6 +126,82 @@ def test_app_run_reads_camera_data_through_port() -> None:
 
     assert len(render_output.updated_gesture_packets) == 1
     assert render_output.updated_camera_frames == [("frame", "observation", render_output.updated_gesture_packets[0])]
+
+
+def test_app_run_keeps_camera_data_when_debug_stats_disabled() -> None:
+    class CameraGestureInput(FakeGestureInput):
+        def __init__(self) -> None:
+            super().__init__()
+            self._emitted = False
+
+        def poll(self):
+            if self._emitted:
+                assert self.app is not None
+                self.app.request_stop()
+                return None
+
+            self._emitted = True
+            return object()
+
+    class CameraDebugFrameSource(FakeDebugFrameSource):
+        def get_camera_data(self):
+            return "frame", "observation"
+
+    config = AppConfig(target_fps=60, debug_stats=False)
+    gesture_input = CameraGestureInput()
+    bridge = FakeBridge()
+    render_output = FakeRenderOutput()
+    debug_frame_source = CameraDebugFrameSource()
+    app = App(config, gesture_input, bridge, render_output, debug_frame_source=debug_frame_source)
+    gesture_input.app = app
+
+    app.lifecycle_state = LIFECYCLE_RUNNING
+
+    app.run()
+
+    assert len(render_output.updated_gesture_packets) == 1
+    assert render_output.updated_camera_frames == [("frame", "observation", render_output.updated_gesture_packets[0])]
+
+
+def test_app_rotation_status_logging_is_debug_only(caplog) -> None:
+    class RotationGestureInput(FakeGestureInput):
+        def __init__(self) -> None:
+            super().__init__()
+            self._poll_count = 0
+
+        def poll(self):
+            self._poll_count += 1
+            if self._poll_count > 6:
+                assert self.app is not None
+                self.app.request_stop()
+                return None
+
+            return type(
+                "Packet",
+                (),
+                {
+                    "rotation": {
+                        "enabled": False,
+                        "rotating": False,
+                        "slot": 0,
+                        "slot_count": 24,
+                        "source": "none",
+                    }
+                },
+            )()
+
+    config = AppConfig(target_fps=60, debug_stats=True)
+    gesture_input = RotationGestureInput()
+    bridge = FakeBridge()
+    render_output = FakeRenderOutput()
+    app = App(config, gesture_input, bridge, render_output)
+    gesture_input.app = app
+    app.lifecycle_state = LIFECYCLE_RUNNING
+
+    with caplog.at_level(logging.INFO, logger="main"):
+        app.run()
+
+    assert "rotation enabled=False rotating=False slot=0/24 src=none" not in caplog.text
 
 
 def test_parse_args_enables_debug_stats_flag() -> None:
@@ -314,6 +391,7 @@ def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(m
     app = main.build_app(AppConfig(debug_stats=True))
 
     assert captured_gesture_kwargs["preview_enabled"] is False
+    assert captured_gesture_kwargs["emit_debug_payload"] is True
     assert captured_gesture_kwargs["flip_camera"] is True
     assert captured_gesture_kwargs["motion_preset"] == "medium"
     assert captured_gesture_kwargs["aggressive_release_guard"] is False
@@ -326,6 +404,37 @@ def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(m
     assert app.bridge is fake_bridge
     assert app.render_output is not None
     assert callable(app.render_output.quit_callback)
+
+
+def test_build_app_keeps_gesture_debug_payloads_when_debug_stats_disabled(monkeypatch) -> None:
+    captured_gesture_kwargs: dict[str, object] = {}
+    captured_render_kwargs: dict[str, object] = {}
+
+    class FakeGestureService:
+        def __init__(self, **kwargs) -> None:
+            captured_gesture_kwargs.update(kwargs)
+
+    class FakeBridgeService:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class FakeRenderingService:
+        def __init__(self, **kwargs) -> None:
+            captured_render_kwargs.update(kwargs)
+            self.quit_callback = None
+
+        def set_quit_callback(self, callback) -> None:
+            self.quit_callback = callback
+
+    monkeypatch.setattr(main, "GestureServiceImpl", FakeGestureService)
+    monkeypatch.setattr(main, "BridgeServiceImpl", FakeBridgeService)
+    monkeypatch.setattr(main, "RenderingServiceImpl", FakeRenderingService)
+
+    app = main.build_app(AppConfig(debug_stats=False))
+
+    assert captured_gesture_kwargs["emit_debug_payload"] is True
+    assert captured_render_kwargs["debug_stats_enabled"] is False
+    assert isinstance(app, App)
 
 
 def test_parse_args_accepts_motion_preset() -> None:

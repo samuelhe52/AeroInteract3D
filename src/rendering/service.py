@@ -378,17 +378,19 @@ class RenderingServiceImpl(RenderOutputPort):
             if self._supports_debug_overlay(self._rendering_core):
                 if self._debug_stats_enabled:
                     self._data_panel = DataPanelManager(self._auto_scaling)
-                camera_top_margin = (
-                    DataPanelManager.camera_preview_top_margin()
-                    if self._debug_stats_enabled
-                    else CameraPreviewManager.PREVIEW_MARGIN
-                )
                 self._camera_preview = CameraPreviewManager(
                     self._auto_scaling,
-                    top_margin=camera_top_margin,
+                    top_margin=(
+                        DataPanelManager.camera_preview_top_margin()
+                        if self._debug_stats_enabled
+                        else CameraPreviewManager.PREVIEW_MARGIN
+                    ),
                 )
             else:
-                logger.info("Rendering adapter does not expose pixel2d; skipping debug overlay initialization")
+                logger.info(
+                    "Skipping debug overlay initialization: overlay_supported=%s",
+                    self._supports_debug_overlay(self._rendering_core),
+                )
             
             # Create scene root node
             self._scene_root = NodePath("scene_root")
@@ -480,7 +482,7 @@ class RenderingServiceImpl(RenderOutputPort):
             elif command_type == "heartbeat":
                 self._metrics.heartbeats_received += 1
                 self._metrics.commands_applied += 1
-                logger.info(f"Received heartbeat command, module state: {self._status}")
+                logger.debug("Received heartbeat command, module state: %s", self._status)
             else:
                 self._record_error(
                     error_entry(

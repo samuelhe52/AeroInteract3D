@@ -157,6 +157,7 @@ class SecondaryHandState:
     index_tip: Vec3
     thumb_tip: Vec3
     wrist: Vec3
+    rotation: dict[str, Any] | None = None
     debug: dict[str, Any] | None = None
 
 
@@ -383,8 +384,8 @@ class BridgeServiceImpl(BridgeService):
             hovered_object_id = secondary_hovered_object_id
             hovered_object = self._object_state(secondary_hovered_object_id) if secondary_hovered_object_id is not None else None
             effective_debug = dict(packet.debug or {})
-            if secondary_hand.debug is not None and isinstance(secondary_hand.debug.get("rotation"), dict):
-                effective_debug["rotation"] = secondary_hand.debug["rotation"]
+            if isinstance(secondary_hand.rotation, dict):
+                effective_debug["rotation"] = secondary_hand.rotation
             packet = replace(
                 packet,
                 hand_id="hand-2",
@@ -394,6 +395,7 @@ class BridgeServiceImpl(BridgeService):
                 index_tip=secondary_hand.index_tip,
                 thumb_tip=secondary_hand.thumb_tip,
                 wrist=secondary_hand.wrist,
+                rotation=secondary_hand.rotation,
                 debug=effective_debug,
             )
 
@@ -868,8 +870,14 @@ class BridgeServiceImpl(BridgeService):
             confidence = float(payload.get("confidence", 0.0))
         except (TypeError, ValueError):
             confidence = 0.0
+        rotation_payload = payload.get("rotation")
+        rotation = rotation_payload if isinstance(rotation_payload, dict) else None
         debug_payload = payload.get("debug")
         debug = debug_payload if isinstance(debug_payload, dict) else None
+        if rotation is None and debug is not None:
+            nested_rotation = debug.get("rotation")
+            if isinstance(nested_rotation, dict):
+                rotation = nested_rotation
         return SecondaryHandState(
             tracking_state=tracking_state,
             confidence=confidence,
@@ -878,6 +886,7 @@ class BridgeServiceImpl(BridgeService):
             index_tip=index_tip,
             thumb_tip=thumb_tip,
             wrist=wrist,
+            rotation=rotation,
             debug=debug,
         )
 
@@ -902,6 +911,20 @@ class BridgeServiceImpl(BridgeService):
         if secondary_hand.tracking_state != "tracked":
             return False
         return True
+
+    @staticmethod
+    def _primary_allows_dual_scale(packet: GesturePacket) -> bool:
+        if packet.pinch_state == "pinched":
+            return True
+        if packet.pinch_state != "pinch_candidate":
+            return False
+        if packet.tracking_state != "tracked":
+            return False
+        if packet.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
+            return False
+        if packet.pinch_distance is None:
+            return False
+        return packet.pinch_distance <= PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE
 
     def _secondary_is_pinched(self, secondary_hand: SecondaryHandState | None) -> bool:
         if secondary_hand is None:
@@ -1023,11 +1046,12 @@ class BridgeServiceImpl(BridgeService):
 
     @staticmethod
     def _rotation_mode_active(packet: GesturePacket) -> bool:
-        debug_payload = getattr(packet, "debug", None)
-        if not isinstance(debug_payload, dict):
-            return False
-
-        rotation = debug_payload.get("rotation")
+        rotation = getattr(packet, "rotation", None)
+        if not isinstance(rotation, dict):
+            debug_payload = getattr(packet, "debug", None)
+            if not isinstance(debug_payload, dict):
+                return False
+            rotation = debug_payload.get("rotation")
         if not isinstance(rotation, dict):
             return False
 
@@ -1061,11 +1085,12 @@ class BridgeServiceImpl(BridgeService):
 
     @staticmethod
     def _rotation_input_hpr(packet: GesturePacket) -> tuple[float, float, float] | None:
-        debug_payload = getattr(packet, "debug", None)
-        if not isinstance(debug_payload, dict):
-            return None
-
-        rotation = debug_payload.get("rotation")
+        rotation = getattr(packet, "rotation", None)
+        if not isinstance(rotation, dict):
+            debug_payload = getattr(packet, "debug", None)
+            if not isinstance(debug_payload, dict):
+                return None
+            rotation = debug_payload.get("rotation")
         if not isinstance(rotation, dict):
             return None
 

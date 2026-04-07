@@ -211,14 +211,16 @@ class TemporalReducer:
         frame_id: int,
         timestamp_ms: int,
         runtime_hint: dict[str, Any] | None = None,
+        emit_debug: bool = True,
     ) -> GesturePacket:
         if observation is None:
-            return self._reduce_missing(frame_id=frame_id, timestamp_ms=timestamp_ms)
+            return self._reduce_missing(frame_id=frame_id, timestamp_ms=timestamp_ms, emit_debug=emit_debug)
         return self._reduce_observation(
             observation,
             frame_id=frame_id,
             timestamp_ms=timestamp_ms,
             runtime_hint=runtime_hint,
+            emit_debug=emit_debug,
         )
 
     def _reduce_observation(
@@ -228,6 +230,7 @@ class TemporalReducer:
         frame_id: int,
         timestamp_ms: int,
         runtime_hint: dict[str, Any] | None,
+        emit_debug: bool,
     ) -> GesturePacket:
         source = str(
             runtime_hint.get("observation_source") if runtime_hint and "observation_source" in runtime_hint else observation.observation_source
@@ -333,6 +336,28 @@ class TemporalReducer:
             source=source,
         )
 
+        debug_payload = None
+        if emit_debug:
+            debug_payload = {
+                "raw_pinch_distance": observation.raw_pinch_distance,
+                "pinch_score": pinch_score,
+                "appearance_match_score": appearance_match_score,
+                "predicted_tracked": predicted_tracked,
+                "grace_frames_used": self._grace_frames_used,
+                "blur_level": blur_level,
+                "observation_source": source,
+                "missing_frames": self._missing_frames,
+                "pinch_confirm_count": self._pinch_confirm_count,
+                "release_confirm_count": self._release_confirm_count,
+                "reacquire_blend_progress": self._reacquire_blend_progress(),
+                "hold_frames": self._pinched_hold_frames,
+                "quality_score": quality_score,
+                "open_margin": geometry_open_margin,
+                "detector_source": observation.detector_source,
+                "handedness": observation.handedness,
+                "rotation": rotation_debug,
+            }
+
         return GesturePacket(
             contract_version=EXPECTED_CONTRACT_VERSION,
             frame_id=frame_id,
@@ -356,28 +381,11 @@ class TemporalReducer:
                 "observation_source": source,
                 "quality_score": quality_score,
             },
-            debug={
-                "raw_pinch_distance": observation.raw_pinch_distance,
-                "pinch_score": pinch_score,
-                "appearance_match_score": appearance_match_score,
-                "predicted_tracked": predicted_tracked,
-                "grace_frames_used": self._grace_frames_used,
-                "blur_level": blur_level,
-                "observation_source": source,
-                "missing_frames": self._missing_frames,
-                "pinch_confirm_count": self._pinch_confirm_count,
-                "release_confirm_count": self._release_confirm_count,
-                "reacquire_blend_progress": self._reacquire_blend_progress(),
-                "hold_frames": self._pinched_hold_frames,
-                "quality_score": quality_score,
-                "open_margin": geometry_open_margin,
-                "detector_source": observation.detector_source,
-                "handedness": observation.handedness,
-                "rotation": rotation_debug,
-            },
+            rotation=rotation_debug,
+            debug=debug_payload,
         )
 
-    def _reduce_missing(self, *, frame_id: int, timestamp_ms: int) -> GesturePacket:
+    def _reduce_missing(self, *, frame_id: int, timestamp_ms: int, emit_debug: bool) -> GesturePacket:
         self._missing_frames += 1
         self._grace_frames_used = min(self._missing_frames, GRACE_FRAMES)
         predicted_index_tip, predicted_thumb_tip, predicted_wrist = self._predict_positions()
@@ -426,6 +434,24 @@ class TemporalReducer:
         self._last_timestamp_ms = timestamp_ms
         self._last_source = "predicted"
 
+        debug_payload = None
+        if emit_debug:
+            debug_payload = {
+                "pinch_score": pinch_score,
+                "appearance_match_score": 0.0,
+                "feature_assisted_score": 0.0,
+                "predicted_tracked": True,
+                "grace_frames_used": self._grace_frames_used,
+                "blur_level": 1.0,
+                "observation_source": "predicted",
+                "missing_frames": self._missing_frames,
+                "pinch_confirm_count": self._pinch_confirm_count,
+                "release_confirm_count": self._release_confirm_count,
+                "reacquire_blend_progress": self._reacquire_blend_progress(),
+                "open_margin": geometry_open_margin,
+                "rotation": rotation_debug,
+            }
+
         return GesturePacket(
             contract_version=EXPECTED_CONTRACT_VERSION,
             frame_id=frame_id,
@@ -447,21 +473,8 @@ class TemporalReducer:
                 "blend": self.tuning.prediction_blend,
                 "observation_source": "predicted",
             },
-            debug={
-                "pinch_score": pinch_score,
-                "appearance_match_score": 0.0,
-                "feature_assisted_score": 0.0,
-                "predicted_tracked": True,
-                "grace_frames_used": self._grace_frames_used,
-                "blur_level": 1.0,
-                "observation_source": "predicted",
-                "missing_frames": self._missing_frames,
-                "pinch_confirm_count": self._pinch_confirm_count,
-                "release_confirm_count": self._release_confirm_count,
-                "reacquire_blend_progress": self._reacquire_blend_progress(),
-                "open_margin": geometry_open_margin,
-                "rotation": rotation_debug,
-            },
+            rotation=rotation_debug,
+            debug=debug_payload,
         )
 
     def _blend_reacquire(
