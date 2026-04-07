@@ -7,6 +7,8 @@ from typing import Optional
 from direct.gui.DirectFrame import DirectFrame
 from panda3d.core import NodePath, TextNode
 
+from .state import UIInputState
+
 
 logger = logging.getLogger("rendering.ui.home_view")
 
@@ -19,9 +21,11 @@ class HomeUIView:
         self._pixel2d = pixel2d
         self._window_size_provider = window_size_provider
         self._root: Optional[DirectFrame] = None
+        self._overlay_root: Optional[DirectFrame] = None
         self._title: Optional[NodePath] = None
         self._buttons: list[DirectFrame] = []
         self._button_labels: list[NodePath] = []
+        self._cursor: Optional[DirectFrame] = None
         self._visible = True
         self._last_layout_size: tuple[int, int] | None = None
         self.init_view()
@@ -76,6 +80,25 @@ class HomeUIView:
                 )
                 self._buttons.append(button)
                 self._button_labels.append(button_label)
+
+            self._overlay_root = DirectFrame(
+                parent=self._root,
+                pos=(0, 0, 0),
+                frameSize=(0, 1, -1, 0),
+                frameColor=(0.0, 0.0, 0.0, 0.0),
+                relief=None,
+                sortOrder=100,
+            )
+
+            self._cursor = DirectFrame(
+                parent=self._overlay_root,
+                pos=(0, 0, 0),
+                frameSize=(-18, 18, -18, 18),
+                frameColor=(0.94, 0.10, 0.10, 0.92),
+                relief=1,
+                borderWidth=(2, 2),
+            )
+            self._cursor.hide()
             self.update_layout(force=True)
             logger.info("Home UI initialized successfully")
         except Exception:
@@ -95,6 +118,8 @@ class HomeUIView:
 
         self._last_layout_size = next_size
         self._root["frameSize"] = (0, width, -height, 0)
+        if self._overlay_root is not None:
+            self._overlay_root["frameSize"] = (0, width, -height, 0)
 
         short_edge = min(width, height)
         title_margin_right = max(int(width * 0.05), 36)
@@ -120,6 +145,19 @@ class HomeUIView:
             button_label.setPos(button_width * 0.5, 0, -(button_height * 0.60))
             button_label.setScale(label_scale)
 
+    def update_cursor(self, state: UIInputState) -> None:
+        if self._cursor is None:
+            return
+
+        if not self._visible or not state.visible:
+            self._cursor.hide()
+            return
+
+        self._cursor.show()
+        cursor_x = float(state.cursor_pixels[0])
+        cursor_y = -float(state.cursor_pixels[1])
+        self._cursor.setPos(cursor_x, 0, cursor_y)
+
     def set_visible(self, visible: bool) -> None:
         self._visible = visible
         if self._root is None:
@@ -127,6 +165,9 @@ class HomeUIView:
         if visible:
             self.update_layout()
         self._root.show() if visible else self._root.hide()
+        if not visible:
+            if self._cursor:
+                self._cursor.hide()
 
     def is_visible(self) -> bool:
         return self._visible
@@ -135,6 +176,10 @@ class HomeUIView:
         for label in self._button_labels:
             label.removeNode()
         self._button_labels.clear()
+
+        if self._cursor is not None:
+            self._cursor.destroy()
+            self._cursor = None
 
         for button in self._buttons:
             button.destroy()
@@ -147,5 +192,6 @@ class HomeUIView:
         if self._root is not None:
             self._root.destroy()
             self._root = None
+        self._overlay_root = None
 
         logger.info("Home UI cleaned up")

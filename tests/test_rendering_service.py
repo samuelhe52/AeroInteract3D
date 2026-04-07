@@ -7,6 +7,7 @@ from src.rendering.debug.data_panel import DataPanelManager
 from src.rendering.rendering_core import RenderingCoreManager
 from src.rendering import service as rendering_service
 from src.rendering.service import ObjectInitialState, RenderingServiceImpl
+from src.rendering.ui.input_adapter import UIGestureInputAdapter
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
 
 
@@ -294,6 +295,7 @@ class FakeHomeView:
         self.destroyed = False
         self.layout_updates = 0
         self.last_window_size = window_size_provider()
+        self.cursor_state = None
 
     def set_visible(self, visible: bool) -> None:
         self.visible = visible
@@ -301,6 +303,9 @@ class FakeHomeView:
     def update_layout(self, force: bool = False) -> None:
         self.layout_updates += 1
         self.last_window_size = self.window_size_provider()
+
+    def update_cursor(self, state) -> None:
+        self.cursor_state = state
 
     def destroy(self) -> None:
         self.destroyed = True
@@ -859,6 +864,58 @@ def test_rendering_step_updates_home_view_layout_for_window_size_changes(monkeyp
     service.step()
 
     assert service._home_view.last_window_size == (1280, 720)
+    assert service._home_view.layout_updates >= 1
+
+
+def test_ui_gesture_input_adapter_maps_midpoint_to_pixels() -> None:
+    adapter = UIGestureInputAdapter()
+
+    ui_state = adapter.to_ui_input(make_packet_with_rotation(), window_size=(1600, 900))
+
+    assert ui_state.visible is True
+    assert ui_state.cursor_norm == pytest.approx((0.325, 0.4))
+    assert ui_state.cursor_pixels == pytest.approx((520.0, 360.0))
+
+
+def test_ui_gesture_input_adapter_hides_cursor_when_tracking_is_lost() -> None:
+    adapter = UIGestureInputAdapter()
+    packet = make_packet_with_rotation()
+    packet.tracking_state = "temporarily_lost"
+
+    ui_state = adapter.to_ui_input(packet, window_size=(1600, 900))
+
+    assert ui_state.visible is False
+    assert ui_state.cursor_pixels == pytest.approx((800.0, 450.0))
+
+
+def test_rendering_updates_home_cursor_from_gesture_packet(monkeypatch) -> None:
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+
+    service.update_gesture_data(make_packet_with_rotation())
+
+    assert service._home_view.cursor_state is not None
+    assert service._home_view.cursor_state.visible is True
+    assert service._home_view.cursor_state.cursor_pixels == pytest.approx((520.0, 360.0))
+
+
+def test_rendering_updates_home_layout_before_cursor_mapping(monkeypatch) -> None:
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service._window_adapter.get_base().win.width = 2648
+    service._window_adapter.get_base().win.height = 1490
+
+    service.update_gesture_data(make_packet_with_rotation())
+
+    assert service._home_view.last_window_size == (2648, 1490)
     assert service._home_view.layout_updates >= 1
 
 

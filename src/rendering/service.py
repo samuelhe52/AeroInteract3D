@@ -23,7 +23,7 @@ from .debug.auto_scaling import AutoScalingManager
 from .debug.data_panel import DataPanelManager
 from .debug.cam_preview import CameraPreviewManager
 from .interaction import VirtualHand
-from .ui import HomeUIView, RenderView, RenderingViewState
+from .ui import HomeUIView, RenderView, RenderingViewState, UIGestureInputAdapter
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
 VALID_PAYLOAD_KEYS = {
@@ -400,6 +400,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._object_visual_profiles: Dict[str, ObjectVisualProfile] = {}
         self._view_state = RenderingViewState()
         self._home_view: Optional[HomeUIView] = None
+        self._ui_input_adapter = UIGestureInputAdapter()
 
     @staticmethod
     def _box_model_center_offset() -> tuple[float, float, float]:
@@ -1585,6 +1586,11 @@ class RenderingServiceImpl(RenderOutputPort):
     def update_gesture_data(self, packet) -> None:
         """Update gesture data"""
         self._last_gesture_packet = packet
+        if self._home_view:
+            self._home_view.update_layout()
+            window_size = self._window_size()
+            ui_input = self._ui_input_adapter.to_ui_input(packet, window_size=window_size)
+            self._home_view.update_cursor(ui_input)
     
     def update_camera_frame(self, frame, observation=None, packet=None) -> None:
         """Update camera frame data"""
