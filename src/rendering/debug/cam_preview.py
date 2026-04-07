@@ -237,6 +237,20 @@ class CameraPreviewManager:
                 continue
             widget.show() if visible else widget.hide()
 
+    def set_brightness(self, brightness: float) -> None:
+        widgets = (
+            self._camera_preview_node,
+            self._camera_preview_frame,
+            self._camera_preview_title,
+            self._camera_preview_status,
+        )
+        for widget in widgets:
+            if widget is None:
+                continue
+            set_color_scale = getattr(widget, "setColorScale", None)
+            if callable(set_color_scale):
+                set_color_scale(brightness, brightness, brightness, 1.0)
+
     def destroy(self) -> None:
         """Clean up camera preview resources"""
         if self._camera_preview_node is not None:

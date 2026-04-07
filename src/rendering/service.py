@@ -23,7 +23,7 @@ from .debug.auto_scaling import AutoScalingManager
 from .debug.data_panel import DataPanelManager
 from .debug.cam_preview import CameraPreviewManager
 from .interaction import VirtualHand
-from .ui import HomeUIView, RenderView, RenderingViewState, UIGestureInputAdapter
+from .ui import HomeUIView, RenderView, RenderingViewState, SettingUIView, UIGestureInputAdapter, UISettingsState
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
 VALID_PAYLOAD_KEYS = {
@@ -399,7 +399,9 @@ class RenderingServiceImpl(RenderOutputPort):
         self._model_factory: Optional[ModelResourceFactory] = None
         self._object_visual_profiles: Dict[str, ObjectVisualProfile] = {}
         self._view_state = RenderingViewState()
+        self._ui_settings = UISettingsState()
         self._home_view: Optional[HomeUIView] = None
+        self._setting_view: Optional[SettingUIView] = None
         self._ui_input_adapter = UIGestureInputAdapter()
 
     @staticmethod
@@ -694,6 +696,8 @@ class RenderingServiceImpl(RenderOutputPort):
                 pixel2d = self._rendering_core.get_pixel2d()
                 if pixel2d is not None:
                     self._home_view = HomeUIView(pixel2d, self._window_size, self._handle_home_button_activated)
+                    self._setting_view = SettingUIView(pixel2d, self._window_size, self._handle_setting_button_activated)
+                    self._apply_ui_settings_to_views()
                 if self._debug_stats_enabled:
                     self._data_panel = DataPanelManager(self._auto_scaling)
                 camera_top_margin = (
@@ -769,6 +773,8 @@ class RenderingServiceImpl(RenderOutputPort):
             self._camera_preview.set_ui_scale(scale)
         if self._home_view:
             self._home_view.update_layout(force=True)
+        if self._setting_view:
+            self._setting_view.update_layout(force=True)
 
     def _window_size(self) -> tuple[int, int]:
         if self._rendering_core is None:
@@ -805,21 +811,93 @@ class RenderingServiceImpl(RenderOutputPort):
             return
         logger.warning("Unknown home button action ignored: %s", action)
 
+    def _handle_setting_button_activated(self, action: str) -> None:
+        if action == "back_home":
+            self.set_active_view(RenderView.HOME)
+            return
+        if action == "data_panel_toggle":
+            self._ui_settings.data_panel_enabled = not self._ui_settings.data_panel_enabled
+            self._apply_ui_settings_to_views()
+            self._sync_view_visibility()
+            return
+        if action == "cam_preview_toggle":
+            self._ui_settings.cam_preview_enabled = not self._ui_settings.cam_preview_enabled
+            self._apply_ui_settings_to_views()
+            self._sync_view_visibility()
+            return
+        if action.startswith("set_") and ":" in action:
+            setting_key, raw_value = action.split(":", 1)
+            setting_key = setting_key[4:]
+            try:
+                parsed_value = float(raw_value)
+            except ValueError:
+                logger.warning("Invalid setting action value ignored: %s", action)
+                return
+            if setting_key == "cursor_scale":
+                self._ui_settings.set_cursor_scale(parsed_value)
+            elif setting_key == "cursor_opacity":
+                self._ui_settings.set_cursor_opacity(parsed_value)
+            elif setting_key == "brightness":
+                self._ui_settings.set_brightness(parsed_value)
+            elif setting_key == "volume":
+                self._ui_settings.set_volume(parsed_value)
+            else:
+                logger.warning("Unknown setting slider action ignored: %s", action)
+                return
+            self._apply_ui_settings_to_views()
+            self._sync_view_visibility()
+            return
+        if action == "cursor_scale_down":
+            self._ui_settings.adjust_cursor_scale(-1)
+            self._apply_ui_settings_to_views()
+            return
+        if action == "cursor_scale_up":
+            self._ui_settings.adjust_cursor_scale(1)
+            self._apply_ui_settings_to_views()
+            return
+        if action == "cursor_opacity_down":
+            self._ui_settings.adjust_cursor_opacity(-1)
+            self._apply_ui_settings_to_views()
+            return
+        if action == "cursor_opacity_up":
+            self._ui_settings.adjust_cursor_opacity(1)
+            self._apply_ui_settings_to_views()
+            return
+        logger.warning("Unknown setting button action ignored: %s", action)
+
+    def _apply_ui_settings_to_views(self) -> None:
+        if self._home_view:
+            self._home_view.set_ui_settings(self._ui_settings)
+        if self._setting_view:
+            self._setting_view.set_ui_settings(self._ui_settings)
+        brightness = self._ui_settings.brightness_scale
+        if self._scene_root is not None and not self._scene_root.isEmpty():
+            set_color_scale = getattr(self._scene_root, "setColorScale", None)
+            if callable(set_color_scale):
+                set_color_scale(brightness, brightness, brightness, 1.0)
+        if self._data_panel:
+            self._data_panel.set_brightness(brightness)
+        if self._camera_preview:
+            self._camera_preview.set_brightness(brightness)
+
     def _sync_view_visibility(self) -> None:
         home_visible = self._view_state.active_view == RenderView.HOME
+        setting_visible = self._view_state.active_view == RenderView.SETTING
         table_visible = self._view_state.active_view == RenderView.TABLE
 
         if self._home_view:
             self._home_view.set_visible(home_visible)
+        if self._setting_view:
+            self._setting_view.set_visible(setting_visible)
 
         if self._scene_root is not None and not self._scene_root.isEmpty():
             self._scene_root.show() if table_visible else self._scene_root.hide()
 
         if self._data_panel:
-            self._data_panel.set_visible(table_visible)
+            self._data_panel.set_visible(table_visible and self._ui_settings.data_panel_enabled)
 
         if self._camera_preview:
-            self._camera_preview.set_visible(table_visible)
+            self._camera_preview.set_visible(table_visible and self._ui_settings.cam_preview_enabled)
     
     def push(self, command: SceneCommand) -> None:
         """Push a command through the main entry point with fault-tolerant handling."""
@@ -965,7 +1043,15 @@ class RenderingServiceImpl(RenderOutputPort):
                 "window_initialized": self._rendering_core.is_initialized() if self._rendering_core else False,
                 "executed_command_count": len(self._executed_command_ids),
                 "latest_frame_id": self._latest_frame_id,
-                "pending_commands_count": len(self._pending_commands)
+                "pending_commands_count": len(self._pending_commands),
+                "ui_settings": {
+                    "data_panel_enabled": self._ui_settings.data_panel_enabled,
+                    "cam_preview_enabled": self._ui_settings.cam_preview_enabled,
+                    "cursor_scale": self._ui_settings.cursor_scale,
+                    "cursor_opacity": self._ui_settings.cursor_opacity,
+                    "brightness": self._ui_settings.brightness,
+                    "volume": self._ui_settings.volume,
+                },
             }
         )
     
@@ -981,6 +1067,9 @@ class RenderingServiceImpl(RenderOutputPort):
         if self._home_view:
             self._home_view.destroy()
             self._home_view = None
+        if self._setting_view:
+            self._setting_view.destroy()
+            self._setting_view = None
         if self._camera_preview:
             self._camera_preview.destroy()
         if self._data_panel:
@@ -1595,11 +1684,15 @@ class RenderingServiceImpl(RenderOutputPort):
     def update_gesture_data(self, packet) -> None:
         """Update gesture data"""
         self._last_gesture_packet = packet
-        if self._home_view:
+        window_size = self._window_size()
+        ui_input = self._ui_input_adapter.to_ui_input(packet, window_size=window_size)
+        pinch_state = getattr(packet, "pinch_state", None)
+        if self._view_state.active_view == RenderView.HOME and self._home_view:
             self._home_view.update_layout()
-            window_size = self._window_size()
-            ui_input = self._ui_input_adapter.to_ui_input(packet, window_size=window_size)
-            self._home_view.update_cursor(ui_input, pinch_state=getattr(packet, "pinch_state", None))
+            self._home_view.update_cursor(ui_input, pinch_state=pinch_state)
+        elif self._view_state.active_view == RenderView.SETTING and self._setting_view:
+            self._setting_view.update_layout()
+            self._setting_view.update_cursor(ui_input, pinch_state=pinch_state)
     
     def update_camera_frame(self, frame, observation=None, packet=None) -> None:
         """Update camera frame data"""

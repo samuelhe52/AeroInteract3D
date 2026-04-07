@@ -9,7 +9,7 @@ from panda3d.core import NodePath, TextNode
 from src.contracts import PinchState
 
 from .interaction import UIButtonBounds, UIButtonInteractionController, UIButtonInteractionSnapshot
-from .state import UIInputState
+from .state import UIInputState, UISettingsState
 
 
 logger = logging.getLogger("rendering.ui.home_view")
@@ -53,6 +53,7 @@ class HomeUIView:
         self._cursor: Optional[DirectFrame] = None
         self._visible = True
         self._last_layout_size: tuple[int, int] | None = None
+        self._ui_settings = UISettingsState()
         self.init_view()
 
     @staticmethod
@@ -125,11 +126,39 @@ class HomeUIView:
                 borderWidth=(2, 2),
             )
             self._cursor.hide()
+            self._apply_cursor_style()
             self.update_layout(force=True)
             logger.info("Home UI initialized successfully")
         except Exception:
             logger.exception("Failed to initialize home UI")
             raise
+
+    def _apply_cursor_style(self) -> None:
+        if self._cursor is None:
+            return
+        extent = 18.0 * self._ui_settings.cursor_scale
+        self._cursor["frameSize"] = (-extent, extent, -extent, extent)
+        self._cursor["frameColor"] = (0.94, 0.10, 0.10, self._ui_settings.cursor_opacity)
+
+    def _apply_brightness(self) -> None:
+        brightness = self._ui_settings.brightness_scale
+        targets = (self._root, self._overlay_root, self._title, *self._buttons, *self._button_labels)
+        for target in targets:
+            if target is None:
+                continue
+            set_color_scale = getattr(target, "setColorScale", None)
+            if callable(set_color_scale):
+                set_color_scale(brightness, brightness, brightness, 1.0)
+
+    def set_ui_settings(self, settings: UISettingsState) -> None:
+        self._ui_settings.data_panel_enabled = settings.data_panel_enabled
+        self._ui_settings.cam_preview_enabled = settings.cam_preview_enabled
+        self._ui_settings.cursor_scale = settings.cursor_scale
+        self._ui_settings.cursor_opacity = settings.cursor_opacity
+        self._ui_settings.brightness = settings.brightness
+        self._ui_settings.volume = settings.volume
+        self._apply_cursor_style()
+        self._apply_brightness()
 
     def update_layout(self, force: bool = False) -> None:
         if self._root is None or self._title is None:

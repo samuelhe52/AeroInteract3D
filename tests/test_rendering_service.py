@@ -9,7 +9,7 @@ from src.rendering import service as rendering_service
 from src.rendering.service import ObjectInitialState, RenderingServiceImpl
 from src.rendering.ui.input_adapter import UIGestureInputAdapter
 from src.rendering.ui.interaction import UIButtonBounds, UIButtonInteractionController
-from src.rendering.ui.state import UIInputState
+from src.rendering.ui.state import UIInputState, UISettingsState
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
 
 
@@ -300,6 +300,7 @@ class FakeHomeView:
         self.last_window_size = window_size_provider()
         self.cursor_state = None
         self.last_pinch_state = None
+        self.last_settings = None
 
     def set_visible(self, visible: bool) -> None:
         self.visible = visible
@@ -312,6 +313,40 @@ class FakeHomeView:
         self.cursor_state = state
         self.last_pinch_state = pinch_state
 
+    def set_ui_settings(self, settings) -> None:
+        self.last_settings = (settings.cursor_scale, settings.cursor_opacity)
+
+    def destroy(self) -> None:
+        self.destroyed = True
+
+
+class FakeSettingView:
+    def __init__(self, pixel2d, window_size_provider, on_button_activated=None) -> None:
+        self.pixel2d = pixel2d
+        self.window_size_provider = window_size_provider
+        self.on_button_activated = on_button_activated
+        self.visible = False
+        self.destroyed = False
+        self.layout_updates = 0
+        self.last_window_size = window_size_provider()
+        self.cursor_state = None
+        self.last_pinch_state = None
+        self.last_settings = None
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = visible
+
+    def update_layout(self, force: bool = False) -> None:
+        self.layout_updates += 1
+        self.last_window_size = self.window_size_provider()
+
+    def update_cursor(self, state, pinch_state=None) -> None:
+        self.cursor_state = state
+        self.last_pinch_state = pinch_state
+
+    def set_ui_settings(self, settings) -> None:
+        self.last_settings = (settings.cursor_scale, settings.cursor_opacity)
+
     def destroy(self) -> None:
         self.destroyed = True
 
@@ -320,6 +355,7 @@ def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
     monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
     monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service._errors = [{"code": "stale"}]
@@ -968,10 +1004,26 @@ def test_ui_button_interaction_controller_activates_after_release_candidate_then
     assert released.activated_index == 0
 
 
+def test_ui_settings_state_clamps_values() -> None:
+    settings = UISettingsState()
+
+    settings.adjust_cursor_scale(200)
+    settings.adjust_cursor_opacity(-200)
+    settings.set_brightness(-25)
+    settings.set_volume(160)
+
+    assert settings.cursor_scale == 2.0
+    assert settings.cursor_opacity == 0.2
+    assert settings.brightness == 0.0
+    assert settings.brightness_scale == pytest.approx(0.2)
+    assert settings.volume == 100.0
+
+
 def test_rendering_updates_home_cursor_from_gesture_packet(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
     monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
     monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -988,6 +1040,7 @@ def test_rendering_updates_home_layout_before_cursor_mapping(monkeypatch) -> Non
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
     monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
     monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -1004,6 +1057,7 @@ def test_rendering_home_button_callback_switches_view(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
     monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
     monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -1013,6 +1067,65 @@ def test_rendering_home_button_callback_switches_view(monkeypatch) -> None:
 
     service._home_view.on_button_activated("setting")
     assert service.active_view == "setting"
+
+
+def test_rendering_setting_button_updates_ui_settings(monkeypatch) -> None:
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("setting")
+
+    service._setting_view.on_button_activated("set_cursor_scale:1.37")
+    service._setting_view.on_button_activated("set_cursor_opacity:0.61")
+    service._setting_view.on_button_activated("set_brightness:48")
+    service._setting_view.on_button_activated("set_volume:73")
+
+    assert service.health()["stats"]["ui_settings"] == {
+        "data_panel_enabled": True,
+        "cam_preview_enabled": True,
+        "cursor_scale": 1.37,
+        "cursor_opacity": 0.61,
+        "brightness": 48.0,
+        "volume": 73.0,
+    }
+    assert service._home_view.last_settings == (1.37, 0.61)
+    assert service._setting_view.last_settings == (1.37, 0.61)
+
+
+def test_rendering_setting_button_can_return_home(monkeypatch) -> None:
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("setting")
+
+    service._setting_view.on_button_activated("back_home")
+
+    assert service.active_view == "home"
+
+
+def test_rendering_routes_ui_input_to_setting_view(monkeypatch) -> None:
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("setting")
+
+    service.update_gesture_data(make_packet_with_rotation())
+
+    assert service._setting_view.cursor_state is not None
+    assert service._setting_view.last_pinch_state == "pinched"
+    assert service._home_view.cursor_state is None
 
 
 def test_rendering_core_registers_quit_shortcuts() -> None:

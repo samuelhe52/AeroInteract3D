@@ -211,6 +211,14 @@ class DataPanelManager:
             self._status_frame.show() if visible else self._status_frame.hide()
         if self._status_panel:
             self._status_panel.show() if visible else self._status_panel.hide()
+
+    def set_brightness(self, brightness: float) -> None:
+        for widget in (self._status_frame, self._status_panel):
+            if widget is None:
+                continue
+            set_color_scale = getattr(widget, "setColorScale", None)
+            if callable(set_color_scale):
+                set_color_scale(brightness, brightness, brightness, 1.0)
     
     def destroy(self) -> None:
         """Clean up resources"""
