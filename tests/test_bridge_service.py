@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pytest
 
 from src.bridge.service import BridgeServiceImpl
 from src.contracts import GesturePacket, Vec3
+from src.gesture.runtime import RawHandObservation
+from src.gesture.service import GestureServiceImpl
 
 
 def make_packet(
@@ -543,6 +546,74 @@ def test_bridge_secondary_pinch_distance_fallback_triggers_dual_scale() -> None:
         pinch_state="open",  # Simulate secondary pinch_state jitter/misclassification.
         pinch_distance=0.05,   # Strict fallback threshold should still treat this as pinched.
     )
+
+    commands = bridge.process(packet)
+
+    assert any(
+        command.command_type == "set_object_pose" and "scale" in command.payload
+        for command in commands
+    )
+
+
+def test_bridge_dual_scale_accepts_primary_pinch_candidate_from_gesture_service() -> None:
+    def make_observation(*, wrist_x: float, handedness: str) -> RawHandObservation:
+        return RawHandObservation(
+            index_tip=Vec3(wrist_x + 0.04, -0.08, -0.18),
+            thumb_tip=Vec3(wrist_x, -0.08, -0.18),
+            wrist=Vec3(wrist_x, -0.12, -0.18),
+            confidence=0.95,
+            raw_pinch_distance=0.04,
+            hand_scale=0.30,
+            landmarks=[Vec3(0.5, 0.5, 0.0) for _ in range(21)],
+            handedness=handedness,
+        )
+
+    class FakeCapture:
+        def __init__(self, **_: object) -> None:
+            self.frames = [
+                np.zeros((8, 8, 3), dtype=np.uint8),
+                np.zeros((8, 8, 3), dtype=np.uint8),
+            ]
+
+        def read(self):
+            if not self.frames:
+                return None
+            return self.frames.pop(0)
+
+        def close(self) -> None:
+            return None
+
+    class FakeDualPinchDetector:
+        def __init__(self, **_: object) -> None:
+            return None
+
+        def detect_multi(self, frame, *, timestamp_ms: int):
+            assert frame is not None
+            assert timestamp_ms > 0
+            return [
+                make_observation(wrist_x=0.0, handedness="Right"),
+                make_observation(wrist_x=0.04, handedness="Left"),
+            ]
+
+        def close(self) -> None:
+            return None
+
+    gesture = GestureServiceImpl(
+        capture_factory=FakeCapture,
+        detector_factory=FakeDualPinchDetector,
+        clock=iter([1.0, 1.01]).__next__,
+    )
+    bridge = BridgeServiceImpl()
+
+    gesture.start()
+    bridge.start()
+
+    packet = gesture.poll()
+
+    assert packet is not None
+    assert packet.pinch_state == "pinch_candidate"
+    assert packet.debug is not None
+    assert packet.debug["secondary_hand"]["pinch_state"] == "pinch_candidate"
 
     commands = bridge.process(packet)
 

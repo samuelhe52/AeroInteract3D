@@ -163,6 +163,7 @@ class SecondaryHandState:
 DUAL_SCALE_RATIO_MIN = 0.35
 DUAL_SCALE_RATIO_MAX = 2.80
 DUAL_SCALE_RATIO_EXPONENT = 0.85
+PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.12
 SECONDARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.12
 SECONDARY_PINCH_FALLBACK_RELEASE_DISTANCE = 0.24
 
@@ -356,6 +357,7 @@ class BridgeServiceImpl(BridgeService):
         )
         secondary_pinched = self._secondary_is_pinched(secondary_hand)
         primary_pinched = packet.pinch_state == "pinched"
+        primary_dual_scale_pinched = self._primary_allows_dual_scale(packet)
 
         if not primary_available and not secondary_available:
             if self._grabbed_object_id is not None or self._hovered_object_id is not None:
@@ -402,7 +404,7 @@ class BridgeServiceImpl(BridgeService):
         dual_scale_gate_active = (
             primary_available
             and secondary_available
-            and primary_pinched
+            and primary_dual_scale_pinched
             and secondary_pinched
         )
 
@@ -914,6 +916,20 @@ class BridgeServiceImpl(BridgeService):
             return False
         return secondary_hand.pinch_distance <= SECONDARY_PINCH_FALLBACK_ENTER_DISTANCE
 
+    @staticmethod
+    def _primary_allows_dual_scale(packet: GesturePacket) -> bool:
+        if packet.pinch_state == "pinched":
+            return True
+        if packet.pinch_state != "pinch_candidate":
+            return False
+        if packet.tracking_state != "tracked":
+            return False
+        if packet.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
+            return False
+        if packet.pinch_distance is None:
+            return False
+        return packet.pinch_distance <= PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE
+
     def _dual_scale_target_object(
         self,
         packet: GesturePacket,
@@ -922,7 +938,7 @@ class BridgeServiceImpl(BridgeService):
         secondary_hovered_object_id: str | None,
         secondary_hand: SecondaryHandState | None,
     ) -> ObjectInteractionState | None:
-        if packet.pinch_state != "pinched":
+        if not self._primary_allows_dual_scale(packet):
             return None
         if secondary_hand is None or not self._secondary_is_pinched(secondary_hand):
             return None
