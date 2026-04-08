@@ -155,8 +155,12 @@ class FakeBase:
         self.win = FakeWindow()
         self.destroyed = False
         self.accepted_events: dict[str, object] = {}
+        self.background_color = None
 
-    def accept(self, event_name: str, callback) -> None:
+    def accept(self, event_name: str, callback, extra_args=None) -> None:
+        if extra_args:
+            self.accepted_events[event_name] = lambda: callback(*extra_args)
+            return
         self.accepted_events[event_name] = callback
 
     def destroy(self) -> None:
@@ -164,6 +168,9 @@ class FakeBase:
 
     def userExit(self) -> None:
         self.destroyed = True
+
+    def setBackgroundColor(self, *values: float) -> None:
+        self.background_color = values
 
 
 class FakeWindowAdapter:
@@ -209,6 +216,7 @@ class FakeNodePath:
         self.name = name
         self.parent = None
         self.hidden = False
+        self.color_scale = None
 
     def reparentTo(self, parent: object) -> None:
         self.parent = parent
@@ -238,6 +246,9 @@ class FakeNodePath:
 
     def setTransparency(self, mode) -> None:
         self.transparency = mode
+
+    def setColorScale(self, *values: float) -> None:
+        self.color_scale = values
 
     def isEmpty(self) -> bool:
         return False
@@ -332,6 +343,7 @@ class FakeSettingView:
         self.cursor_state = None
         self.last_pinch_state = None
         self.last_settings = None
+        self.calibration_preview_state = None
 
     def set_visible(self, visible: bool) -> None:
         self.visible = visible
@@ -347,15 +359,100 @@ class FakeSettingView:
     def set_ui_settings(self, settings) -> None:
         self.last_settings = (settings.cursor_scale, settings.cursor_opacity)
 
+    def update_calibration_preview(self, state) -> None:
+        self.calibration_preview_state = state
+
     def destroy(self) -> None:
         self.destroyed = True
 
 
-def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
+class FakeCalibrationView:
+    def __init__(self, pixel2d, window_size_provider, on_button_activated=None) -> None:
+        self.pixel2d = pixel2d
+        self.window_size_provider = window_size_provider
+        self.on_button_activated = on_button_activated
+        self.visible = False
+        self.destroyed = False
+        self.layout_updates = 0
+        self.last_window_size = window_size_provider()
+        self.cursor_state = None
+        self.last_pinch_state = None
+        self.last_settings = None
+        self.calibration_preview_state = None
+        self.selected_parameter_key = "ui_cursor_scale_x"
+        self.adjustments: list[int] = []
+        self.selection_steps: list[int] = []
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = visible
+
+    def update_layout(self, force: bool = False) -> None:
+        self.layout_updates += 1
+        self.last_window_size = self.window_size_provider()
+
+    def update_cursor(self, state, pinch_state=None) -> None:
+        self.cursor_state = state
+        self.last_pinch_state = pinch_state
+
+    def set_ui_settings(self, settings) -> None:
+        self.last_settings = (
+            settings.ui_cursor_scale_x,
+            settings.ui_cursor_scale_y,
+            settings.ui_cursor_offset_x,
+            settings.ui_cursor_offset_y,
+        )
+
+    def update_calibration_preview(self, state) -> None:
+        self.calibration_preview_state = state
+
+    def select_next_parameter(self, step: int = 1) -> str:
+        keys = [
+            "ui_cursor_scale_x",
+            "ui_cursor_scale_y",
+            "ui_cursor_offset_x",
+            "ui_cursor_offset_y",
+        ]
+        index = keys.index(self.selected_parameter_key)
+        self.selected_parameter_key = keys[(index + step) % len(keys)]
+        self.selection_steps.append(step)
+        return self.selected_parameter_key
+
+    def adjust_selected_parameter(self, step_count: int):
+        self.adjustments.append(step_count)
+        if self.on_button_activated is None:
+            return None
+        current_values = {
+            "ui_cursor_scale_x": 1.0,
+            "ui_cursor_scale_y": 1.0,
+            "ui_cursor_offset_x": 0.0,
+            "ui_cursor_offset_y": 0.0,
+        }
+        if self.last_settings is not None:
+            current_values = {
+                "ui_cursor_scale_x": self.last_settings[0],
+                "ui_cursor_scale_y": self.last_settings[1],
+                "ui_cursor_offset_x": self.last_settings[2],
+                "ui_cursor_offset_y": self.last_settings[3],
+            }
+        step_size = 0.01
+        next_value = current_values[self.selected_parameter_key] + step_size * float(step_count)
+        self.on_button_activated(f"set_{self.selected_parameter_key}:{next_value}")
+        return next_value
+
+    def destroy(self) -> None:
+        self.destroyed = True
+
+
+def patch_ui_views(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
     monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
     monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
     monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
+    monkeypatch.setattr(rendering_service, "CalibrationUIView", FakeCalibrationView)
+
+
+def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service._errors = [{"code": "stale"}]
@@ -1011,19 +1108,20 @@ def test_ui_settings_state_clamps_values() -> None:
     settings.adjust_cursor_opacity(-200)
     settings.set_brightness(-25)
     settings.set_volume(160)
+    settings.set_ui_cursor_scale_x(2.0)
+    settings.set_ui_cursor_offset_y(-1.0)
 
     assert settings.cursor_scale == 2.0
     assert settings.cursor_opacity == 0.2
     assert settings.brightness == 0.0
     assert settings.brightness_scale == pytest.approx(0.2)
     assert settings.volume == 100.0
+    assert settings.ui_cursor_scale_x == 1.5
+    assert settings.ui_cursor_offset_y == -0.25
 
 
 def test_rendering_updates_home_cursor_from_gesture_packet(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
-    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -1037,10 +1135,7 @@ def test_rendering_updates_home_cursor_from_gesture_packet(monkeypatch) -> None:
 
 
 def test_rendering_updates_home_layout_before_cursor_mapping(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
-    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -1054,10 +1149,7 @@ def test_rendering_updates_home_layout_before_cursor_mapping(monkeypatch) -> Non
 
 
 def test_rendering_home_button_callback_switches_view(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
-    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -1070,10 +1162,7 @@ def test_rendering_home_button_callback_switches_view(monkeypatch) -> None:
 
 
 def test_rendering_setting_button_updates_ui_settings(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
-    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -1091,16 +1180,36 @@ def test_rendering_setting_button_updates_ui_settings(monkeypatch) -> None:
         "cursor_opacity": 0.61,
         "brightness": 48.0,
         "volume": 73.0,
+        "ui_cursor_scale_x": 1.0,
+        "ui_cursor_scale_y": 1.0,
+        "ui_cursor_offset_x": 0.0,
+        "ui_cursor_offset_y": 0.0,
+        "calibration_profile_key": service._calibration_profile_key,
     }
     assert service._home_view.last_settings == (1.37, 0.61)
     assert service._setting_view.last_settings == (1.37, 0.61)
 
 
+def test_rendering_brightness_and_volume_apply_to_window_roots(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    volume_updates: list[float] = []
+    service.set_volume_callback(volume_updates.append)
+    service.set_active_view("setting")
+
+    service._setting_view.on_button_activated("set_brightness:25")
+    service._setting_view.on_button_activated("set_volume:73")
+
+    assert service._scene_root.color_scale == pytest.approx((0.4, 0.4, 0.4, 1.0))
+    assert service._window_adapter.get_base().pixel2d.color_scale == pytest.approx((0.4, 0.4, 0.4, 1.0))
+    assert service._window_adapter.get_base().background_color == pytest.approx((0.4, 0.4, 0.4, 1.0))
+    assert volume_updates == [50.0, 73.0]
+
+
 def test_rendering_setting_button_can_return_home(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
-    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -1112,10 +1221,7 @@ def test_rendering_setting_button_can_return_home(monkeypatch) -> None:
 
 
 def test_rendering_routes_ui_input_to_setting_view(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
-    monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -1126,6 +1232,132 @@ def test_rendering_routes_ui_input_to_setting_view(monkeypatch) -> None:
     assert service._setting_view.cursor_state is not None
     assert service._setting_view.last_pinch_state == "pinched"
     assert service._home_view.cursor_state is None
+
+
+def test_rendering_routes_calibration_preview_to_calibration_view(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("calibration")
+
+    service.update_gesture_data(make_packet_with_rotation())
+
+    preview_state = service._calibration_view.calibration_preview_state
+    assert preview_state is not None
+    assert preview_state.visible is True
+    assert preview_state.camera_midpoint == pytest.approx((0.35, 0.2))
+    assert preview_state.source_cursor_norm == pytest.approx((0.325, 0.4))
+    assert preview_state.source_cursor_pixels == pytest.approx((520.0, 360.0))
+    assert preview_state.mapped_cursor_norm == pytest.approx((0.325, 0.4))
+    assert preview_state.mapped_cursor_pixels == pytest.approx((520.0, 360.0))
+
+
+def test_rendering_calibration_settings_affect_ui_cursor_mapping(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("calibration")
+    service._calibration_view.on_button_activated("set_ui_cursor_scale_x:1.20")
+    service._calibration_view.on_button_activated("set_ui_cursor_offset_x:0.10")
+
+    service.update_gesture_data(make_packet_with_rotation())
+
+    assert service._calibration_view.cursor_state.cursor_norm == pytest.approx((0.39, 0.4))
+    assert service._calibration_view.cursor_state.cursor_pixels == pytest.approx((624.0, 360.0))
+    preview_state = service._calibration_view.calibration_preview_state
+    assert preview_state.source_cursor_norm == pytest.approx((0.325, 0.4))
+    assert preview_state.mapped_cursor_norm == pytest.approx((0.39, 0.4))
+
+
+def test_rendering_setting_button_opens_calibration(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("setting")
+
+    service._setting_view.on_button_activated("open_calibration")
+
+    assert service.active_view == "calibration"
+    assert service._calibration_view.visible is True
+
+
+def test_rendering_registers_calibration_shortcuts(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+
+    accepted_events = service._window_adapter.get_base().accepted_events
+    assert set(accepted_events) >= {
+        "f2",
+        "escape",
+        "tab",
+        "shift-tab",
+        "arrow_left",
+        "arrow_right",
+        "arrow_up",
+        "arrow_down",
+        "shift-arrow_left",
+        "shift-arrow_right",
+        "shift-arrow_up",
+        "shift-arrow_down",
+        "r",
+        "enter",
+    }
+
+
+def test_rendering_f2_opens_calibration_and_escape_returns(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    accepted_events = service._window_adapter.get_base().accepted_events
+
+    accepted_events["f2"]()
+    assert service.active_view == "calibration"
+
+    accepted_events["escape"]()
+    assert service.active_view == "setting"
+
+
+def test_rendering_keyboard_adjusts_selected_calibration_parameter(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    accepted_events = service._window_adapter.get_base().accepted_events
+    accepted_events["f2"]()
+
+    accepted_events["shift-tab"]()
+    assert service._calibration_view.selected_parameter_key == "ui_cursor_offset_y"
+
+    accepted_events["shift-arrow_left"]()
+    assert service.health()["stats"]["ui_settings"]["ui_cursor_offset_y"] == -0.1
+
+    accepted_events["r"]()
+    assert service.health()["stats"]["ui_settings"]["ui_cursor_offset_y"] == 0.0
+
+
+def test_rendering_persists_calibration_settings_per_device(monkeypatch, tmp_path) -> None:
+    patch_ui_views(monkeypatch)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("calibration")
+    service._calibration_view.on_button_activated("set_ui_cursor_scale_x:1.24")
+    service._calibration_view.on_button_activated("set_ui_cursor_offset_y:-0.08")
+    service.stop()
+
+    second_service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    second_service.start()
+
+    ui_settings = second_service.health()["stats"]["ui_settings"]
+    assert ui_settings["ui_cursor_scale_x"] == 1.24
+    assert ui_settings["ui_cursor_offset_y"] == -0.08
 
 
 def test_rendering_core_registers_quit_shortcuts() -> None:

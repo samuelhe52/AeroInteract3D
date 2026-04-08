@@ -158,7 +158,6 @@ class HomeUIView:
         self._ui_settings.brightness = settings.brightness
         self._ui_settings.volume = settings.volume
         self._apply_cursor_style()
-        self._apply_brightness()
 
     def update_layout(self, force: bool = False) -> None:
         if self._root is None or self._title is None:

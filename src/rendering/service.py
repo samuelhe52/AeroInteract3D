@@ -19,11 +19,12 @@ from src.utils.runtime import (
 )
 
 from .rendering_core import RenderingCoreManager
+from .calibration_store import CalibrationSettingsStore
 from .debug.auto_scaling import AutoScalingManager
 from .debug.data_panel import DataPanelManager
 from .debug.cam_preview import CameraPreviewManager
 from .interaction import VirtualHand
-from .ui import HomeUIView, RenderView, RenderingViewState, SettingUIView, UIGestureInputAdapter, UISettingsState
+from .ui import CalibrationUIView, HomeUIView, RenderView, RenderingViewState, SettingUIView, UICalibrationPreviewState, UIGestureInputAdapter, UISettingsState
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
 VALID_PAYLOAD_KEYS = {
@@ -34,6 +35,22 @@ VALID_PAYLOAD_KEYS = {
     "reset_interaction": set(),
     "heartbeat": {"interaction_state"},
 }
+CALIBRATION_SHORTCUT_EVENTS = (
+    "f2",
+    "escape",
+    "tab",
+    "shift-tab",
+    "arrow_left",
+    "arrow_right",
+    "arrow_up",
+    "arrow_down",
+    "shift-arrow_left",
+    "shift-arrow_right",
+    "shift-arrow_up",
+    "shift-arrow_down",
+    "r",
+    "enter",
+)
 
 
 # Initial object state.
@@ -400,8 +417,13 @@ class RenderingServiceImpl(RenderOutputPort):
         self._object_visual_profiles: Dict[str, ObjectVisualProfile] = {}
         self._view_state = RenderingViewState()
         self._ui_settings = UISettingsState()
+        self._calibration_store = CalibrationSettingsStore()
+        self._calibration_profile_key = self._calibration_store.current_profile_key()
+        self._volume_callback: Callable[[float], None] | None = None
+        self._last_applied_volume: float | None = None
         self._home_view: Optional[HomeUIView] = None
         self._setting_view: Optional[SettingUIView] = None
+        self._calibration_view: Optional[CalibrationUIView] = None
         self._ui_input_adapter = UIGestureInputAdapter()
 
     @staticmethod
@@ -680,6 +702,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._metrics = RenderingMetrics()
         self._window_adapter = self._window_adapter_factory()
         self._rendering_core = self._window_adapter
+        self._calibration_store.load_into(self._ui_settings, self._calibration_profile_key)
         if self._quit_callback is not None:
             self._rendering_core.set_quit_handler(self._quit_callback)
         
@@ -697,6 +720,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 if pixel2d is not None:
                     self._home_view = HomeUIView(pixel2d, self._window_size, self._handle_home_button_activated)
                     self._setting_view = SettingUIView(pixel2d, self._window_size, self._handle_setting_button_activated)
+                    self._calibration_view = CalibrationUIView(pixel2d, self._window_size, self._handle_calibration_button_activated)
                     self._apply_ui_settings_to_views()
                 if self._debug_stats_enabled:
                     self._data_panel = DataPanelManager(self._auto_scaling)
@@ -746,6 +770,8 @@ class RenderingServiceImpl(RenderOutputPort):
                 config=self._virtual_hand_config
             )
             logger.info("Virtual hand initialized successfully with base.render as parent")
+            self._register_calibration_shortcuts()
+            self._apply_window_brightness()
             self._sync_view_visibility()
 
             # Switch state to RUNNING
@@ -775,6 +801,30 @@ class RenderingServiceImpl(RenderOutputPort):
             self._home_view.update_layout(force=True)
         if self._setting_view:
             self._setting_view.update_layout(force=True)
+        if self._calibration_view:
+            self._calibration_view.update_layout(force=True)
+
+    def _register_calibration_shortcuts(self) -> None:
+        if self._rendering_core is None:
+            return
+        base = self._rendering_core.get_base()
+        accept = getattr(base, "accept", None) if base is not None else None
+        if not callable(accept):
+            return
+        accept("f2", self._open_calibration_shortcut)
+        accept("escape", self._exit_calibration_shortcut)
+        accept("tab", self._focus_next_calibration_parameter)
+        accept("shift-tab", self._focus_previous_calibration_parameter)
+        accept("arrow_left", self._adjust_calibration_parameter, [-1])
+        accept("arrow_down", self._adjust_calibration_parameter, [-1])
+        accept("arrow_right", self._adjust_calibration_parameter, [1])
+        accept("arrow_up", self._adjust_calibration_parameter, [1])
+        accept("shift-arrow_left", self._adjust_calibration_parameter, [-10])
+        accept("shift-arrow_down", self._adjust_calibration_parameter, [-10])
+        accept("shift-arrow_right", self._adjust_calibration_parameter, [10])
+        accept("shift-arrow_up", self._adjust_calibration_parameter, [10])
+        accept("r", self._reset_calibration_shortcut)
+        accept("enter", self._confirm_calibration_shortcut)
 
     def _window_size(self) -> tuple[int, int]:
         if self._rendering_core is None:
@@ -815,6 +865,9 @@ class RenderingServiceImpl(RenderOutputPort):
         if action == "back_home":
             self.set_active_view(RenderView.HOME)
             return
+        if action == "open_calibration":
+            self.set_active_view(RenderView.CALIBRATION)
+            return
         if action == "data_panel_toggle":
             self._ui_settings.data_panel_enabled = not self._ui_settings.data_panel_enabled
             self._apply_ui_settings_to_views()
@@ -825,70 +878,118 @@ class RenderingServiceImpl(RenderOutputPort):
             self._apply_ui_settings_to_views()
             self._sync_view_visibility()
             return
-        if action.startswith("set_") and ":" in action:
-            setting_key, raw_value = action.split(":", 1)
-            setting_key = setting_key[4:]
-            try:
-                parsed_value = float(raw_value)
-            except ValueError:
-                logger.warning("Invalid setting action value ignored: %s", action)
-                return
-            if setting_key == "cursor_scale":
-                self._ui_settings.set_cursor_scale(parsed_value)
-            elif setting_key == "cursor_opacity":
-                self._ui_settings.set_cursor_opacity(parsed_value)
-            elif setting_key == "brightness":
-                self._ui_settings.set_brightness(parsed_value)
-            elif setting_key == "volume":
-                self._ui_settings.set_volume(parsed_value)
-            else:
-                logger.warning("Unknown setting slider action ignored: %s", action)
-                return
-            self._apply_ui_settings_to_views()
-            self._sync_view_visibility()
-            return
-        if action == "cursor_scale_down":
-            self._ui_settings.adjust_cursor_scale(-1)
-            self._apply_ui_settings_to_views()
-            return
-        if action == "cursor_scale_up":
-            self._ui_settings.adjust_cursor_scale(1)
-            self._apply_ui_settings_to_views()
-            return
-        if action == "cursor_opacity_down":
-            self._ui_settings.adjust_cursor_opacity(-1)
-            self._apply_ui_settings_to_views()
-            return
-        if action == "cursor_opacity_up":
-            self._ui_settings.adjust_cursor_opacity(1)
-            self._apply_ui_settings_to_views()
+        if self._apply_setting_action(action):
             return
         logger.warning("Unknown setting button action ignored: %s", action)
 
+    def _handle_calibration_button_activated(self, action: str) -> None:
+        if action == "back_setting":
+            self.set_active_view(RenderView.SETTING)
+            return
+        if action == "reset_calibration":
+            self._reset_calibration_settings()
+            return
+        if self._apply_setting_action(action):
+            return
+        logger.warning("Unknown calibration button action ignored: %s", action)
+
+    def _reset_calibration_settings(self) -> None:
+        self._ui_settings.set_ui_cursor_scale_x(1.0)
+        self._ui_settings.set_ui_cursor_scale_y(1.0)
+        self._ui_settings.set_ui_cursor_offset_x(0.0)
+        self._ui_settings.set_ui_cursor_offset_y(0.0)
+        self._save_calibration_settings()
+        self._apply_ui_settings_to_views()
+        self._sync_view_visibility()
+
+    def _save_calibration_settings(self) -> None:
+        self._calibration_store.save_from(self._ui_settings, self._calibration_profile_key)
+
+    def _apply_setting_action(self, action: str) -> bool:
+        if not action.startswith("set_") or ":" not in action:
+            return False
+        setting_key, raw_value = action.split(":", 1)
+        setting_key = setting_key[4:]
+        try:
+            parsed_value = float(raw_value)
+        except ValueError:
+            logger.warning("Invalid setting action value ignored: %s", action)
+            return True
+        if setting_key == "cursor_scale":
+            self._ui_settings.set_cursor_scale(parsed_value)
+        elif setting_key == "cursor_opacity":
+            self._ui_settings.set_cursor_opacity(parsed_value)
+        elif setting_key == "brightness":
+            self._ui_settings.set_brightness(parsed_value)
+        elif setting_key == "volume":
+            self._ui_settings.set_volume(parsed_value)
+        elif setting_key == "ui_cursor_scale_x":
+            self._ui_settings.set_ui_cursor_scale_x(parsed_value)
+        elif setting_key == "ui_cursor_scale_y":
+            self._ui_settings.set_ui_cursor_scale_y(parsed_value)
+        elif setting_key == "ui_cursor_offset_x":
+            self._ui_settings.set_ui_cursor_offset_x(parsed_value)
+        elif setting_key == "ui_cursor_offset_y":
+            self._ui_settings.set_ui_cursor_offset_y(parsed_value)
+        else:
+            logger.warning("Unknown setting slider action ignored: %s", action)
+            return True
+        if setting_key.startswith("ui_cursor_"):
+            self._save_calibration_settings()
+        self._apply_ui_settings_to_views()
+        self._sync_view_visibility()
+        return True
+
+    def _open_calibration_shortcut(self) -> None:
+        self.set_active_view(RenderView.CALIBRATION)
+
+    def _exit_calibration_shortcut(self) -> None:
+        if self._view_state.active_view == RenderView.CALIBRATION:
+            self.set_active_view(RenderView.SETTING)
+
+    def _confirm_calibration_shortcut(self) -> None:
+        if self._view_state.active_view == RenderView.CALIBRATION:
+            self.set_active_view(RenderView.SETTING)
+
+    def _focus_next_calibration_parameter(self) -> None:
+        if self._view_state.active_view == RenderView.CALIBRATION and self._calibration_view is not None:
+            self._calibration_view.select_next_parameter(1)
+
+    def _focus_previous_calibration_parameter(self) -> None:
+        if self._view_state.active_view == RenderView.CALIBRATION and self._calibration_view is not None:
+            self._calibration_view.select_next_parameter(-1)
+
+    def _adjust_calibration_parameter(self, step_count: int) -> None:
+        if self._view_state.active_view == RenderView.CALIBRATION and self._calibration_view is not None:
+            self._calibration_view.adjust_selected_parameter(step_count)
+
+    def _reset_calibration_shortcut(self) -> None:
+        if self._view_state.active_view == RenderView.CALIBRATION:
+            self._reset_calibration_settings()
+
     def _apply_ui_settings_to_views(self) -> None:
+        self._ui_input_adapter.set_calibration_settings(self._ui_settings)
         if self._home_view:
             self._home_view.set_ui_settings(self._ui_settings)
         if self._setting_view:
             self._setting_view.set_ui_settings(self._ui_settings)
-        brightness = self._ui_settings.brightness_scale
-        if self._scene_root is not None and not self._scene_root.isEmpty():
-            set_color_scale = getattr(self._scene_root, "setColorScale", None)
-            if callable(set_color_scale):
-                set_color_scale(brightness, brightness, brightness, 1.0)
-        if self._data_panel:
-            self._data_panel.set_brightness(brightness)
-        if self._camera_preview:
-            self._camera_preview.set_brightness(brightness)
+        if self._calibration_view:
+            self._calibration_view.set_ui_settings(self._ui_settings)
+        self._apply_window_brightness()
+        self._apply_volume_setting()
 
     def _sync_view_visibility(self) -> None:
         home_visible = self._view_state.active_view == RenderView.HOME
         setting_visible = self._view_state.active_view == RenderView.SETTING
+        calibration_visible = self._view_state.active_view == RenderView.CALIBRATION
         table_visible = self._view_state.active_view == RenderView.TABLE
 
         if self._home_view:
             self._home_view.set_visible(home_visible)
         if self._setting_view:
             self._setting_view.set_visible(setting_visible)
+        if self._calibration_view:
+            self._calibration_view.set_visible(calibration_visible)
 
         if self._scene_root is not None and not self._scene_root.isEmpty():
             self._scene_root.show() if table_visible else self._scene_root.hide()
@@ -977,6 +1078,55 @@ class RenderingServiceImpl(RenderOutputPort):
         if self._rendering_core is not None:
             self._rendering_core.set_quit_handler(callback)
 
+    def set_volume_callback(self, callback: Callable[[float], None] | None) -> None:
+        self._volume_callback = callback
+        if callback is None:
+            self._last_applied_volume = None
+            return
+        self._apply_volume_setting(force=True)
+
+    def _apply_window_brightness(self) -> None:
+        brightness = self._ui_settings.brightness_scale
+
+        if self._scene_root is not None and not self._scene_root.isEmpty():
+            set_color_scale = getattr(self._scene_root, "setColorScale", None)
+            if callable(set_color_scale):
+                set_color_scale(brightness, brightness, brightness, 1.0)
+
+        virtual_hand_root = getattr(getattr(self, "_virtual_hand", None), "root", None)
+        if virtual_hand_root is not None:
+            set_color_scale = getattr(virtual_hand_root, "setColorScale", None)
+            if callable(set_color_scale):
+                set_color_scale(brightness, brightness, brightness, 1.0)
+
+        if self._rendering_core is None:
+            return
+
+        base = self._rendering_core.get_base()
+        if base is None:
+            return
+
+        set_background = getattr(base, "setBackgroundColor", None)
+        if callable(set_background):
+            set_background(brightness, brightness, brightness, 1.0)
+
+        pixel2d = getattr(base, "pixel2d", None)
+        set_color_scale = getattr(pixel2d, "setColorScale", None)
+        if callable(set_color_scale):
+            set_color_scale(brightness, brightness, brightness, 1.0)
+
+    def _apply_volume_setting(self, *, force: bool = False) -> None:
+        if self._volume_callback is None:
+            self._last_applied_volume = None
+            return
+
+        next_volume = float(self._ui_settings.volume)
+        if not force and self._last_applied_volume == next_volume:
+            return
+
+        self._volume_callback(next_volume)
+        self._last_applied_volume = next_volume
+
     def step(self) -> None:
         """Advance Panda3D event/rendering loop without leaving application main loop (original logic preserved)"""
         if not self._rendering_core or not self._rendering_core.is_initialized():
@@ -1051,6 +1201,11 @@ class RenderingServiceImpl(RenderOutputPort):
                     "cursor_opacity": self._ui_settings.cursor_opacity,
                     "brightness": self._ui_settings.brightness,
                     "volume": self._ui_settings.volume,
+                    "ui_cursor_scale_x": self._ui_settings.ui_cursor_scale_x,
+                    "ui_cursor_scale_y": self._ui_settings.ui_cursor_scale_y,
+                    "ui_cursor_offset_x": self._ui_settings.ui_cursor_offset_x,
+                    "ui_cursor_offset_y": self._ui_settings.ui_cursor_offset_y,
+                    "calibration_profile_key": self._calibration_profile_key,
                 },
             }
         )
@@ -1070,6 +1225,9 @@ class RenderingServiceImpl(RenderOutputPort):
         if self._setting_view:
             self._setting_view.destroy()
             self._setting_view = None
+        if self._calibration_view:
+            self._calibration_view.destroy()
+            self._calibration_view = None
         if self._camera_preview:
             self._camera_preview.destroy()
         if self._data_panel:
@@ -1680,12 +1838,53 @@ class RenderingServiceImpl(RenderOutputPort):
         payload.setdefault("timestamp", int(time.time() * 1000))
         self._errors.append(payload)
         self._errors = self._errors[-MAX_ERROR_HISTORY:]
+
+    def _build_calibration_preview_state(
+        self,
+        packet,
+        ui_input,
+        *,
+        window_size: tuple[int, int],
+    ) -> UICalibrationPreviewState:
+        preview_state = UICalibrationPreviewState(
+            mapped_cursor_norm=ui_input.cursor_norm,
+            mapped_cursor_pixels=ui_input.cursor_pixels,
+            window_size=window_size,
+            pinch_state=getattr(packet, "pinch_state", None),
+            visible=bool(ui_input.visible),
+        )
+
+        if packet is None or getattr(packet, "tracking_state", None) != "tracked":
+            return preview_state
+
+        midpoint_x = (float(packet.index_tip.x) + float(packet.thumb_tip.x)) * 0.5
+        midpoint_y = (float(packet.index_tip.y) + float(packet.thumb_tip.y)) * 0.5
+        source_cursor_norm = (
+            (1.0 - midpoint_x) * 0.5,
+            (1.0 - midpoint_y) * 0.5,
+        )
+        source_clamped = not (0.0 <= source_cursor_norm[0] <= 1.0 and 0.0 <= source_cursor_norm[1] <= 1.0)
+        adjusted_cursor_norm = (
+            (source_cursor_norm[0] - 0.5) * self._ui_settings.ui_cursor_scale_x + 0.5 + self._ui_settings.ui_cursor_offset_x,
+            (source_cursor_norm[1] - 0.5) * self._ui_settings.ui_cursor_scale_y + 0.5 + self._ui_settings.ui_cursor_offset_y,
+        )
+        mapped_clamped = not (0.0 <= adjusted_cursor_norm[0] <= 1.0 and 0.0 <= adjusted_cursor_norm[1] <= 1.0)
+        preview_state.camera_midpoint = (midpoint_x, midpoint_y)
+        preview_state.source_cursor_norm = source_cursor_norm
+        preview_state.source_cursor_pixels = (
+            max(0.0, min(1.0, source_cursor_norm[0])) * window_size[0],
+            max(0.0, min(1.0, source_cursor_norm[1])) * window_size[1],
+        )
+        preview_state.source_clamped = source_clamped
+        preview_state.mapped_clamped = mapped_clamped
+        return preview_state
     
     def update_gesture_data(self, packet) -> None:
         """Update gesture data"""
         self._last_gesture_packet = packet
         window_size = self._window_size()
         ui_input = self._ui_input_adapter.to_ui_input(packet, window_size=window_size)
+        calibration_preview = self._build_calibration_preview_state(packet, ui_input, window_size=window_size)
         pinch_state = getattr(packet, "pinch_state", None)
         if self._view_state.active_view == RenderView.HOME and self._home_view:
             self._home_view.update_layout()
@@ -1693,6 +1892,10 @@ class RenderingServiceImpl(RenderOutputPort):
         elif self._view_state.active_view == RenderView.SETTING and self._setting_view:
             self._setting_view.update_layout()
             self._setting_view.update_cursor(ui_input, pinch_state=pinch_state)
+        elif self._view_state.active_view == RenderView.CALIBRATION and self._calibration_view:
+            self._calibration_view.update_layout()
+            self._calibration_view.update_calibration_preview(calibration_preview)
+            self._calibration_view.update_cursor(ui_input, pinch_state=pinch_state)
     
     def update_camera_frame(self, frame, observation=None, packet=None) -> None:
         """Update camera frame data"""

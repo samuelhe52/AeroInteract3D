@@ -8,6 +8,7 @@ class RenderView(StrEnum):
     HOME = "home"
     TABLE = "table"
     SETTING = "setting"
+    CALIBRATION = "calibration"
 
 
 @dataclass(slots=True)
@@ -27,6 +28,20 @@ class UIInputState:
 
 
 @dataclass(slots=True)
+class UICalibrationPreviewState:
+    camera_midpoint: tuple[float, float] = (0.0, 0.0)
+    source_cursor_norm: tuple[float, float] = (0.5, 0.5)
+    source_cursor_pixels: tuple[float, float] = (0.0, 0.0)
+    mapped_cursor_norm: tuple[float, float] = (0.5, 0.5)
+    mapped_cursor_pixels: tuple[float, float] = (0.0, 0.0)
+    window_size: tuple[int, int] = (0, 0)
+    pinch_state: str | None = None
+    visible: bool = False
+    source_clamped: bool = False
+    mapped_clamped: bool = False
+
+
+@dataclass(slots=True)
 class UISettingsState:
     data_panel_enabled: bool = True
     cam_preview_enabled: bool = True
@@ -34,6 +49,11 @@ class UISettingsState:
     cursor_opacity: float = 0.92
     brightness: float = 100.0
     volume: float = 50.0
+    ui_cursor_scale_x: float = 1.0
+    ui_cursor_scale_y: float = 1.0
+    ui_cursor_offset_x: float = 0.0
+    ui_cursor_offset_y: float = 0.0
+    calibration_preview_enabled: bool = True
 
     BRIGHTNESS_MIN = 0.0
     BRIGHTNESS_MAX = 100.0
@@ -47,6 +67,12 @@ class UISettingsState:
     CURSOR_OPACITY_MIN = 0.2
     CURSOR_OPACITY_MAX = 1.0
     CURSOR_OPACITY_STEP = 0.01
+    UI_CURSOR_SCALE_MIN = 0.5
+    UI_CURSOR_SCALE_MAX = 1.5
+    UI_CURSOR_SCALE_STEP = 0.01
+    UI_CURSOR_OFFSET_MIN = -0.25
+    UI_CURSOR_OFFSET_MAX = 0.25
+    UI_CURSOR_OFFSET_STEP = 0.01
 
     @staticmethod
     def _clamp(value: float, minimum: float, maximum: float) -> float:
@@ -67,6 +93,22 @@ class UISettingsState:
     def set_volume(self, value: float) -> float:
         self.volume = round(self._clamp(value, self.VOLUME_MIN, self.VOLUME_MAX), 2)
         return self.volume
+
+    def set_ui_cursor_scale_x(self, value: float) -> float:
+        self.ui_cursor_scale_x = round(self._clamp(value, self.UI_CURSOR_SCALE_MIN, self.UI_CURSOR_SCALE_MAX), 2)
+        return self.ui_cursor_scale_x
+
+    def set_ui_cursor_scale_y(self, value: float) -> float:
+        self.ui_cursor_scale_y = round(self._clamp(value, self.UI_CURSOR_SCALE_MIN, self.UI_CURSOR_SCALE_MAX), 2)
+        return self.ui_cursor_scale_y
+
+    def set_ui_cursor_offset_x(self, value: float) -> float:
+        self.ui_cursor_offset_x = round(self._clamp(value, self.UI_CURSOR_OFFSET_MIN, self.UI_CURSOR_OFFSET_MAX), 2)
+        return self.ui_cursor_offset_x
+
+    def set_ui_cursor_offset_y(self, value: float) -> float:
+        self.ui_cursor_offset_y = round(self._clamp(value, self.UI_CURSOR_OFFSET_MIN, self.UI_CURSOR_OFFSET_MAX), 2)
+        return self.ui_cursor_offset_y
 
     @property
     def brightness_scale(self) -> float:

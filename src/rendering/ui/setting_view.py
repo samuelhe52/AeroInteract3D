@@ -33,6 +33,35 @@ class SettingUIView:
             "textColor": (1.0, 0.96, 0.92, 1.0),
         },
     }
+    SLIDER_STYLES = {
+        "idle": {
+            "trackColor": (0.71, 0.73, 0.70, 1.0),
+            "fillColor": (0.82, 0.34, 0.28, 1.0),
+            "knobColor": (0.20, 0.24, 0.30, 1.0),
+            "labelColor": (0.12, 0.15, 0.19, 1.0),
+            "valueColor": (0.12, 0.15, 0.19, 1.0),
+            "knobHalfWidth": 12.0,
+            "knobHalfHeight": 16.0,
+        },
+        "hover": {
+            "trackColor": (0.62, 0.66, 0.69, 1.0),
+            "fillColor": (0.88, 0.42, 0.30, 1.0),
+            "knobColor": (0.24, 0.31, 0.39, 1.0),
+            "labelColor": (0.10, 0.13, 0.18, 1.0),
+            "valueColor": (0.10, 0.13, 0.18, 1.0),
+            "knobHalfWidth": 13.0,
+            "knobHalfHeight": 17.0,
+        },
+        "active": {
+            "trackColor": (0.50, 0.55, 0.58, 1.0),
+            "fillColor": (0.93, 0.28, 0.22, 1.0),
+            "knobColor": (0.86, 0.25, 0.21, 1.0),
+            "labelColor": (0.12, 0.15, 0.19, 1.0),
+            "valueColor": (0.82, 0.24, 0.20, 1.0),
+            "knobHalfWidth": 15.0,
+            "knobHalfHeight": 19.0,
+        },
+    }
     SLIDER_KEYS = ("cursor_scale", "cursor_opacity", "brightness", "volume")
 
     def __init__(
@@ -60,20 +89,16 @@ class SettingUIView:
         self._slider_fills: dict[str, DirectFrame] = {}
         self._slider_knobs: dict[str, DirectFrame] = {}
         self._slider_bounds: dict[str, UIButtonBounds] = {}
+        self._slider_visual_states: dict[str, str] = {}
         self._preview_panel: Optional[DirectFrame] = None
         self._preview_panel_title: Optional[NodePath] = None
         self._preview_cursor: Optional[DirectFrame] = None
-        self._mapping_panel: Optional[DirectFrame] = None
-        self._mapping_title: Optional[NodePath] = None
-        self._mapping_hint: Optional[NodePath] = None
-        self._mapping_crosshair_h: Optional[DirectFrame] = None
-        self._mapping_crosshair_v: Optional[DirectFrame] = None
-        self._mapping_dot: Optional[DirectFrame] = None
+        self._calibration_note: Optional[NodePath] = None
         self._interaction_controller = UIButtonInteractionController()
         self._cursor: Optional[DirectFrame] = None
         self._visible = False
         self._last_layout_size: tuple[int, int] | None = None
-        self._last_cursor_state = UIInputState()
+        self._hover_slider_key: str | None = None
         self._active_slider_key: str | None = None
         self._ui_settings = UISettingsState()
         self.init_view()
@@ -117,31 +142,39 @@ class SettingUIView:
         self._button_index_by_action[action] = button_index
 
     def _create_slider_visuals(self, key: str) -> None:
+        idle_style = self.SLIDER_STYLES["idle"]
         track = DirectFrame(
             parent=self._root,
             pos=(0, 0, 0),
             frameSize=(0, 1, -1, 0),
-            frameColor=(0.76, 0.78, 0.74, 1.0),
-            relief=0,
+            frameColor=idle_style["trackColor"],
+            relief=1,
+            borderWidth=(1, 1),
         )
         fill = DirectFrame(
             parent=track,
             pos=(0, 0, 0),
             frameSize=(0, 1, -1, 0),
-            frameColor=(0.83, 0.33, 0.28, 1.0),
+            frameColor=idle_style["fillColor"],
             relief=0,
         )
         knob = DirectFrame(
             parent=track,
             pos=(0, 0, 0),
-            frameSize=(-10, 10, -14, 14),
-            frameColor=(0.20, 0.24, 0.30, 1.0),
+            frameSize=(
+                -idle_style["knobHalfWidth"],
+                idle_style["knobHalfWidth"],
+                -idle_style["knobHalfHeight"],
+                idle_style["knobHalfHeight"],
+            ),
+            frameColor=idle_style["knobColor"],
             relief=1,
             borderWidth=(1, 1),
         )
         self._slider_tracks[key] = track
         self._slider_fills[key] = fill
         self._slider_knobs[key] = knob
+        self._slider_visual_states[key] = "idle"
 
     def init_view(self) -> None:
         self._root = DirectFrame(
@@ -190,6 +223,7 @@ class SettingUIView:
         self._create_button(action="back_home", label="back")
         self._create_button(action="data_panel_toggle", label="data panel: on")
         self._create_button(action="cam_preview_toggle", label="cam preview: on")
+        self._create_button(action="open_calibration", label="cursor calibration")
 
         self._preview_panel = DirectFrame(
             parent=self._root,
@@ -215,48 +249,12 @@ class SettingUIView:
             borderWidth=(2, 2),
         )
 
-        self._mapping_panel = DirectFrame(
-            parent=self._root,
-            pos=(0, 0, 0),
-            frameSize=(0, 1, -1, 0),
-            frameColor=(0.86, 0.88, 0.84, 1.0),
-            relief=1,
-            borderWidth=(1, 1),
-        )
-        self._mapping_title = self._create_text_node(
-            self._mapping_panel,
-            node_name="setting_mapping_title",
-            text="cursor mapping preview",
-            align=TextNode.ALeft,
-            color=(0.16, 0.18, 0.22, 1.0),
-        )
-        self._mapping_hint = self._create_text_node(
-            self._mapping_panel,
-            node_name="setting_mapping_hint",
-            text="live calibration panel placeholder",
+        self._calibration_note = self._create_text_node(
+            self._root,
+            node_name="setting_calibration_note",
+            text="mapping tools moved out of this page\nopen cursor calibration below or press f2",
             align=TextNode.ALeft,
             color=(0.34, 0.37, 0.40, 1.0),
-        )
-        self._mapping_crosshair_h = DirectFrame(
-            parent=self._mapping_panel,
-            pos=(0, 0, 0),
-            frameSize=(-18, 18, -1, 1),
-            frameColor=(0.88, 0.30, 0.26, 0.72),
-            relief=0,
-        )
-        self._mapping_crosshair_v = DirectFrame(
-            parent=self._mapping_panel,
-            pos=(0, 0, 0),
-            frameSize=(-1, 1, -18, 18),
-            frameColor=(0.88, 0.30, 0.26, 0.72),
-            relief=0,
-        )
-        self._mapping_dot = DirectFrame(
-            parent=self._mapping_panel,
-            pos=(0, 0, 0),
-            frameSize=(-7, 7, -7, 7),
-            frameColor=(0.90, 0.14, 0.12, 0.94),
-            relief=0,
         )
 
         self._overlay_root = DirectFrame(
@@ -331,35 +329,49 @@ class SettingUIView:
             progress = self._slider_progress(key)
             fill["frameSize"] = (0, width * progress, float(frame_size[2]), float(frame_size[3]))
             knob.setPos(width * progress, 0, (float(frame_size[2]) + float(frame_size[3])) * 0.5)
+        self._refresh_slider_visuals()
+
+    def _apply_slider_visual_state(self, key: str, state_name: str) -> None:
+        if self._slider_visual_states.get(key) == state_name:
+            return
+
+        style = self.SLIDER_STYLES[state_name]
+        track = self._slider_tracks[key]
+        fill = self._slider_fills[key]
+        knob = self._slider_knobs[key]
+        label = self._row_labels[key]
+        value = self._value_nodes[key]
+
+        track["frameColor"] = style["trackColor"]
+        fill["frameColor"] = style["fillColor"]
+        knob["frameColor"] = style["knobColor"]
+        knob["frameSize"] = (
+            -style["knobHalfWidth"],
+            style["knobHalfWidth"],
+            -style["knobHalfHeight"],
+            style["knobHalfHeight"],
+        )
+        label.node().setTextColor(*style["labelColor"])
+        value.node().setTextColor(*style["valueColor"])
+        self._slider_visual_states[key] = state_name
+
+    def _refresh_slider_visuals(self) -> None:
+        for key in self.SLIDER_KEYS:
+            next_state = "idle"
+            if self._hover_slider_key == key:
+                next_state = "hover"
+            if self._active_slider_key == key:
+                next_state = "active"
+            self._apply_slider_visual_state(key, next_state)
 
     def _apply_cursor_style(self) -> None:
+        extent = 18.0 * self._ui_settings.cursor_scale
         if self._cursor is not None:
-            extent = 18.0 * self._ui_settings.cursor_scale
             self._cursor["frameSize"] = (-extent, extent, -extent, extent)
             self._cursor["frameColor"] = (0.94, 0.10, 0.10, self._ui_settings.cursor_opacity)
         if self._preview_cursor is not None:
-            preview_extent = 22.0 * self._ui_settings.cursor_scale
-            self._preview_cursor["frameSize"] = (-preview_extent, preview_extent, -preview_extent, preview_extent)
+            self._preview_cursor["frameSize"] = (-extent, extent, -extent, extent)
             self._preview_cursor["frameColor"] = (0.94, 0.10, 0.10, self._ui_settings.cursor_opacity)
-
-    def _update_mapping_preview(self) -> None:
-        if self._mapping_panel is None or self._mapping_dot is None or self._mapping_crosshair_h is None or self._mapping_crosshair_v is None:
-            return
-        frame_size = self._mapping_panel["frameSize"]
-        panel_width = float(frame_size[1]) - float(frame_size[0])
-        panel_height = abs(float(frame_size[2]) - float(frame_size[3]))
-        cursor_norm = self._last_cursor_state.cursor_norm if self._last_cursor_state.visible else (0.5, 0.5)
-        inset_left = 26.0
-        inset_top = 72.0
-        inset_right = 26.0
-        inset_bottom = 26.0
-        preview_width = max(panel_width - inset_left - inset_right, 40.0)
-        preview_height = max(panel_height - inset_top - inset_bottom, 40.0)
-        center_x = inset_left + preview_width * cursor_norm[0]
-        center_y = -(inset_top + preview_height * cursor_norm[1])
-        self._mapping_dot.setPos(center_x, 0, center_y)
-        self._mapping_crosshair_h.setPos(center_x, 0, center_y)
-        self._mapping_crosshair_v.setPos(center_x, 0, center_y)
 
     def _slider_value_from_progress(self, key: str, progress: float) -> float:
         progress = max(0.0, min(1.0, progress))
@@ -378,12 +390,10 @@ class SettingUIView:
                 self._ui_settings.BRIGHTNESS_MAX - self._ui_settings.BRIGHTNESS_MIN
             )
             return round(value)
-        if key == "volume":
-            value = self._ui_settings.VOLUME_MIN + progress * (
-                self._ui_settings.VOLUME_MAX - self._ui_settings.VOLUME_MIN
-            )
-            return round(value)
-        return 0.0
+        value = self._ui_settings.VOLUME_MIN + progress * (
+            self._ui_settings.VOLUME_MAX - self._ui_settings.VOLUME_MIN
+        )
+        return round(value)
 
     def _set_slider_value(self, key: str, value: float) -> None:
         if key == "cursor_scale":
@@ -411,18 +421,26 @@ class SettingUIView:
                 return key
         return None
 
-    def _update_slider_interaction(self, state: UIInputState, pinch_state: PinchState | None) -> None:
+    def _update_slider_interaction(
+        self,
+        state: UIInputState,
+        pinch_state: PinchState | None,
+    ) -> None:
         hovered_slider = self._slider_key_at_cursor(state)
+        self._hover_slider_key = hovered_slider
         is_dragging = pinch_state in {"pinched", "release_candidate"}
 
         if self._active_slider_key is None and pinch_state == "pinched" and hovered_slider is not None:
             self._active_slider_key = hovered_slider
+
+        self._refresh_slider_visuals()
 
         if self._active_slider_key is None:
             return
 
         if not is_dragging or not state.visible:
             self._active_slider_key = None
+            self._refresh_slider_visuals()
             return
 
         bounds = self._slider_bounds[self._active_slider_key]
@@ -468,12 +486,9 @@ class SettingUIView:
         content_left = max(int(width * 0.055), 44)
         content_top = max(int(height * 0.17), 90)
         content_width = width - content_left * 2
-        content_height = height - content_top - max(int(height * 0.08), 36)
-        right_panel_width = max(int(content_width * 0.31), 250)
         gutter = max(int(width * 0.025), 22)
-        left_panel_width = content_width - right_panel_width - gutter
-        preview_panel_width = max(int(left_panel_width * 0.30), 170)
-        left_controls_width = left_panel_width - preview_panel_width - gutter
+        preview_panel_width = max(int(content_width * 0.24), 190)
+        left_controls_width = content_width - preview_panel_width - gutter
         row_gap = max(int(height * 0.035), 20)
         row_height = max(int(height * 0.085), 58)
         toggle_height = max(int(height * 0.08), 56)
@@ -482,32 +497,33 @@ class SettingUIView:
         back_height = max(int(height * 0.07), 52)
         self._layout_button("back_home", content_left, max(int(height * 0.07), 34), back_width, back_height)
 
-        toggle_width = max(int((left_panel_width - gutter) * 0.5), 150)
+        toggle_width = max(int((left_controls_width - gutter) * 0.5), 150)
         toggle_top = content_top
         self._layout_button("data_panel_toggle", content_left, toggle_top, toggle_width, toggle_height)
         self._layout_button("cam_preview_toggle", content_left + toggle_width + gutter, toggle_top, toggle_width, toggle_height)
 
-        preview_top = toggle_top + toggle_height + row_gap
+        preview_left = content_left + left_controls_width + gutter
+        preview_top = toggle_top
         preview_height = row_height * 2 + row_gap
         if self._preview_panel is not None and self._preview_panel_title is not None and self._preview_cursor is not None:
-            self._preview_panel.setPos(content_left, 0, -preview_top)
+            self._preview_panel.setPos(preview_left, 0, -preview_top)
             self._preview_panel["frameSize"] = (0, preview_panel_width, -preview_height, 0)
             self._preview_panel_title.setPos(preview_panel_width * 0.5, 0, -28)
             self._preview_panel_title.setScale(max(short_edge * 0.018, 14))
             self._preview_cursor.setPos(preview_panel_width * 0.5, 0, -(preview_height * 0.58))
 
-        slider_left = content_left + preview_panel_width + gutter
+        slider_left = content_left
         slider_label_scale = max(short_edge * 0.020, 15)
         slider_value_scale = max(short_edge * 0.022, 16)
-        slider_track_height = max(int(row_height * 0.16), 10)
+        slider_track_height = max(int(row_height * 0.18), 12)
         slider_track_width = max(int(left_controls_width - 110), 180)
         slider_value_x = slider_left + left_controls_width
 
         row_positions = {
-            "cursor_scale": preview_top,
-            "cursor_opacity": preview_top + row_height + row_gap,
-            "brightness": preview_top + preview_height + row_gap,
-            "volume": preview_top + preview_height + row_gap + row_height + row_gap,
+            "cursor_scale": toggle_top + toggle_height + row_gap,
+            "cursor_opacity": toggle_top + toggle_height + row_gap + row_height + row_gap,
+            "brightness": toggle_top + toggle_height + row_gap + (row_height + row_gap) * 2,
+            "volume": toggle_top + toggle_height + row_gap + (row_height + row_gap) * 3,
         }
         for key in self.SLIDER_KEYS:
             top = row_positions[key]
@@ -525,29 +541,40 @@ class SettingUIView:
             track["frameSize"] = (0, slider_track_width, -slider_track_height, 0)
             self._slider_fills[key]["frameSize"] = (0, slider_track_width * self._slider_progress(key), -slider_track_height, 0)
             self._slider_bounds[key] = UIButtonBounds(
-                left=track_left,
-                top=slider_controls_top,
-                right=track_left + slider_track_width,
-                bottom=slider_controls_top + slider_track_height,
+                left=track_left - 10,
+                top=slider_controls_top - 14,
+                right=track_left + slider_track_width + 10,
+                bottom=slider_controls_top + slider_track_height + 14,
             )
 
-        mapping_left = content_left + left_panel_width + gutter
-        mapping_top = toggle_top
-        mapping_height = max(content_height, preview_height + row_height * 2 + row_gap * 3)
-        if self._mapping_panel is not None and self._mapping_title is not None and self._mapping_hint is not None:
-            self._mapping_panel.setPos(mapping_left, 0, -mapping_top)
-            self._mapping_panel["frameSize"] = (0, right_panel_width, -mapping_height, 0)
-            self._mapping_title.setPos(24, 0, -28)
-            self._mapping_title.setScale(max(short_edge * 0.020, 15))
-            self._mapping_hint.setPos(24, 0, -54)
-            self._mapping_hint.setScale(max(short_edge * 0.015, 12))
+        calibration_button_top = row_positions["volume"] + row_height + row_gap + 6
+        calibration_button_height = max(int(height * 0.07), 46)
+        self._layout_button(
+            "open_calibration",
+            slider_left,
+            calibration_button_top,
+            max(int(left_controls_width * 0.42), 180),
+            calibration_button_height,
+        )
+        if self._calibration_note is not None:
+            note_top = calibration_button_top + calibration_button_height + max(int(height * 0.035), 24)
+            self._calibration_note.setPos(slider_left, 0, -note_top)
+            self._calibration_note.setScale(max(short_edge * 0.016, 12))
 
         for index in range(len(self._buttons)):
             self._apply_button_visual_state(index, self._button_visual_states[index])
         self._refresh_setting_values()
-        self._update_mapping_preview()
 
-    def _layout_button(self, action: str, left: int, top: int, width_px: int, height_px: int) -> None:
+    def _layout_button(
+        self,
+        action: str,
+        left: int,
+        top: int,
+        width_px: int,
+        height_px: int,
+        *,
+        bounds_offset: tuple[int, int] = (0, 0),
+    ) -> None:
         button_index = self._button_index_by_action[action]
         button = self._buttons[button_index]
         button.setPos(left, 0, -top)
@@ -555,7 +582,12 @@ class SettingUIView:
         label = self._button_labels[button_index]
         label.setPos(width_px * 0.5, 0, -(height_px * 0.60))
         label.setScale(max(height_px * 0.30, 16))
-        bounds = UIButtonBounds(left=left, top=top, right=left + width_px, bottom=top + height_px)
+        bounds = UIButtonBounds(
+            left=left + bounds_offset[0],
+            top=top + bounds_offset[1],
+            right=left + width_px + bounds_offset[0],
+            bottom=top + height_px + bounds_offset[1],
+        )
         if button_index < len(self._button_bounds):
             self._button_bounds[button_index] = bounds
         else:
@@ -566,17 +598,18 @@ class SettingUIView:
             return
 
         self._last_cursor_state = state
-        self._update_slider_interaction(state, pinch_state)
+        interaction_state = state if self._visible else UIInputState(visible=False)
+        self._update_slider_interaction(interaction_state, pinch_state)
+
         snapshot = self._interaction_controller.update(
-            state if self._visible else UIInputState(visible=False),
+            interaction_state,
             pinch_state=pinch_state,
             button_bounds=self._button_bounds,
         )
         self._update_button_visuals(snapshot)
+
         if snapshot.activated_index is not None and self._on_button_activated is not None:
             self._on_button_activated(self._button_actions[snapshot.activated_index])
-
-        self._update_mapping_preview()
 
         if not self._visible or not state.visible:
             self._cursor.hide()
@@ -594,7 +627,9 @@ class SettingUIView:
             self._root.show()
             return
         self._interaction_controller.reset()
+        self._hover_slider_key = None
         self._active_slider_key = None
+        self._refresh_slider_visuals()
         for index in range(len(self._buttons)):
             if self._button_visual_states[index] != "idle":
                 self._apply_button_visual_state(index, "idle")
@@ -633,24 +668,9 @@ class SettingUIView:
         if self._preview_panel is not None:
             self._preview_panel.destroy()
             self._preview_panel = None
-        if self._mapping_crosshair_h is not None:
-            self._mapping_crosshair_h.destroy()
-            self._mapping_crosshair_h = None
-        if self._mapping_crosshair_v is not None:
-            self._mapping_crosshair_v.destroy()
-            self._mapping_crosshair_v = None
-        if self._mapping_dot is not None:
-            self._mapping_dot.destroy()
-            self._mapping_dot = None
-        if self._mapping_hint is not None:
-            self._mapping_hint.removeNode()
-            self._mapping_hint = None
-        if self._mapping_title is not None:
-            self._mapping_title.removeNode()
-            self._mapping_title = None
-        if self._mapping_panel is not None:
-            self._mapping_panel.destroy()
-            self._mapping_panel = None
+        if self._calibration_note is not None:
+            self._calibration_note.removeNode()
+            self._calibration_note = None
         if self._cursor is not None:
             self._cursor.destroy()
             self._cursor = None

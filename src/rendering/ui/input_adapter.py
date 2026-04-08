@@ -2,10 +2,22 @@ from __future__ import annotations
 
 from src.contracts import GesturePacket
 
-from .state import UIInputState
+from .state import UIInputState, UISettingsState
 
 
 class UIGestureInputAdapter:
+    def __init__(self) -> None:
+        self._scale_x = 1.0
+        self._scale_y = 1.0
+        self._offset_x = 0.0
+        self._offset_y = 0.0
+
+    def set_calibration_settings(self, settings: UISettingsState) -> None:
+        self._scale_x = float(settings.ui_cursor_scale_x)
+        self._scale_y = float(settings.ui_cursor_scale_y)
+        self._offset_x = float(settings.ui_cursor_offset_x)
+        self._offset_y = float(settings.ui_cursor_offset_y)
+
     def to_ui_input(
         self,
         packet: GesturePacket | None,
@@ -20,10 +32,14 @@ class UIGestureInputAdapter:
 
         midpoint_x = (float(packet.index_tip.x) + float(packet.thumb_tip.x)) * 0.5
         midpoint_y = (float(packet.index_tip.y) + float(packet.thumb_tip.y)) * 0.5
+        raw_cursor_norm = (
+            (1.0 - midpoint_x) * 0.5,
+            (1.0 - midpoint_y) * 0.5,
+        )
 
         cursor_norm = (
-            max(0.0, min(1.0, (1.0 - midpoint_x) * 0.5)),
-            max(0.0, min(1.0, (1.0 - midpoint_y) * 0.5)),
+            max(0.0, min(1.0, (raw_cursor_norm[0] - 0.5) * self._scale_x + 0.5 + self._offset_x)),
+            max(0.0, min(1.0, (raw_cursor_norm[1] - 0.5) * self._scale_y + 0.5 + self._offset_y)),
         )
         cursor_pixels = (
             cursor_norm[0] * width,
