@@ -27,7 +27,7 @@ class DataPanelManager:
     MENU_HOLD_LAMP_GAP = 14
     MENU_HOLD_LABEL_OFFSET_X = 18
     MENU_HOLD_LABEL_OFFSET_Y = 22
-    MENU_HOLD_LABEL_SCALE = 14
+    MENU_HOLD_LABEL_SCALE = 29
     MENU_HOLD_LAMPS_START_X = 156
     TEXT_OFFSET_X = 18
     TEXT_OFFSET_Y = 40
@@ -46,6 +46,8 @@ class DataPanelManager:
         self._last_world_norm_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._menu_hold_lit_count: int = 0
+        self._indicator_visible: bool = True
+        self._panel_visible: bool = True
         
         # ========== 新增代码开始 ==========
         # 新增：交互调试数据存储
@@ -94,7 +96,7 @@ class DataPanelManager:
                 pos=((self.PANEL_MARGIN + self.MENU_HOLD_LABEL_OFFSET_X) * self._ui_scale, -(self.PANEL_MARGIN + self.MENU_HOLD_LABEL_OFFSET_Y) * self._ui_scale),
                 align=TextNode.ALeft,
                 scale=self.MENU_HOLD_LABEL_SCALE * self._ui_scale,
-                fg=(0.90, 0.91, 0.93, 1.0),
+                fg=(0.08, 0.09, 0.10, 1.0),
                 text="menu open",
                 mayChange=False,
             )
@@ -294,10 +296,18 @@ class DataPanelManager:
             self._status_panel['scale'] = new_scale
 
     def set_visible(self, visible: bool) -> None:
+        self.set_indicator_visible(visible)
+        self.set_panel_visible(visible)
+
+    def set_indicator_visible(self, visible: bool) -> None:
+        self._indicator_visible = visible
         if self._menu_hold_frame:
             self._menu_hold_frame.show() if visible else self._menu_hold_frame.hide()
         if self._menu_hold_label:
             self._menu_hold_label.show() if visible else self._menu_hold_label.hide()
+
+    def set_panel_visible(self, visible: bool) -> None:
+        self._panel_visible = visible
         if self._status_frame:
             self._status_frame.show() if visible else self._status_frame.hide()
         if self._status_panel:

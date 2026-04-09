@@ -265,6 +265,8 @@ class FakeNodePath:
         self.parent = None
         self.hidden = False
         self.color_scale = None
+        self.material = None
+        self.material_cleared = False
 
     def reparentTo(self, parent: object) -> None:
         self.parent = parent
@@ -289,14 +291,29 @@ class FakeNodePath:
     def setPos(self, *values: float) -> None:
         self.pos = values
 
-    def setScale(self, value: float) -> None:
-        self.scale = value
+    def setScale(self, *values: float) -> None:
+        self.scale = values[0] if len(values) == 1 else values
+
+    def setHpr(self, *values: float) -> None:
+        self.hpr = values
 
     def setTransparency(self, mode) -> None:
         self.transparency = mode
 
     def setColorScale(self, *values: float) -> None:
         self.color_scale = values
+
+    def setMaterial(self, material: object, priority: int) -> None:
+        self.material = (material, priority)
+
+    def clearMaterial(self) -> None:
+        self.material = None
+        self.material_cleared = True
+
+    def setTag(self, key: str, value: str) -> None:
+        if not hasattr(self, "tags"):
+            self.tags = {}
+        self.tags[key] = value
 
     def isEmpty(self) -> bool:
         return False
@@ -310,6 +327,7 @@ class FakeObjectNode:
         self.scale = None
         self.color_scale = None
         self.material_cleared = False
+        self.hidden = False
 
     def setPos(self, *values: float) -> None:
         self.pos = values
@@ -330,6 +348,12 @@ class FakeObjectNode:
         self.material = None
         self.material_cleared = True
 
+    def hide(self) -> None:
+        self.hidden = True
+
+    def show(self) -> None:
+        self.hidden = False
+
 
 class FakeVirtualHand:
     def __init__(self, *args, **kwargs) -> None:
@@ -343,9 +367,18 @@ class FakeVirtualHand:
 class FakeVisibilityController:
     def __init__(self) -> None:
         self.visible = True
+        self.panel_visible = True
+        self.indicator_visible = True
 
     def set_visible(self, visible: bool) -> None:
         self.visible = visible
+
+    def set_panel_visible(self, visible: bool) -> None:
+        self.panel_visible = visible
+        self.visible = visible
+
+    def set_indicator_visible(self, visible: bool) -> None:
+        self.indicator_visible = visible
 
 
 class FakeHomeView:
@@ -391,6 +424,7 @@ class FakeSettingView:
         self.cursor_state = None
         self.last_pinch_state = None
         self.last_settings = None
+        self.object_visibility_summary = None
         self.calibration_preview_state = None
 
     def set_visible(self, visible: bool) -> None:
@@ -406,6 +440,9 @@ class FakeSettingView:
 
     def set_ui_settings(self, settings) -> None:
         self.last_settings = (settings.cursor_scale, settings.cursor_opacity)
+
+    def set_object_visibility_summary(self, total_count: int, hidden_count: int) -> None:
+        self.object_visibility_summary = (total_count, hidden_count)
 
     def update_calibration_preview(self, state) -> None:
         self.calibration_preview_state = state
@@ -504,6 +541,7 @@ class FakeTableOverlayView:
         self.last_pinch_state = None
         self.last_settings = None
         self.last_overlay = "none"
+        self.last_object_items = []
 
     def set_visible(self, visible: bool) -> None:
         self.visible = visible
@@ -522,40 +560,8 @@ class FakeTableOverlayView:
     def set_ui_settings(self, settings) -> None:
         self.last_settings = (settings.cursor_scale, settings.cursor_opacity)
 
-    def destroy(self) -> None:
-        self.destroyed = True
-
-
-class FakeTableOverlayView:
-    def __init__(self, pixel2d, window_size_provider, on_button_activated=None) -> None:
-        self.pixel2d = pixel2d
-        self.window_size_provider = window_size_provider
-        self.on_button_activated = on_button_activated
-        self.visible = False
-        self.destroyed = False
-        self.layout_updates = 0
-        self.last_window_size = window_size_provider()
-        self.cursor_state = None
-        self.last_pinch_state = None
-        self.last_settings = None
-        self.last_overlay = "none"
-
-    def set_visible(self, visible: bool) -> None:
-        self.visible = visible
-
-    def set_overlay(self, overlay) -> None:
-        self.last_overlay = str(overlay)
-
-    def update_layout(self, force: bool = False) -> None:
-        self.layout_updates += 1
-        self.last_window_size = self.window_size_provider()
-
-    def update_cursor(self, state, pinch_state=None) -> None:
-        self.cursor_state = state
-        self.last_pinch_state = pinch_state
-
-    def set_ui_settings(self, settings) -> None:
-        self.last_settings = (settings.cursor_scale, settings.cursor_opacity)
+    def set_object_visibility_items(self, items) -> None:
+        self.last_object_items = list(items)
 
     def destroy(self) -> None:
         self.destroyed = True
@@ -567,7 +573,6 @@ def patch_ui_views(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
     monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
     monkeypatch.setattr(rendering_service, "CalibrationUIView", FakeCalibrationView)
-    monkeypatch.setattr(rendering_service, "TableOverlayUIView", FakeTableOverlayView)
     monkeypatch.setattr(rendering_service, "TableOverlayUIView", FakeTableOverlayView)
 
 
@@ -1397,6 +1402,202 @@ def test_rendering_table_overlay_buttons_drive_navigation(monkeypatch) -> None:
     service._table_overlay_view.on_button_activated("back_home")
     assert service.active_view == "home"
     assert service.active_table_overlay == "none"
+
+
+def test_rendering_option_overlay_buttons_adjust_table_settings(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+    service.set_active_table_overlay("option", timestamp_ms=4_000)
+    service._data_panel = FakeVisibilityController()
+
+    service._table_overlay_view.on_button_activated("toggle_data_panel")
+    service._table_overlay_view.on_button_activated("toggle_cam_preview")
+    service._table_overlay_view.on_button_activated("set_brightness:95")
+    service._table_overlay_view.on_button_activated("set_volume:55")
+
+    assert service._ui_settings.data_panel_enabled is False
+    assert service._ui_settings.cam_preview_enabled is False
+    assert service._ui_settings.brightness == 95.0
+    assert service._ui_settings.volume == 55.0
+    assert service._data_panel.panel_visible is False
+    assert service._data_panel.indicator_visible is True
+
+
+def test_rendering_option_overlay_toggles_object_visibility(monkeypatch, tmp_path) -> None:
+    patch_ui_views(monkeypatch)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+    service.push(
+        make_command(
+            command_id="init-scene-visibility-1",
+            command_type="init_scene",
+            payload={
+                "objects": [
+                    {
+                        "object_id": "primary_cube",
+                        "init_pos": {"x": 0.1, "y": 0.2, "z": 0.3},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+                        "shape": "cube",
+                    },
+                    {
+                        "object_id": "secondary_cube",
+                        "init_pos": {"x": -0.1, "y": 0.0, "z": 0.3},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+                        "shape": "cube",
+                    },
+                ]
+            },
+        )
+    )
+    service.set_active_table_overlay("option", timestamp_ms=4_000)
+
+    service._table_overlay_view.on_button_activated("toggle_object_visibility:primary_cube")
+
+    assert service._object_cache["primary_cube"].hidden is True
+    assert service.health()["stats"]["object_visibility"] == {"primary_cube": False}
+    assert service._table_overlay_view.last_object_items[0]["visible"] is False
+
+
+def test_rendering_hidden_object_ignores_pose_and_state_updates(monkeypatch, tmp_path) -> None:
+    patch_ui_views(monkeypatch)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+    service.push(
+        make_command(
+            command_id="init-scene-hidden-1",
+            command_type="init_scene",
+            payload={
+                "objects": [
+                    {
+                        "object_id": "primary_cube",
+                        "init_pos": {"x": 0.1, "y": 0.2, "z": 0.3},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+                        "shape": "cube",
+                    }
+                ]
+            },
+        )
+    )
+
+    initial_pos = service._object_cache["primary_cube"].pos
+    service._set_object_visibility("primary_cube", False, persist=True)
+
+    service.push(
+        make_command(
+            command_id="hidden-pose-1",
+            command_type="set_object_pose",
+            object_id="primary_cube",
+            payload={"position": {"x": 0.9, "y": 0.9, "z": 0.9}},
+        )
+    )
+    service.push(
+        make_command(
+            command_id="hidden-state-1",
+            command_type="set_object_state",
+            object_id="primary_cube",
+            payload={"interaction_state": "grabbed"},
+        )
+    )
+
+    assert service._object_cache["primary_cube"].pos == initial_pos
+    assert service._object_interaction_states["primary_cube"] == "idle"
+    assert service._object_cache["primary_cube"].hidden is True
+
+
+def test_rendering_persists_object_visibility_across_restart(monkeypatch, tmp_path) -> None:
+    patch_ui_views(monkeypatch)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    first_service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    first_service.start()
+    first_service.set_active_view("table")
+    first_service.push(
+        make_command(
+            command_id="init-scene-persist-1",
+            command_type="init_scene",
+            payload={
+                "objects": [
+                    {
+                        "object_id": "primary_cube",
+                        "init_pos": {"x": 0.1, "y": 0.2, "z": 0.3},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+                        "shape": "cube",
+                    }
+                ]
+            },
+        )
+    )
+    first_service._set_object_visibility("primary_cube", False, persist=True)
+    first_service.stop()
+
+    second_service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    second_service.start()
+    second_service.set_active_view("table")
+    second_service.push(
+        make_command(
+            command_id="init-scene-persist-2",
+            command_type="init_scene",
+            payload={
+                "objects": [
+                    {
+                        "object_id": "primary_cube",
+                        "init_pos": {"x": 0.1, "y": 0.2, "z": 0.3},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+                        "shape": "cube",
+                    }
+                ]
+            },
+        )
+    )
+
+    assert second_service._object_cache["primary_cube"].hidden is True
+    assert second_service.health()["stats"]["object_visibility"] == {"primary_cube": False}
+
+
+def test_rendering_setting_view_receives_object_visibility_summary(monkeypatch, tmp_path) -> None:
+    patch_ui_views(monkeypatch)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+    service.push(
+        make_command(
+            command_id="init-scene-summary-1",
+            command_type="init_scene",
+            payload={
+                "objects": [
+                    {
+                        "object_id": "primary_cube",
+                        "init_pos": {"x": 0.1, "y": 0.2, "z": 0.3},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+                        "shape": "cube",
+                    },
+                    {
+                        "object_id": "secondary_cube",
+                        "init_pos": {"x": -0.1, "y": 0.2, "z": 0.3},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+                        "shape": "cube",
+                    },
+                ]
+            },
+        )
+    )
+
+    assert service._setting_view.object_visibility_summary == (2, 0)
+
+    service._set_object_visibility("secondary_cube", False, persist=True)
+
+    assert service._setting_view.object_visibility_summary == (2, 1)
 
 
 def test_rendering_menu_gate_ignores_rotation_mode_active(monkeypatch) -> None:

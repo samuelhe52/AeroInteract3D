@@ -18,7 +18,7 @@ logger = logging.getLogger("rendering.ui.setting_view")
 
 class SettingUIView:
     TITLE_TEXT = "settings"
-    SUBTITLE_TEXT = "tune live ui controls"
+    SUBTITLE_TEXT = "shared controls for ui and table"
     BUTTON_STYLES = {
         "idle": {
             "frameColor": (0.18, 0.22, 0.28, 1.0),
@@ -101,6 +101,8 @@ class SettingUIView:
         self._hover_slider_key: str | None = None
         self._active_slider_key: str | None = None
         self._ui_settings = UISettingsState()
+        self._object_visibility_total = 0
+        self._object_visibility_hidden = 0
         self.init_view()
 
     @staticmethod
@@ -223,7 +225,7 @@ class SettingUIView:
         self._create_button(action="back_home", label="back")
         self._create_button(action="data_panel_toggle", label="data panel: on")
         self._create_button(action="cam_preview_toggle", label="cam preview: on")
-        self._create_button(action="open_calibration", label="cursor calibration")
+        self._create_button(action="open_calibration", label="open cursor calibration")
 
         self._preview_panel = DirectFrame(
             parent=self._root,
@@ -252,7 +254,7 @@ class SettingUIView:
         self._calibration_note = self._create_text_node(
             self._root,
             node_name="setting_calibration_note",
-            text="mapping tools moved out of this page\nopen cursor calibration below or press f2",
+            text="",
             align=TextNode.ALeft,
             color=(0.34, 0.37, 0.40, 1.0),
         )
@@ -275,10 +277,25 @@ class SettingUIView:
         )
         self._cursor.hide()
         self._refresh_setting_values()
+        self._refresh_info_note()
         self._apply_cursor_style()
         self.update_layout(force=True)
         self._root.hide()
         logger.info("Setting UI initialized successfully")
+
+    def _refresh_info_note(self) -> None:
+        if self._calibration_note is None:
+            return
+        if self._object_visibility_total > 0:
+            object_summary = (
+                f"table object visibility lives in table > pause menu > table options\n"
+                f"hidden objects: {self._object_visibility_hidden}/{self._object_visibility_total}"
+            )
+        else:
+            object_summary = "table object visibility lives in table > pause menu > table options"
+        self._calibration_note.node().setText(
+            f"{object_summary}\nopen cursor calibration below or press f2"
+        )
 
     def _apply_button_visual_state(self, index: int, state_name: str) -> None:
         style = self.BUTTON_STYLES[state_name]
@@ -456,7 +473,13 @@ class SettingUIView:
         self._ui_settings.brightness = settings.brightness
         self._ui_settings.volume = settings.volume
         self._refresh_setting_values()
+        self._refresh_info_note()
         self._apply_cursor_style()
+
+    def set_object_visibility_summary(self, total_count: int, hidden_count: int) -> None:
+        self._object_visibility_total = max(int(total_count), 0)
+        self._object_visibility_hidden = max(int(hidden_count), 0)
+        self._refresh_info_note()
 
     def update_layout(self, force: bool = False) -> None:
         if self._root is None or self._title is None or self._subtitle is None:

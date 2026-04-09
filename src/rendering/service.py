@@ -20,6 +20,7 @@ from src.utils.runtime import (
 
 from .rendering_core import RenderingCoreManager
 from .calibration_store import CalibrationSettingsStore
+from .object_visibility_store import ObjectVisibilityStore
 from .debug.auto_scaling import AutoScalingManager
 from .debug.data_panel import DataPanelManager
 from .debug.cam_preview import CameraPreviewManager
@@ -54,6 +55,7 @@ CALIBRATION_SHORTCUT_EVENTS = (
 TABLE_MENU_HOLD_MS = 3000
 TABLE_MENU_COOLDOWN_MS = 200
 TABLE_MENU_MAX_CURSOR_DRIFT_NORM = 0.08
+TABLE_OPTION_STEP = 5.0
 TABLE_INTERACTION_LOCKED_COMMAND_TYPES = frozenset({"set_object_pose", "set_object_state", "reset_interaction"})
 
 
@@ -424,7 +426,9 @@ class RenderingServiceImpl(RenderOutputPort):
         self._table_overlay_state = TableOverlayState()
         self._ui_settings = UISettingsState()
         self._calibration_store = CalibrationSettingsStore()
+        self._object_visibility_store = ObjectVisibilityStore()
         self._calibration_profile_key = self._calibration_store.current_profile_key()
+        self._object_visibility_by_id: Dict[str, bool] = {}
         self._volume_callback: Callable[[float], None] | None = None
         self._last_applied_volume: float | None = None
         self._home_view: Optional[HomeUIView] = None
@@ -712,6 +716,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._window_adapter = self._window_adapter_factory()
         self._rendering_core = self._window_adapter
         self._calibration_store.load_into(self._ui_settings, self._calibration_profile_key)
+        self._object_visibility_by_id = self._object_visibility_store.load()
         if self._quit_callback is not None:
             self._rendering_core.set_quit_handler(self._quit_callback)
         
@@ -828,6 +833,43 @@ class RenderingServiceImpl(RenderOutputPort):
             return
         if action == "back_home":
             self.set_active_view(RenderView.HOME)
+            return
+        if action == "toggle_data_panel":
+            self._ui_settings.data_panel_enabled = not self._ui_settings.data_panel_enabled
+            self._apply_ui_settings_to_views()
+            self._sync_view_visibility()
+            return
+        if action == "toggle_cam_preview":
+            self._ui_settings.cam_preview_enabled = not self._ui_settings.cam_preview_enabled
+            self._apply_ui_settings_to_views()
+            self._sync_view_visibility()
+            return
+        if action.startswith("toggle_object_visibility:"):
+            object_id = action.split(":", 1)[1].strip()
+            if object_id:
+                self._set_object_visibility(object_id, not self._is_object_visible(object_id), persist=True)
+            return
+        if action == "decrease_brightness":
+            self._ui_settings.set_brightness(self._ui_settings.brightness - TABLE_OPTION_STEP)
+            self._apply_ui_settings_to_views()
+            self._sync_view_visibility()
+            return
+        if action == "increase_brightness":
+            self._ui_settings.set_brightness(self._ui_settings.brightness + TABLE_OPTION_STEP)
+            self._apply_ui_settings_to_views()
+            self._sync_view_visibility()
+            return
+        if action == "decrease_volume":
+            self._ui_settings.set_volume(self._ui_settings.volume - TABLE_OPTION_STEP)
+            self._apply_ui_settings_to_views()
+            self._sync_view_visibility()
+            return
+        if action == "increase_volume":
+            self._ui_settings.set_volume(self._ui_settings.volume + TABLE_OPTION_STEP)
+            self._apply_ui_settings_to_views()
+            self._sync_view_visibility()
+            return
+        if self._apply_setting_action(action):
             return
         logger.warning("Unknown table overlay button action ignored: %s", action)
 
@@ -1027,12 +1069,83 @@ class RenderingServiceImpl(RenderOutputPort):
             self._home_view.set_ui_settings(self._ui_settings)
         if self._setting_view:
             self._setting_view.set_ui_settings(self._ui_settings)
+            visibility_summary = self._table_object_visibility_summary()
+            set_object_visibility_summary = getattr(self._setting_view, "set_object_visibility_summary", None)
+            if callable(set_object_visibility_summary):
+                set_object_visibility_summary(
+                    visibility_summary["total_count"],
+                    visibility_summary["hidden_count"],
+                )
         if self._calibration_view:
             self._calibration_view.set_ui_settings(self._ui_settings)
         if self._table_overlay_view:
             self._table_overlay_view.set_ui_settings(self._ui_settings)
+            self._table_overlay_view.set_object_visibility_items(self._table_object_visibility_items())
         self._apply_window_brightness()
         self._apply_volume_setting()
+
+    def _table_object_visibility_items(self) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for object_id in self._object_cache:
+            items.append(
+                {
+                    "object_id": object_id,
+                    "label": object_id.replace("_", " "),
+                    "visible": self._is_object_visible(object_id),
+                }
+            )
+        return items
+
+    def _table_object_visibility_summary(self) -> dict[str, int]:
+        total_count = len(self._object_cache)
+        hidden_count = sum(1 for object_id in self._object_cache if not self._is_object_visible(object_id))
+        return {
+            "total_count": total_count,
+            "hidden_count": hidden_count,
+        }
+
+    def _is_object_visible(self, object_id: str) -> bool:
+        return self._object_visibility_by_id.get(object_id, True)
+
+    def _save_object_visibility_settings(self) -> None:
+        self._object_visibility_store.save(self._object_visibility_by_id)
+
+    def _apply_object_visibility(self, object_id: str) -> None:
+        obj_np = self._object_cache.get(object_id)
+        if obj_np is None:
+            return
+        visible = self._is_object_visible(object_id)
+        if visible:
+            show = getattr(obj_np, "show", None)
+            if callable(show):
+                show()
+            state = self._object_interaction_states.get(object_id, "idle")
+            self._apply_object_visual_state(object_id, state)
+            return
+
+        hide = getattr(obj_np, "hide", None)
+        if callable(hide):
+            hide()
+        self._object_interaction_states[object_id] = "idle"
+        clear_material = getattr(obj_np, "clearMaterial", None)
+        if callable(clear_material):
+            clear_material()
+
+    def _set_object_visibility(self, object_id: str, visible: bool, *, persist: bool) -> None:
+        self._object_visibility_by_id[object_id] = bool(visible)
+        self._apply_object_visibility(object_id)
+        if persist:
+            self._save_object_visibility_settings()
+        if self._setting_view:
+            visibility_summary = self._table_object_visibility_summary()
+            set_object_visibility_summary = getattr(self._setting_view, "set_object_visibility_summary", None)
+            if callable(set_object_visibility_summary):
+                set_object_visibility_summary(
+                    visibility_summary["total_count"],
+                    visibility_summary["hidden_count"],
+                )
+        if self._table_overlay_view:
+            self._table_overlay_view.set_object_visibility_items(self._table_object_visibility_items())
 
     def _sync_view_visibility(self) -> None:
         home_visible = self._view_state.active_view == RenderView.HOME
@@ -1054,7 +1167,14 @@ class RenderingServiceImpl(RenderOutputPort):
             self._scene_root.show() if table_visible else self._scene_root.hide()
 
         if self._data_panel:
-            self._data_panel.set_visible(table_visible and self._ui_settings.data_panel_enabled)
+            set_panel_visible = getattr(self._data_panel, "set_panel_visible", None)
+            set_indicator_visible = getattr(self._data_panel, "set_indicator_visible", None)
+            if callable(set_panel_visible):
+                set_panel_visible(table_visible and self._ui_settings.data_panel_enabled)
+            else:
+                self._data_panel.set_visible(table_visible and self._ui_settings.data_panel_enabled)
+            if callable(set_indicator_visible):
+                set_indicator_visible(table_visible)
 
         if self._camera_preview:
             self._camera_preview.set_visible(table_visible and self._ui_settings.cam_preview_enabled)
@@ -1393,6 +1513,7 @@ class RenderingServiceImpl(RenderOutputPort):
                     "ui_cursor_offset_y": self._ui_settings.ui_cursor_offset_y,
                     "calibration_profile_key": self._calibration_profile_key,
                 },
+                "object_visibility": dict(sorted(self._object_visibility_by_id.items())),
             }
         )
     
@@ -1584,6 +1705,9 @@ class RenderingServiceImpl(RenderOutputPort):
                 return
             
             obj_np = self._object_cache[object_id]
+            if not self._is_object_visible(object_id):
+                logger.info("Ignoring set_object_pose for hidden object: %s", object_id)
+                return
             raw_scene_pos = getattr(obj_np, "pos", (0.0, 0.0, 0.0))
             current_scene_pos = tuple(raw_scene_pos) if isinstance(raw_scene_pos, (list, tuple)) and len(raw_scene_pos) == 3 else (0.0, 0.0, 0.0)
             raw_hpr = getattr(obj_np, "hpr", (0.0, 0.0, 0.0))
@@ -1678,6 +1802,10 @@ class RenderingServiceImpl(RenderOutputPort):
                 return
             
             # 4. Update object state
+            if not self._is_object_visible(object_id):
+                logger.info("Ignoring set_object_state for hidden object: %s", object_id)
+                self._object_interaction_states[object_id] = "idle"
+                return
             self._apply_object_visual_state(object_id, state)
             self._object_interaction_states[object_id] = state
             self._metrics.state_updates += 1
@@ -1808,9 +1936,10 @@ class RenderingServiceImpl(RenderOutputPort):
                 obj_np.setPos(*init_state.pos)
                 # Restore rotation
                 obj_np.setHpr(*init_state.hpr)
-                # Restore state (idle)
-                self._apply_object_visual_state(object_id, init_state.state)
-                self._object_interaction_states[object_id] = init_state.state
+                # Restore state without overriding visibility.
+                restored_state = init_state.state if self._is_object_visible(object_id) else "idle"
+                self._object_interaction_states[object_id] = restored_state
+                self._apply_object_visibility(object_id)
                 logger.debug(f"Reset object {object_id} to initial state: pos={init_state.pos}, hpr={init_state.hpr}, state={init_state.state}")
             
             # 4. Clear command cache (deduplication/outdated frames)
@@ -1915,6 +2044,7 @@ class RenderingServiceImpl(RenderOutputPort):
                     state=descriptor.interaction_state if descriptor.interactable else "idle",
                 )
                 self._object_interaction_states[descriptor.object_id] = effective_state
+                self._apply_object_visibility(descriptor.object_id)
 
                 logger.info(
                     "init_scene executed: created object %s shape=%s pos=%s hpr=%s scale=%s interactable=%s",
@@ -1938,6 +2068,7 @@ class RenderingServiceImpl(RenderOutputPort):
                     )
                 )
                 logger.warning(f"init_scene command received with empty objects list (ID: {command.command_id}")
+            self._apply_ui_settings_to_views()
             
         except Exception as e:
             logger.error(f"init_scene processing failed (command ID: {command.command_id}): {str(e)}")
