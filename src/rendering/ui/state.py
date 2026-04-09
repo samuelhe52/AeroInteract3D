@@ -11,6 +11,12 @@ class RenderView(StrEnum):
     CALIBRATION = "calibration"
 
 
+class TableOverlay(StrEnum):
+    NONE = "none"
+    MENU = "menu"
+    OPTION = "option"
+
+
 @dataclass(slots=True)
 class RenderingViewState:
     active_view: RenderView = RenderView.HOME
@@ -18,6 +24,18 @@ class RenderingViewState:
     def set_active_view(self, view: RenderView | str) -> RenderView:
         self.active_view = RenderView(view)
         return self.active_view
+
+
+@dataclass(slots=True)
+class TableOverlayState:
+    active_overlay: TableOverlay = TableOverlay.NONE
+    opened_at_ms: int = 0
+    trigger_cooldown_until_ms: int = 0
+
+    def set_active_overlay(self, overlay: TableOverlay | str, *, opened_at_ms: int | None = None) -> TableOverlay:
+        self.active_overlay = TableOverlay(overlay)
+        self.opened_at_ms = 0 if self.active_overlay == TableOverlay.NONE else int(opened_at_ms or 0)
+        return self.active_overlay
 
 
 @dataclass(slots=True)

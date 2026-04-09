@@ -62,6 +62,54 @@ def make_packet_with_rotation() -> GesturePacket:
                 "gate_count": 3,
                 "source": "equivalent_xyz",
                 "mode_name": "ROTATE_ENABLED",
+                "mode_active": True,
+                "grab_detected": False,
+                "open_detected": True,
+            }
+        },
+    )
+
+
+def make_packet_with_menu_candidate(
+    *,
+    frame_id: int = 9,
+    timestamp_ms: int = 100,
+    grab_detected: bool = True,
+    mode_active: bool = False,
+    cursor: tuple[float, float] = (0.35, 0.2),
+) -> GesturePacket:
+    midpoint_x, midpoint_y = cursor
+    return GesturePacket(
+        contract_version="2.0.0",
+        frame_id=frame_id,
+        timestamp_ms=timestamp_ms,
+        hand_id="hand-right",
+        tracking_state="tracked",
+        confidence=0.93,
+        pinch_state="open",
+        index_tip=Vec3(midpoint_x + 0.05, midpoint_y, 0.1),
+        thumb_tip=Vec3(midpoint_x - 0.05, midpoint_y, 0.1),
+        wrist=Vec3(0.2, 0.1, 0.0),
+        coordinate_space="camera_norm",
+        pinch_distance=0.04,
+        debug={
+            "rotation": {
+                "enabled": False,
+                "rotating": False,
+                "slot": 0,
+                "slot_count": 18,
+                "slot_x": 0,
+                "slot_y": 0,
+                "slot_z": 0,
+                "deg_x": 0.0,
+                "deg_y": 0.0,
+                "deg_z": 0.0,
+                "gate_count": 0,
+                "source": "equivalent_xyz",
+                "mode_name": "MOVE_ONLY",
+                "mode_active": mode_active,
+                "grab_detected": grab_detected,
+                "open_detected": False,
             }
         },
     )
@@ -443,12 +491,84 @@ class FakeCalibrationView:
         self.destroyed = True
 
 
+class FakeTableOverlayView:
+    def __init__(self, pixel2d, window_size_provider, on_button_activated=None) -> None:
+        self.pixel2d = pixel2d
+        self.window_size_provider = window_size_provider
+        self.on_button_activated = on_button_activated
+        self.visible = False
+        self.destroyed = False
+        self.layout_updates = 0
+        self.last_window_size = window_size_provider()
+        self.cursor_state = None
+        self.last_pinch_state = None
+        self.last_settings = None
+        self.last_overlay = "none"
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = visible
+
+    def set_overlay(self, overlay) -> None:
+        self.last_overlay = str(overlay)
+
+    def update_layout(self, force: bool = False) -> None:
+        self.layout_updates += 1
+        self.last_window_size = self.window_size_provider()
+
+    def update_cursor(self, state, pinch_state=None) -> None:
+        self.cursor_state = state
+        self.last_pinch_state = pinch_state
+
+    def set_ui_settings(self, settings) -> None:
+        self.last_settings = (settings.cursor_scale, settings.cursor_opacity)
+
+    def destroy(self) -> None:
+        self.destroyed = True
+
+
+class FakeTableOverlayView:
+    def __init__(self, pixel2d, window_size_provider, on_button_activated=None) -> None:
+        self.pixel2d = pixel2d
+        self.window_size_provider = window_size_provider
+        self.on_button_activated = on_button_activated
+        self.visible = False
+        self.destroyed = False
+        self.layout_updates = 0
+        self.last_window_size = window_size_provider()
+        self.cursor_state = None
+        self.last_pinch_state = None
+        self.last_settings = None
+        self.last_overlay = "none"
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = visible
+
+    def set_overlay(self, overlay) -> None:
+        self.last_overlay = str(overlay)
+
+    def update_layout(self, force: bool = False) -> None:
+        self.layout_updates += 1
+        self.last_window_size = self.window_size_provider()
+
+    def update_cursor(self, state, pinch_state=None) -> None:
+        self.cursor_state = state
+        self.last_pinch_state = pinch_state
+
+    def set_ui_settings(self, settings) -> None:
+        self.last_settings = (settings.cursor_scale, settings.cursor_opacity)
+
+    def destroy(self) -> None:
+        self.destroyed = True
+
+
 def patch_ui_views(monkeypatch) -> None:
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
     monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
     monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
     monkeypatch.setattr(rendering_service, "SettingUIView", FakeSettingView)
     monkeypatch.setattr(rendering_service, "CalibrationUIView", FakeCalibrationView)
+    monkeypatch.setattr(rendering_service, "TableOverlayUIView", FakeTableOverlayView)
+    monkeypatch.setattr(rendering_service, "TableOverlayUIView", FakeTableOverlayView)
 
 
 def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
@@ -485,7 +605,9 @@ def test_rendering_defaults_to_home_view_in_health_stats() -> None:
     stats = service.health()["stats"]
 
     assert stats["active_view"] == "home"
-    assert stats["available_views"] == ["home", "table", "setting"]
+    assert stats["available_views"] == ["home", "table", "setting", "calibration"]
+    assert stats["active_table_overlay"] == "none"
+    assert stats["available_table_overlays"] == ["none", "menu", "option"]
 
 
 def test_rendering_view_switch_toggles_table_visibility() -> None:
@@ -507,6 +629,58 @@ def test_rendering_view_switch_toggles_table_visibility() -> None:
     assert service._scene_root.hidden is True
     assert service._data_panel.visible is False
     assert service._camera_preview.visible is False
+
+
+def test_rendering_leaving_table_clears_active_overlay() -> None:
+    service = RenderingServiceImpl()
+    service._scene_root = FakeNodePath("scene_root")
+    service._data_panel = FakeVisibilityController()
+    service._camera_preview = FakeVisibilityController()
+
+    service.set_active_view("table")
+    service.set_active_table_overlay("menu", timestamp_ms=123)
+
+    assert service.active_table_overlay == "menu"
+
+    service.set_active_view("setting")
+
+    assert service.active_table_overlay == "none"
+
+
+def test_rendering_overlay_locks_table_interaction_commands() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    service._scene_root = FakeNodePath("scene_root")
+    service._data_panel = FakeVisibilityController()
+    service._camera_preview = FakeVisibilityController()
+    obj = FakeObjectNode()
+    obj.pos = (0.1, 0.2, 0.3)
+    service._object_cache["primary_cube"] = obj
+    service._object_interaction_states["primary_cube"] = "idle"
+    service.set_active_view("table")
+    service.set_active_table_overlay("menu", timestamp_ms=100)
+
+    service.push(
+        make_command(
+            command_id="locked-pose-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={"position": {"x": 0.7, "y": 0.8, "z": 0.9}},
+        )
+    )
+    service.push(
+        make_command(
+            command_id="locked-state-1",
+            frame_id=2,
+            timestamp_ms=101,
+            command_type="set_object_state",
+            payload={"interaction_state": "grabbed"},
+        )
+    )
+
+    assert obj.pos == (0.1, 0.2, 0.3)
+    assert service._object_interaction_states["primary_cube"] == "idle"
 
 
 def test_data_panel_formats_rotation_lines_from_packet_debug() -> None:
@@ -869,9 +1043,7 @@ def test_rendering_reset_restores_cached_scene_pose() -> None:
 
 
 def test_rendering_step_advances_panda3d_task_manager(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -948,9 +1120,7 @@ def test_rendering_core_aspect_lock_prefers_height_when_height_changes_more() ->
 
 
 def test_rendering_service_registers_quit_callback_with_window_adapter(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.set_quit_callback(lambda: None)
@@ -960,15 +1130,14 @@ def test_rendering_service_registers_quit_callback_with_window_adapter(monkeypat
 
 
 def test_rendering_initializes_home_view_on_start(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
 
     service.start()
 
     assert isinstance(service._home_view, FakeHomeView)
+    assert isinstance(service._table_overlay_view, FakeTableOverlayView)
     assert service._home_view.visible is True
     assert service._home_view.last_window_size == (1600, 900)
 
@@ -990,9 +1159,7 @@ def test_rendering_view_switch_updates_home_view_visibility() -> None:
 
 
 def test_rendering_step_updates_home_view_layout_for_window_size_changes(monkeypatch) -> None:
-    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
-    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
-    monkeypatch.setattr(rendering_service, "HomeUIView", FakeHomeView)
+    patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
     service.start()
@@ -1146,6 +1313,125 @@ def test_rendering_updates_home_layout_before_cursor_mapping(monkeypatch) -> Non
 
     assert service._home_view.last_window_size == (2648, 1490)
     assert service._home_view.layout_updates >= 1
+
+
+def test_rendering_menu_opens_after_three_second_grab_hold(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+
+    service.update_gesture_data(make_packet_with_menu_candidate(frame_id=1, timestamp_ms=1_000))
+    assert service.active_table_overlay == "none"
+
+    service.update_gesture_data(make_packet_with_menu_candidate(frame_id=2, timestamp_ms=3_999))
+    assert service.active_table_overlay == "none"
+
+    service.update_gesture_data(make_packet_with_menu_candidate(frame_id=3, timestamp_ms=4_000))
+    assert service.active_table_overlay == "menu"
+    assert service.health()["stats"]["table_interaction_locked"] is True
+    assert service._table_overlay_view.visible is True
+    assert service._table_overlay_view.last_overlay == "menu"
+
+
+def test_rendering_menu_opens_despite_cached_grabbed_object_state(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+    service._object_interaction_states["primary_cube"] = "grabbed"
+
+    service.update_gesture_data(make_packet_with_menu_candidate(frame_id=1, timestamp_ms=1_000))
+    service.update_gesture_data(make_packet_with_menu_candidate(frame_id=2, timestamp_ms=4_000))
+
+    assert service.active_table_overlay == "menu"
+
+
+def test_rendering_opening_overlay_clears_object_interaction_states(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+    object_node = FakeObjectNode()
+    service._object_cache["primary_cube"] = object_node
+    service._object_interaction_states["primary_cube"] = "grabbed"
+
+    service.set_active_table_overlay("menu", timestamp_ms=4_000)
+
+    assert service._object_interaction_states["primary_cube"] == "idle"
+    assert object_node.material is not None
+
+
+def test_rendering_routes_ui_input_to_table_overlay_view(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+    service.set_active_table_overlay("menu", timestamp_ms=4_000)
+
+    service.update_gesture_data(make_packet_with_rotation())
+
+    assert service._table_overlay_view.cursor_state is not None
+    assert service._table_overlay_view.last_pinch_state == "pinched"
+    assert service._table_overlay_view.last_overlay == "menu"
+
+
+def test_rendering_table_overlay_buttons_drive_navigation(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+    service.set_active_table_overlay("menu", timestamp_ms=4_000)
+
+    service._table_overlay_view.on_button_activated("open_option")
+    assert service.active_table_overlay == "option"
+
+    service._table_overlay_view.on_button_activated("back_to_menu")
+    assert service.active_table_overlay == "menu"
+
+    service._table_overlay_view.on_button_activated("back_home")
+    assert service.active_view == "home"
+    assert service.active_table_overlay == "none"
+
+
+def test_rendering_menu_gate_ignores_rotation_mode_active(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+
+    service.update_gesture_data(
+        make_packet_with_menu_candidate(frame_id=1, timestamp_ms=1_000, grab_detected=True, mode_active=True)
+    )
+    service.update_gesture_data(
+        make_packet_with_menu_candidate(frame_id=2, timestamp_ms=5_000, grab_detected=True, mode_active=True)
+    )
+
+    assert service.active_table_overlay == "none"
+
+
+def test_rendering_menu_gate_respects_reopen_cooldown(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+
+    service.update_gesture_data(make_packet_with_menu_candidate(frame_id=1, timestamp_ms=1_000))
+    service.update_gesture_data(make_packet_with_menu_candidate(frame_id=2, timestamp_ms=4_000))
+    assert service.active_table_overlay == "menu"
+
+    service.set_active_table_overlay("none", timestamp_ms=4_010)
+    service.update_gesture_data(make_packet_with_menu_candidate(frame_id=3, timestamp_ms=4_100))
+    service.update_gesture_data(make_packet_with_menu_candidate(frame_id=4, timestamp_ms=7_050))
+
+    assert service.active_table_overlay == "none"
 
 
 def test_rendering_home_button_callback_switches_view(monkeypatch) -> None:

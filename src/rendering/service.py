@@ -24,7 +24,7 @@ from .debug.auto_scaling import AutoScalingManager
 from .debug.data_panel import DataPanelManager
 from .debug.cam_preview import CameraPreviewManager
 from .interaction import VirtualHand
-from .ui import CalibrationUIView, HomeUIView, RenderView, RenderingViewState, SettingUIView, UICalibrationPreviewState, UIGestureInputAdapter, UISettingsState
+from .ui import CalibrationUIView, HomeUIView, RenderView, RenderingViewState, SettingUIView, TableOverlay, TableOverlayState, TableOverlayUIView, UICalibrationPreviewState, UIGestureInputAdapter, UISettingsState
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
 VALID_PAYLOAD_KEYS = {
@@ -51,6 +51,10 @@ CALIBRATION_SHORTCUT_EVENTS = (
     "r",
     "enter",
 )
+TABLE_MENU_HOLD_MS = 3000
+TABLE_MENU_COOLDOWN_MS = 200
+TABLE_MENU_MAX_CURSOR_DRIFT_NORM = 0.08
+TABLE_INTERACTION_LOCKED_COMMAND_TYPES = frozenset({"set_object_pose", "set_object_state", "reset_interaction"})
 
 
 # Initial object state.
@@ -386,6 +390,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._scene_root: Optional[NodePath] = None
         self._object_cache: Dict[str, NodePath] = {}
         self._object_initial_states: Dict[str, ObjectInitialState] = {}
+        self._object_interaction_states: Dict[str, str] = {}
         self._executed_command_ids: Set[str] = set()
         self._latest_frame_id: Optional[int] = None
         self._pending_commands: List[SceneCommand] = []
@@ -416,6 +421,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._model_factory: Optional[ModelResourceFactory] = None
         self._object_visual_profiles: Dict[str, ObjectVisualProfile] = {}
         self._view_state = RenderingViewState()
+        self._table_overlay_state = TableOverlayState()
         self._ui_settings = UISettingsState()
         self._calibration_store = CalibrationSettingsStore()
         self._calibration_profile_key = self._calibration_store.current_profile_key()
@@ -424,7 +430,10 @@ class RenderingServiceImpl(RenderOutputPort):
         self._home_view: Optional[HomeUIView] = None
         self._setting_view: Optional[SettingUIView] = None
         self._calibration_view: Optional[CalibrationUIView] = None
+        self._table_overlay_view: Optional[TableOverlayUIView] = None
         self._ui_input_adapter = UIGestureInputAdapter()
+        self._table_menu_hold_started_at_ms: int | None = None
+        self._table_menu_hold_origin_norm: tuple[float, float] | None = None
 
     @staticmethod
     def _box_model_center_offset() -> tuple[float, float, float]:
@@ -721,6 +730,7 @@ class RenderingServiceImpl(RenderOutputPort):
                     self._home_view = HomeUIView(pixel2d, self._window_size, self._handle_home_button_activated)
                     self._setting_view = SettingUIView(pixel2d, self._window_size, self._handle_setting_button_activated)
                     self._calibration_view = CalibrationUIView(pixel2d, self._window_size, self._handle_calibration_button_activated)
+                    self._table_overlay_view = TableOverlayUIView(pixel2d, self._window_size, self._handle_table_overlay_button_activated)
                     self._apply_ui_settings_to_views()
                 if self._debug_stats_enabled:
                     self._data_panel = DataPanelManager(self._auto_scaling)
@@ -803,6 +813,23 @@ class RenderingServiceImpl(RenderOutputPort):
             self._setting_view.update_layout(force=True)
         if self._calibration_view:
             self._calibration_view.update_layout(force=True)
+        if self._table_overlay_view:
+            self._table_overlay_view.update_layout(force=True)
+
+    def _handle_table_overlay_button_activated(self, action: str) -> None:
+        if action == "return_to_table":
+            self.set_active_table_overlay(TableOverlay.NONE)
+            return
+        if action == "open_option":
+            self.set_active_table_overlay(TableOverlay.OPTION)
+            return
+        if action == "back_to_menu":
+            self.set_active_table_overlay(TableOverlay.MENU)
+            return
+        if action == "back_home":
+            self.set_active_view(RenderView.HOME)
+            return
+        logger.warning("Unknown table overlay button action ignored: %s", action)
 
     def _register_calibration_shortcuts(self) -> None:
         if self._rendering_core is None:
@@ -846,11 +873,38 @@ class RenderingServiceImpl(RenderOutputPort):
     def active_view(self) -> str:
         return self._view_state.active_view.value
 
+    @property
+    def active_table_overlay(self) -> str:
+        return self._table_overlay_state.active_overlay.value
+
     def set_active_view(self, view: RenderView | str) -> str:
         next_view = self._view_state.set_active_view(view)
+        if next_view != RenderView.TABLE:
+            self._reset_table_overlay_runtime_state(clear_cooldown=True)
         self._sync_view_visibility()
+        self._sync_table_menu_hold_feedback(self._last_gesture_packet)
         logger.info("Rendering view switched to %s", next_view.value)
         return next_view.value
+
+    def set_active_table_overlay(self, overlay: TableOverlay | str, *, timestamp_ms: int | None = None) -> str:
+        next_overlay = TableOverlay(overlay)
+        if self._view_state.active_view != RenderView.TABLE and next_overlay != TableOverlay.NONE:
+            logger.warning("Ignoring table overlay change outside table view: %s", next_overlay.value)
+            return self._table_overlay_state.active_overlay.value
+
+        current_overlay = self._table_overlay_state.active_overlay
+        if current_overlay == next_overlay:
+            return current_overlay.value
+
+        if next_overlay != TableOverlay.NONE:
+            self._clear_table_object_interaction_states()
+
+        self._table_overlay_state.set_active_overlay(next_overlay, opened_at_ms=timestamp_ms)
+        self._clear_table_menu_hold()
+        self._sync_view_visibility()
+        self._sync_table_menu_hold_feedback(self._last_gesture_packet)
+        logger.info("Table overlay switched to %s", next_overlay.value)
+        return next_overlay.value
 
     def _handle_home_button_activated(self, action: str) -> None:
         if action == RenderView.TABLE.value:
@@ -975,6 +1029,8 @@ class RenderingServiceImpl(RenderOutputPort):
             self._setting_view.set_ui_settings(self._ui_settings)
         if self._calibration_view:
             self._calibration_view.set_ui_settings(self._ui_settings)
+        if self._table_overlay_view:
+            self._table_overlay_view.set_ui_settings(self._ui_settings)
         self._apply_window_brightness()
         self._apply_volume_setting()
 
@@ -990,6 +1046,9 @@ class RenderingServiceImpl(RenderOutputPort):
             self._setting_view.set_visible(setting_visible)
         if self._calibration_view:
             self._calibration_view.set_visible(calibration_visible)
+        if self._table_overlay_view:
+            self._table_overlay_view.set_overlay(self._table_overlay_state.active_overlay)
+            self._table_overlay_view.set_visible(table_visible and self._table_overlay_state.active_overlay != TableOverlay.NONE)
 
         if self._scene_root is not None and not self._scene_root.isEmpty():
             self._scene_root.show() if table_visible else self._scene_root.hide()
@@ -999,6 +1058,120 @@ class RenderingServiceImpl(RenderOutputPort):
 
         if self._camera_preview:
             self._camera_preview.set_visible(table_visible and self._ui_settings.cam_preview_enabled)
+
+    def _clear_table_menu_hold(self) -> None:
+        self._table_menu_hold_started_at_ms = None
+        self._table_menu_hold_origin_norm = None
+
+    def _sync_table_menu_hold_feedback(self, packet) -> None:
+        if self._data_panel is None:
+            return
+        update_menu_hold_progress = getattr(self._data_panel, "update_menu_hold_progress", None)
+        if not callable(update_menu_hold_progress):
+            return
+        overlay_active = (
+            self._view_state.active_view == RenderView.TABLE
+            and self._table_overlay_state.active_overlay != TableOverlay.NONE
+        )
+        candidate_active = (
+            self._view_state.active_view == RenderView.TABLE
+            and self._table_overlay_state.active_overlay == TableOverlay.NONE
+            and self._table_menu_hold_started_at_ms is not None
+            and packet is not None
+        )
+        hold_ms = 0
+        if candidate_active:
+            hold_ms = max(int(getattr(packet, "timestamp_ms", 0) or 0) - self._table_menu_hold_started_at_ms, 0)
+        update_menu_hold_progress(
+            hold_ms,
+            candidate_active=candidate_active,
+            overlay_active=overlay_active,
+        )
+
+    def _clear_table_object_interaction_states(self) -> None:
+        for object_id, state in list(self._object_interaction_states.items()):
+            if state == "idle":
+                continue
+            if object_id not in self._object_cache:
+                self._object_interaction_states[object_id] = "idle"
+                continue
+            self._apply_object_visual_state(object_id, "idle")
+            self._object_interaction_states[object_id] = "idle"
+
+    def _reset_table_overlay_runtime_state(self, *, clear_cooldown: bool) -> None:
+        self._table_overlay_state.set_active_overlay(TableOverlay.NONE)
+        if clear_cooldown:
+            self._table_overlay_state.trigger_cooldown_until_ms = 0
+        self._clear_table_menu_hold()
+
+    def _is_table_interaction_locked(self) -> bool:
+        return self._view_state.active_view == RenderView.TABLE and self._table_overlay_state.active_overlay != TableOverlay.NONE
+
+    def _rotation_debug_payload(self, packet) -> dict[str, Any] | None:
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return None
+        rotation_payload = debug_payload.get("rotation")
+        if not isinstance(rotation_payload, dict):
+            return None
+        return rotation_payload
+
+    def _table_menu_candidate_active(self, packet, ui_input) -> bool:
+        if packet is None or getattr(packet, "tracking_state", None) != "tracked" or not bool(ui_input.visible):
+            return False
+
+        rotation_payload = self._rotation_debug_payload(packet)
+        if rotation_payload is None:
+            return False
+        if not bool(rotation_payload.get("grab_detected", False)):
+            return False
+        if bool(rotation_payload.get("mode_active", False)):
+            return False
+        return True
+
+    @staticmethod
+    def _cursor_norm_distance(left: tuple[float, float], right: tuple[float, float]) -> float:
+        delta_x = float(left[0]) - float(right[0])
+        delta_y = float(left[1]) - float(right[1])
+        return (delta_x * delta_x + delta_y * delta_y) ** 0.5
+
+    def _update_table_menu_hold_gate(self, packet, ui_input) -> None:
+        if self._view_state.active_view != RenderView.TABLE:
+            self._clear_table_menu_hold()
+            return
+
+        if self._table_overlay_state.active_overlay != TableOverlay.NONE:
+            self._clear_table_menu_hold()
+            return
+
+        if packet is None:
+            self._clear_table_menu_hold()
+            return
+
+        timestamp_ms = int(getattr(packet, "timestamp_ms", 0) or 0)
+        if timestamp_ms < self._table_overlay_state.trigger_cooldown_until_ms:
+            self._clear_table_menu_hold()
+            return
+
+        if not self._table_menu_candidate_active(packet, ui_input):
+            self._clear_table_menu_hold()
+            return
+
+        if self._table_menu_hold_started_at_ms is None or self._table_menu_hold_origin_norm is None:
+            self._table_menu_hold_started_at_ms = timestamp_ms
+            self._table_menu_hold_origin_norm = ui_input.cursor_norm
+            return
+
+        if self._cursor_norm_distance(ui_input.cursor_norm, self._table_menu_hold_origin_norm) > TABLE_MENU_MAX_CURSOR_DRIFT_NORM:
+            self._table_menu_hold_started_at_ms = timestamp_ms
+            self._table_menu_hold_origin_norm = ui_input.cursor_norm
+            return
+
+        if timestamp_ms - self._table_menu_hold_started_at_ms < TABLE_MENU_HOLD_MS:
+            return
+
+        self._table_overlay_state.trigger_cooldown_until_ms = timestamp_ms + TABLE_MENU_COOLDOWN_MS
+        self.set_active_table_overlay(TableOverlay.MENU, timestamp_ms=timestamp_ms)
     
     def push(self, command: SceneCommand) -> None:
         """Push a command through the main entry point with fault-tolerant handling."""
@@ -1019,6 +1192,14 @@ class RenderingServiceImpl(RenderOutputPort):
             
             if self._status == LIFECYCLE_DEGRADED:
                 logger.info(f"Module DEGRADED, recording command but not executing (ID: {command.command_id}")
+                return
+
+            if self._is_table_interaction_locked() and command.command_type in TABLE_INTERACTION_LOCKED_COMMAND_TYPES:
+                logger.debug(
+                    "Suppressing table interaction command while overlay %s is active: %s",
+                    self._table_overlay_state.active_overlay.value,
+                    command.command_type,
+                )
                 return
             
             if self._is_resetting:
@@ -1177,6 +1358,11 @@ class RenderingServiceImpl(RenderOutputPort):
             stats={
                 "active_view": self.active_view,
                 "available_views": [view.value for view in RenderView],
+                "active_table_overlay": self.active_table_overlay,
+                "available_table_overlays": [overlay.value for overlay in TableOverlay],
+                "table_interaction_locked": self._is_table_interaction_locked(),
+                "table_menu_hold_ms": 0 if self._table_menu_hold_started_at_ms is None or self._last_gesture_packet is None else max(int(getattr(self._last_gesture_packet, "timestamp_ms", 0)) - self._table_menu_hold_started_at_ms, 0),
+                "table_menu_cooldown_until_ms": self._table_overlay_state.trigger_cooldown_until_ms,
                 "commands_seen": self._metrics.commands_seen,
                 "commands_applied": self._metrics.commands_applied,
                 "duplicate_commands": self._metrics.duplicate_commands,
@@ -1228,6 +1414,9 @@ class RenderingServiceImpl(RenderOutputPort):
         if self._calibration_view:
             self._calibration_view.destroy()
             self._calibration_view = None
+        if self._table_overlay_view:
+            self._table_overlay_view.destroy()
+            self._table_overlay_view = None
         if self._camera_preview:
             self._camera_preview.destroy()
         if self._data_panel:
@@ -1490,6 +1679,7 @@ class RenderingServiceImpl(RenderOutputPort):
             
             # 4. Update object state
             self._apply_object_visual_state(object_id, state)
+            self._object_interaction_states[object_id] = state
             self._metrics.state_updates += 1
             self._metrics.commands_applied += 1
             
@@ -1620,6 +1810,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 obj_np.setHpr(*init_state.hpr)
                 # Restore state (idle)
                 self._apply_object_visual_state(object_id, init_state.state)
+                self._object_interaction_states[object_id] = init_state.state
                 logger.debug(f"Reset object {object_id} to initial state: pos={init_state.pos}, hpr={init_state.hpr}, state={init_state.state}")
             
             # 4. Clear command cache (deduplication/outdated frames)
@@ -1666,6 +1857,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 self._object_cache.clear()
                 self._object_visual_profiles.clear()
                 self._object_initial_states.clear()
+                self._object_interaction_states.clear()
                 logger.info("Duplicate init_scene received, scene cache reset")
             
             # Parse objects from payload
@@ -1722,6 +1914,7 @@ class RenderingServiceImpl(RenderOutputPort):
                     hpr=descriptor.init_hpr,
                     state=descriptor.interaction_state if descriptor.interactable else "idle",
                 )
+                self._object_interaction_states[descriptor.object_id] = effective_state
 
                 logger.info(
                     "init_scene executed: created object %s shape=%s pos=%s hpr=%s scale=%s interactable=%s",
@@ -1815,6 +2008,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._object_cache.clear()
         self._object_visual_profiles.clear()
         self._object_initial_states.clear()
+        self._object_interaction_states.clear()
         self._executed_command_ids.clear()
         self._latest_frame_id = None
         self._pending_commands.clear()
@@ -1827,6 +2021,7 @@ class RenderingServiceImpl(RenderOutputPort):
         self._frame_times = []
         self._last_world_norm_pos = (0.0, 0.0, 0.0)
         self._last_scene_pos = (0.0, 0.0, 0.0)
+        self._reset_table_overlay_runtime_state(clear_cooldown=True)
 
     @staticmethod
     def _supports_debug_overlay(rendering_core: RenderingCoreManager) -> bool:
@@ -1886,6 +2081,8 @@ class RenderingServiceImpl(RenderOutputPort):
         ui_input = self._ui_input_adapter.to_ui_input(packet, window_size=window_size)
         calibration_preview = self._build_calibration_preview_state(packet, ui_input, window_size=window_size)
         pinch_state = getattr(packet, "pinch_state", None)
+        self._update_table_menu_hold_gate(packet, ui_input)
+        self._sync_table_menu_hold_feedback(packet)
         if self._view_state.active_view == RenderView.HOME and self._home_view:
             self._home_view.update_layout()
             self._home_view.update_cursor(ui_input, pinch_state=pinch_state)
@@ -1896,6 +2093,13 @@ class RenderingServiceImpl(RenderOutputPort):
             self._calibration_view.update_layout()
             self._calibration_view.update_calibration_preview(calibration_preview)
             self._calibration_view.update_cursor(ui_input, pinch_state=pinch_state)
+        elif (
+            self._view_state.active_view == RenderView.TABLE
+            and self._table_overlay_state.active_overlay != TableOverlay.NONE
+            and self._table_overlay_view
+        ):
+            self._table_overlay_view.update_layout()
+            self._table_overlay_view.update_cursor(ui_input, pinch_state=pinch_state)
     
     def update_camera_frame(self, frame, observation=None, packet=None) -> None:
         """Update camera frame data"""
