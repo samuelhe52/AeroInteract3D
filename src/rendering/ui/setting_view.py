@@ -10,6 +10,7 @@ from panda3d.core import NodePath, TextNode
 from src.contracts import PinchState
 
 from .interaction import UIButtonBounds, UIButtonInteractionController, UIButtonInteractionSnapshot
+from .display_metrics import apply_root_display_scale
 from .state import UIInputState, UISettingsState
 
 
@@ -69,10 +70,13 @@ class SettingUIView:
         pixel2d,
         window_size_provider: Callable[[], tuple[int, int]],
         on_button_activated: Callable[[str], None] | None = None,
+        *,
+        display_scale_provider: Callable[[], float] | None = None,
     ) -> None:
         self._pixel2d = pixel2d
         self._window_size_provider = window_size_provider
         self._on_button_activated = on_button_activated
+        self._display_scale_provider = display_scale_provider or (lambda: 1.0)
         self._root: Optional[DirectFrame] = None
         self._overlay_root: Optional[DirectFrame] = None
         self._title: Optional[NodePath] = None
@@ -97,7 +101,7 @@ class SettingUIView:
         self._interaction_controller = UIButtonInteractionController()
         self._cursor: Optional[DirectFrame] = None
         self._visible = False
-        self._last_layout_size: tuple[int, int] | None = None
+        self._last_layout_size: tuple[int, int, float] | None = None
         self._hover_slider_key: str | None = None
         self._active_slider_key: str | None = None
         self._ui_settings = UISettingsState()
@@ -487,7 +491,8 @@ class SettingUIView:
         width, height = self._window_size_provider()
         width = max(int(width), 800)
         height = max(int(height), 450)
-        next_size = (width, height)
+        display_scale = apply_root_display_scale(self._root, self._display_scale_provider())
+        next_size = (width, height, display_scale)
         if not force and next_size == self._last_layout_size:
             return
 

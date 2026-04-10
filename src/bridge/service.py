@@ -187,9 +187,8 @@ class SecondaryHandState:
     debug: dict[str, Any] | None = None
 
 
-DUAL_SCALE_RATIO_MIN = 0.35
-DUAL_SCALE_RATIO_MAX = 2.80
 DUAL_SCALE_RATIO_EXPONENT = 0.85
+DUAL_SCALE_RATIO_EPSILON = 1e-6
 PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.12
 SECONDARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.12
 SECONDARY_PINCH_FALLBACK_RELEASE_DISTANCE = 0.24
@@ -383,7 +382,6 @@ class BridgeServiceImpl(BridgeService):
             and secondary_hand.confidence >= BRIDGE_MIN_TRACKING_CONFIDENCE
         )
         secondary_pinched = self._secondary_is_pinched(secondary_hand)
-        primary_pinched = packet.pinch_state == "pinched"
         primary_dual_scale_pinched = self._primary_allows_dual_scale(packet)
 
         if not primary_available and not secondary_available:
@@ -1035,10 +1033,7 @@ class BridgeServiceImpl(BridgeService):
         baseline_distance = max(self._dual_scale_baseline_distance_xy or 1e-4, 1e-4)
         baseline_scale = self._dual_scale_baseline_scale or object_state.world_scale
         ratio_raw = distance_xy / baseline_distance
-        ratio = max(
-            DUAL_SCALE_RATIO_MIN,
-            min(DUAL_SCALE_RATIO_MAX, ratio_raw ** DUAL_SCALE_RATIO_EXPONENT),
-        )
+        ratio = max(ratio_raw, DUAL_SCALE_RATIO_EPSILON) ** DUAL_SCALE_RATIO_EXPONENT
         object_state.world_scale = (
             baseline_scale[0] * ratio,
             baseline_scale[1] * ratio,

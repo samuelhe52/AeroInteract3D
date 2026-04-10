@@ -26,6 +26,7 @@ from .debug.data_panel import DataPanelManager
 from .debug.cam_preview import CameraPreviewManager
 from .interaction import VirtualHand
 from .ui import CalibrationUIView, HomeUIView, RenderView, RenderingViewState, SettingUIView, TableOverlay, TableOverlayState, TableOverlayUIView, UICalibrationPreviewState, UIGestureInputAdapter, UISettingsState
+from .ui.display_metrics import clamp_display_scale, logical_size_from_physical
 # Logger configuration should be completed at the application entry point.
 logger = logging.getLogger("rendering_service")
 VALID_PAYLOAD_KEYS = {
@@ -64,6 +65,7 @@ TABLE_INTERACTION_LOCKED_COMMAND_TYPES = frozenset({"set_object_pose", "set_obje
 class ObjectInitialState:
     pos: tuple[float, float, float]
     hpr: tuple[float, float, float]
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
     state: str = "idle"
 
 
@@ -316,7 +318,7 @@ class ModelResourceFactory:
         # 3. 复制模型模板
         template_model.copyTo(visual_np)
 
-        visual_np.setScale(*scale)
+        object_np.setScale(*scale)
 
         
         # 4. 应用颜色和透明度
@@ -736,10 +738,30 @@ class RenderingServiceImpl(RenderOutputPort):
             if self._supports_debug_overlay(self._rendering_core):
                 pixel2d = self._rendering_core.get_pixel2d()
                 if pixel2d is not None:
-                    self._home_view = HomeUIView(pixel2d, self._window_size, self._handle_home_button_activated)
-                    self._setting_view = SettingUIView(pixel2d, self._window_size, self._handle_setting_button_activated)
-                    self._calibration_view = CalibrationUIView(pixel2d, self._window_size, self._handle_calibration_button_activated)
-                    self._table_overlay_view = TableOverlayUIView(pixel2d, self._window_size, self._handle_table_overlay_button_activated)
+                    self._home_view = HomeUIView(
+                        pixel2d,
+                        self._window_size,
+                        self._handle_home_button_activated,
+                        display_scale_provider=self._display_scale,
+                    )
+                    self._setting_view = SettingUIView(
+                        pixel2d,
+                        self._window_size,
+                        self._handle_setting_button_activated,
+                        display_scale_provider=self._display_scale,
+                    )
+                    self._calibration_view = CalibrationUIView(
+                        pixel2d,
+                        self._window_size,
+                        self._handle_calibration_button_activated,
+                        display_scale_provider=self._display_scale,
+                    )
+                    self._table_overlay_view = TableOverlayUIView(
+                        pixel2d,
+                        self._window_size,
+                        self._handle_table_overlay_button_activated,
+                        display_scale_provider=self._display_scale,
+                    )
                     self._apply_ui_settings_to_views()
                 if self._debug_stats_enabled:
                     self._data_panel = DataPanelManager(self._auto_scaling)
@@ -834,6 +856,14 @@ class RenderingServiceImpl(RenderOutputPort):
         if self._table_overlay_view:
             self._table_overlay_view.update_layout(force=True)
 
+    def _display_scale(self) -> float:
+        if self._rendering_core is None:
+            return 1.0
+        display_scale = getattr(self._rendering_core, "display_scale", None)
+        if callable(display_scale):
+            return clamp_display_scale(display_scale())
+        return 1.0
+
     def _handle_table_overlay_button_activated(self, action: str) -> None:
         if action == "return_to_table":
             self.set_active_table_overlay(TableOverlay.NONE)
@@ -922,7 +952,10 @@ class RenderingServiceImpl(RenderOutputPort):
         if not callable(get_x_size) or not callable(get_y_size):
             return (1600, 900)
 
-        return (int(get_x_size()), int(get_y_size()))
+        return logical_size_from_physical(
+            (int(get_x_size()), int(get_y_size())),
+            self._display_scale(),
+        )
 
     @property
     def active_view(self) -> str:
@@ -1982,6 +2015,8 @@ class RenderingServiceImpl(RenderOutputPort):
                 obj_np.setPos(*init_state.pos)
                 # Restore rotation
                 obj_np.setHpr(*init_state.hpr)
+                # Restore scale on the object transform root, matching live scale updates.
+                obj_np.setScale(*init_state.scale)
                 # Restore state without overriding visibility.
                 restored_state = init_state.state if self._is_object_visible(object_id) else "idle"
                 self._object_interaction_states[object_id] = restored_state
@@ -2087,6 +2122,7 @@ class RenderingServiceImpl(RenderOutputPort):
                 self._object_initial_states[descriptor.object_id] = ObjectInitialState(
                     pos=scene_init_pos,
                     hpr=descriptor.init_hpr,
+                    scale=self._world_norm_to_scene_scale(descriptor.scale),
                     state=descriptor.interaction_state if descriptor.interactable else "idle",
                 )
                 self._object_interaction_states[descriptor.object_id] = effective_state

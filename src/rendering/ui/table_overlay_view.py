@@ -11,6 +11,7 @@ from panda3d.core import NodePath, TextNode
 from src.contracts import PinchState
 
 from .interaction import UIButtonBounds, UIButtonInteractionController, UIButtonInteractionSnapshot
+from .display_metrics import apply_root_display_scale
 from .state import TableOverlay, UIInputState, UISettingsState
 
 
@@ -81,10 +82,13 @@ class TableOverlayUIView:
         pixel2d,
         window_size_provider: Callable[[], tuple[int, int]],
         on_button_activated: Callable[[str], None] | None = None,
+        *,
+        display_scale_provider: Callable[[], float] | None = None,
     ) -> None:
         self._pixel2d = pixel2d
         self._window_size_provider = window_size_provider
         self._on_button_activated = on_button_activated
+        self._display_scale_provider = display_scale_provider or (lambda: 1.0)
         self._root: Optional[DirectFrame] = None
         self._mask: Optional[DirectFrame] = None
         self._panel: Optional[DirectFrame] = None
@@ -116,7 +120,7 @@ class TableOverlayUIView:
         self._object_interaction_controller = UIButtonInteractionController()
         self._cursor: Optional[DirectFrame] = None
         self._visible = False
-        self._last_layout_size: tuple[int, int] | None = None
+        self._last_layout_size: tuple[int, int, float] | None = None
         self._active_overlay = TableOverlay.NONE
         self._ui_settings = UISettingsState()
         self._object_items: list[dict[str, object]] = []
@@ -422,7 +426,6 @@ class TableOverlayUIView:
                 continue
             label = str(item.get("label", object_id)).strip() or object_id
             visible = bool(item.get("visible", True))
-            state_label = "on" if visible else "off"
             checkbox = "[x]" if visible else "[ ]"
             specs.append(TableOverlayButtonSpec(f"toggle_object_visibility:{object_id}", f"{checkbox} {label}"))
         return tuple(specs)
@@ -489,7 +492,8 @@ class TableOverlayUIView:
         width, height = self._window_size_provider()
         width = max(int(width), 800)
         height = max(int(height), 450)
-        next_size = (width, height)
+        display_scale = apply_root_display_scale(self._root, self._display_scale_provider())
+        next_size = (width, height, display_scale)
         if not force and next_size == self._last_layout_size:
             return
 

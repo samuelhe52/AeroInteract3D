@@ -703,7 +703,42 @@ def test_bridge_dual_scale_tracks_distance_during_primary_pinch_candidate_frames
 
     assert second_pose.payload["debug"]["dual_scale"]["distance_xy"] > first_pose.payload["debug"]["dual_scale"]["distance_xy"]
     assert second_pose.payload["debug"]["dual_scale"]["ratio"] > first_pose.payload["debug"]["dual_scale"]["ratio"]
-    assert second_pose.payload["debug"]["dual_scale"]["ratio"] < 2.8
+
+
+def test_bridge_dual_scale_has_no_per_session_ratio_cap() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    baseline_packet = with_secondary_hand(
+        hover_packet(frame_id=2, timestamp_ms=120, pinch_state="pinched"),
+        pinch_state="pinched",
+        index_tip=Vec3(0.03, -0.08, -0.18),
+        thumb_tip=Vec3(0.01, -0.08, -0.18),
+    )
+    bridge.process(baseline_packet)
+
+    expanded_packet = with_secondary_hand(
+        make_packet(
+            frame_id=3,
+            timestamp_ms=140,
+            pinch_state="pinched",
+            index_tip=Vec3(-0.23, -0.08, -0.18),
+            thumb_tip=Vec3(-0.27, -0.08, -0.18),
+        ),
+        pinch_state="pinched",
+        index_tip=Vec3(0.27, -0.08, -0.18),
+        thumb_tip=Vec3(0.23, -0.08, -0.18),
+    )
+    commands = bridge.process(expanded_packet)
+    pose = [
+        command
+        for command in commands
+        if command.command_type == "set_object_pose" and "scale" in command.payload
+    ][-1]
+
+    ratio = pose.payload["debug"]["dual_scale"]["ratio"]
+    assert ratio > 2.8
 
 
 def test_bridge_dual_scale_uses_xy_distance_only() -> None:

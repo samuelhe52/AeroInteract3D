@@ -276,6 +276,23 @@ class RenderingCoreManager:
         if not self._is_initialized or self._base is None:
             return None
         return getattr(self._base, "pixel2d", None)
+
+    def display_scale(self) -> float:
+        if self._base is None:
+            return 1.0
+        pipe = getattr(self._base, "pipe", None)
+        get_display_zoom = getattr(pipe, "get_display_zoom", None)
+        if not callable(get_display_zoom):
+            get_display_zoom = getattr(pipe, "getDisplayZoom", None)
+        if not callable(get_display_zoom):
+            return 1.0
+        try:
+            scale = float(get_display_zoom())
+        except (TypeError, ValueError):
+            return 1.0
+        if scale <= 0.0:
+            return 1.0
+        return max(1.0, min(scale, 4.0))
     
     def is_initialized(self) -> bool:
         """Check if initialized"""

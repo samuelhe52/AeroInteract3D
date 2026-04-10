@@ -10,6 +10,7 @@ from panda3d.core import NodePath, TextNode
 from src.contracts import PinchState
 
 from .interaction import UIButtonBounds, UIButtonInteractionController, UIButtonInteractionSnapshot
+from .display_metrics import apply_root_display_scale
 from .state import UICalibrationPreviewState, UIInputState, UISettingsState
 
 
@@ -80,10 +81,13 @@ class CalibrationUIView:
         pixel2d,
         window_size_provider: Callable[[], tuple[int, int]],
         on_button_activated: Callable[[str], None] | None = None,
+        *,
+        display_scale_provider: Callable[[], float] | None = None,
     ) -> None:
         self._pixel2d = pixel2d
         self._window_size_provider = window_size_provider
         self._on_button_activated = on_button_activated
+        self._display_scale_provider = display_scale_provider or (lambda: 1.0)
         self._root: Optional[DirectFrame] = None
         self._overlay_root: Optional[DirectFrame] = None
         self._title: Optional[NodePath] = None
@@ -117,7 +121,7 @@ class CalibrationUIView:
         self._cursor: Optional[DirectFrame] = None
         self._interaction_controller = UIButtonInteractionController()
         self._visible = False
-        self._last_layout_size: tuple[int, int] | None = None
+        self._last_layout_size: tuple[int, int, float] | None = None
         self._last_cursor_state = UIInputState()
         self._calibration_preview = UICalibrationPreviewState()
         self._hover_slider_key: str | None = None
@@ -633,7 +637,8 @@ class CalibrationUIView:
         width, height = self._window_size_provider()
         width = max(int(width), 800)
         height = max(int(height), 450)
-        next_size = (width, height)
+        display_scale = apply_root_display_scale(self._root, self._display_scale_provider())
+        next_size = (width, height, display_scale)
         if not force and next_size == self._last_layout_size:
             return
 
@@ -655,10 +660,8 @@ class CalibrationUIView:
         content_left = max(int(width * 0.055), 44)
         content_top = max(int(height * 0.17), 92)
         content_width = width - content_left * 2
-        content_height = height - content_top - max(int(height * 0.08), 36)
         gutter = max(int(width * 0.025), 22)
         left_panel_width = max(int(content_width * 0.42), 280)
-        right_panel_width = content_width - left_panel_width - gutter
 
         back_width = max(int(width * 0.10), 118)
         back_height = max(int(height * 0.07), 52)

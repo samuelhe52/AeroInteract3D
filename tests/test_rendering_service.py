@@ -191,6 +191,8 @@ class FakeLoadedModel:
     def copyTo(self, parent):
         child = FakeNodePath(getattr(self.model_path, "cStr", lambda: str(self.model_path))())
         child.parent = parent
+        if hasattr(parent, "children"):
+            parent.children.append(child)
         return child
 
     def removeNode(self) -> None:
@@ -266,7 +268,9 @@ class FakeNodePath:
     def __init__(self, name: str) -> None:
         self.name = name
         self.parent = None
+        self.children: list[FakeNodePath] = []
         self.hidden = False
+        self.scale = None
         self.color_scale = None
         self.material = None
         self.material_cleared = False
@@ -277,6 +281,7 @@ class FakeNodePath:
     def attachNewNode(self, node) -> "FakeNodePath":
         child = FakeNodePath(getattr(node, "name", "child"))
         child.parent = self
+        self.children.append(child)
         return child
 
     def removeChildren(self) -> None:
@@ -341,8 +346,8 @@ class FakeObjectNode:
     def setMaterial(self, material: object, priority: int) -> None:
         self.material = (material, priority)
 
-    def setScale(self, value: float) -> None:
-        self.scale = value
+    def setScale(self, *values: float) -> None:
+        self.scale = values[0] if len(values) == 1 else values
 
     def setColorScale(self, *values: float) -> None:
         self.color_scale = values
@@ -385,14 +390,16 @@ class FakeVisibilityController:
 
 
 class FakeHomeView:
-    def __init__(self, pixel2d, window_size_provider, on_button_activated=None) -> None:
+    def __init__(self, pixel2d, window_size_provider, on_button_activated=None, *, display_scale_provider=None) -> None:
         self.pixel2d = pixel2d
         self.window_size_provider = window_size_provider
         self.on_button_activated = on_button_activated
+        self.display_scale_provider = display_scale_provider or (lambda: 1.0)
         self.visible = True
         self.destroyed = False
         self.layout_updates = 0
         self.last_window_size = window_size_provider()
+        self.last_display_scale = self.display_scale_provider()
         self.cursor_state = None
         self.last_pinch_state = None
         self.last_settings = None
@@ -403,6 +410,7 @@ class FakeHomeView:
     def update_layout(self, force: bool = False) -> None:
         self.layout_updates += 1
         self.last_window_size = self.window_size_provider()
+        self.last_display_scale = self.display_scale_provider()
 
     def update_cursor(self, state, pinch_state=None) -> None:
         self.cursor_state = state
@@ -416,14 +424,16 @@ class FakeHomeView:
 
 
 class FakeSettingView:
-    def __init__(self, pixel2d, window_size_provider, on_button_activated=None) -> None:
+    def __init__(self, pixel2d, window_size_provider, on_button_activated=None, *, display_scale_provider=None) -> None:
         self.pixel2d = pixel2d
         self.window_size_provider = window_size_provider
         self.on_button_activated = on_button_activated
+        self.display_scale_provider = display_scale_provider or (lambda: 1.0)
         self.visible = False
         self.destroyed = False
         self.layout_updates = 0
         self.last_window_size = window_size_provider()
+        self.last_display_scale = self.display_scale_provider()
         self.cursor_state = None
         self.last_pinch_state = None
         self.last_settings = None
@@ -436,6 +446,7 @@ class FakeSettingView:
     def update_layout(self, force: bool = False) -> None:
         self.layout_updates += 1
         self.last_window_size = self.window_size_provider()
+        self.last_display_scale = self.display_scale_provider()
 
     def update_cursor(self, state, pinch_state=None) -> None:
         self.cursor_state = state
@@ -455,14 +466,16 @@ class FakeSettingView:
 
 
 class FakeCalibrationView:
-    def __init__(self, pixel2d, window_size_provider, on_button_activated=None) -> None:
+    def __init__(self, pixel2d, window_size_provider, on_button_activated=None, *, display_scale_provider=None) -> None:
         self.pixel2d = pixel2d
         self.window_size_provider = window_size_provider
         self.on_button_activated = on_button_activated
+        self.display_scale_provider = display_scale_provider or (lambda: 1.0)
         self.visible = False
         self.destroyed = False
         self.layout_updates = 0
         self.last_window_size = window_size_provider()
+        self.last_display_scale = self.display_scale_provider()
         self.cursor_state = None
         self.last_pinch_state = None
         self.last_settings = None
@@ -477,6 +490,7 @@ class FakeCalibrationView:
     def update_layout(self, force: bool = False) -> None:
         self.layout_updates += 1
         self.last_window_size = self.window_size_provider()
+        self.last_display_scale = self.display_scale_provider()
 
     def update_cursor(self, state, pinch_state=None) -> None:
         self.cursor_state = state
@@ -532,14 +546,16 @@ class FakeCalibrationView:
 
 
 class FakeTableOverlayView:
-    def __init__(self, pixel2d, window_size_provider, on_button_activated=None) -> None:
+    def __init__(self, pixel2d, window_size_provider, on_button_activated=None, *, display_scale_provider=None) -> None:
         self.pixel2d = pixel2d
         self.window_size_provider = window_size_provider
         self.on_button_activated = on_button_activated
+        self.display_scale_provider = display_scale_provider or (lambda: 1.0)
         self.visible = False
         self.destroyed = False
         self.layout_updates = 0
         self.last_window_size = window_size_provider()
+        self.last_display_scale = self.display_scale_provider()
         self.cursor_state = None
         self.last_pinch_state = None
         self.last_settings = None
@@ -555,6 +571,7 @@ class FakeTableOverlayView:
     def update_layout(self, force: bool = False) -> None:
         self.layout_updates += 1
         self.last_window_size = self.window_size_provider()
+        self.last_display_scale = self.display_scale_provider()
 
     def update_cursor(self, state, pinch_state=None) -> None:
         self.cursor_state = state
@@ -1031,6 +1048,23 @@ def test_auto_scanned_custom_models_preserve_authored_materials(tmp_path) -> Non
     assert factory.uses_builtin_materials("teapot") is False
 
 
+def test_model_factory_applies_scene_scale_to_object_root() -> None:
+    factory = rendering_service.ModelResourceFactory(loader=FakeLoader())
+    parent = FakeNodePath("scene_root")
+
+    object_np = factory.create_instance(
+        shape_id="cube",
+        parent=parent,
+        object_id="primary_cube",
+        scale=(0.22, 0.22, 0.22),
+        color=(1.0, 1.0, 1.0, 1.0),
+        interactable=True,
+    )
+
+    assert object_np.scale == pytest.approx((0.22, 0.22, 0.22))
+    assert object_np.children[0].scale is None
+
+
 def test_rendering_uses_color_scale_for_custom_model_states() -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING
@@ -1261,6 +1295,17 @@ def test_rendering_core_uses_macos_backing_pixels_for_window_size(monkeypatch) -
     assert height == 1360
 
 
+def test_rendering_core_reads_display_zoom_from_graphics_pipe() -> None:
+    class FakePipe:
+        def get_display_zoom(self) -> float:
+            return 2.0
+
+    manager = RenderingCoreManager()
+    manager._base = type("FakeBaseWithPipe", (), {"pipe": FakePipe()})()
+
+    assert manager.display_scale() == 2.0
+
+
 def test_rendering_core_aspect_lock_prefers_width_when_width_changes_more() -> None:
     target = RenderingCoreManager.compute_aspect_locked_size(
         (1200, 720),
@@ -1404,6 +1449,62 @@ def test_ui_button_interaction_controller_cancels_release_outside() -> None:
     assert released.activated_index is None
 
 
+def test_ui_button_interaction_controller_accepts_near_edge_press() -> None:
+    controller = UIButtonInteractionController()
+    bounds = [UIButtonBounds(100, 100, 300, 200)]
+
+    pressed = controller.update(
+        UIInputState(cursor_pixels=(92, 150), visible=True),
+        pinch_state="pinched",
+        button_bounds=bounds,
+    )
+    released = controller.update(
+        UIInputState(cursor_pixels=(92, 150), visible=True),
+        pinch_state="open",
+        button_bounds=bounds,
+    )
+
+    assert pressed.pressed_index == 0
+    assert released.activated_index == 0
+
+
+def test_ui_button_interaction_controller_accepts_near_edge_release() -> None:
+    controller = UIButtonInteractionController()
+    bounds = [UIButtonBounds(100, 100, 300, 200)]
+
+    controller.update(
+        UIInputState(cursor_pixels=(150, 150), visible=True),
+        pinch_state="pinched",
+        button_bounds=bounds,
+    )
+    released = controller.update(
+        UIInputState(cursor_pixels=(318, 212), visible=True),
+        pinch_state="open",
+        button_bounds=bounds,
+    )
+
+    assert released.activated_index == 0
+
+
+def test_ui_button_interaction_controller_starts_on_pinch_candidate() -> None:
+    controller = UIButtonInteractionController()
+    bounds = [UIButtonBounds(100, 100, 300, 200)]
+
+    candidate = controller.update(
+        UIInputState(cursor_pixels=(150, 150), visible=True),
+        pinch_state="pinch_candidate",
+        button_bounds=bounds,
+    )
+    released = controller.update(
+        UIInputState(cursor_pixels=(150, 150), visible=True),
+        pinch_state="open",
+        button_bounds=bounds,
+    )
+
+    assert candidate.pressed_index == 0
+    assert released.activated_index == 0
+
+
 def test_ui_button_interaction_controller_activates_after_release_candidate_then_open() -> None:
     controller = UIButtonInteractionController()
     bounds = [UIButtonBounds(100, 100, 300, 200)]
@@ -1473,6 +1574,25 @@ def test_rendering_updates_home_layout_before_cursor_mapping(monkeypatch) -> Non
 
     assert service._home_view.last_window_size == (2648, 1490)
     assert service._home_view.layout_updates >= 1
+
+
+def test_rendering_uses_logical_ui_coordinates_on_retina_framebuffer(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    class RetinaWindowAdapter(FakeWindowAdapter):
+        def display_scale(self) -> float:
+            return 2.0
+
+    service = RenderingServiceImpl(window_adapter_factory=RetinaWindowAdapter)
+    service.start()
+    service._window_adapter.get_base().win.width = 2648
+    service._window_adapter.get_base().win.height = 1490
+
+    service.update_gesture_data(make_packet_with_rotation())
+
+    assert service._home_view.last_display_scale == pytest.approx(2.0)
+    assert service._home_view.last_window_size == (1324, 745)
+    assert service._home_view.cursor_state.cursor_pixels == pytest.approx((430.3, 298.0))
 
 
 def test_rendering_menu_opens_after_three_second_grab_hold(monkeypatch) -> None:
