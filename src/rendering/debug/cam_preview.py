@@ -298,30 +298,19 @@ class CameraPreviewManager:
         )
 
     def set_visible(self, visible: bool) -> None:
-        widgets = (
-            self._camera_preview_node,
-            self._camera_preview_frame,
-            self._camera_preview_title,
-            self._camera_preview_status,
-        )
-        for widget in widgets:
-            if widget is None:
-                continue
-            widget.show() if visible else widget.hide()
+        if self._camera_preview_node is None:
+            return
+        if visible:
+            self._camera_preview_node.show()
+        else:
+            self._camera_preview_node.hide()
 
     def set_brightness(self, brightness: float) -> None:
-        widgets = (
-            self._camera_preview_node,
-            self._camera_preview_frame,
-            self._camera_preview_title,
-            self._camera_preview_status,
-        )
-        for widget in widgets:
-            if widget is None:
-                continue
-            set_color_scale = getattr(widget, "setColorScale", None)
-            if callable(set_color_scale):
-                set_color_scale(brightness, brightness, brightness, 1.0)
+        if self._camera_preview_node is None:
+            return
+        set_color_scale = getattr(self._camera_preview_node, "setColorScale", None)
+        if callable(set_color_scale):
+            set_color_scale(brightness, brightness, brightness, 1.0)
 
     def destroy(self) -> None:
         """Clean up camera preview resources"""

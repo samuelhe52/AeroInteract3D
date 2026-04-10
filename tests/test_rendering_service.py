@@ -594,6 +594,7 @@ def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
 
 
 def test_rendering_start_keeps_camera_preview_when_debug_stats_disabled(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
     created_components: list[tuple[str, object]] = []
 
     class FakeOverlayWindowAdapter(FakeWindowAdapter):
@@ -631,6 +632,9 @@ def test_rendering_start_keeps_camera_preview_when_debug_stats_disabled(monkeypa
             return None
 
         def set_ui_scale(self, scale: float) -> None:
+            return None
+
+        def set_visible(self, visible: bool) -> None:
             return None
 
     monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
