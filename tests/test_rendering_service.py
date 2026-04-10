@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 
 import pytest
 
@@ -1244,6 +1245,20 @@ def test_rendering_core_window_size_falls_back_when_display_is_invalid() -> None
     width, height = RenderingCoreManager.compute_window_size(screen_size=(0, 0))
 
     assert (width, height) == RenderingCoreManager.reference_window_size()
+
+
+def test_rendering_core_uses_macos_backing_pixels_for_window_size(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        RenderingCoreManager,
+        "_detect_macos_backing_screen_size",
+        staticmethod(lambda: (3024, 1964)),
+    )
+
+    width, height = RenderingCoreManager.compute_window_size()
+
+    assert width == 2419
+    assert height == 1360
 
 
 def test_rendering_core_aspect_lock_prefers_width_when_width_changes_more() -> None:

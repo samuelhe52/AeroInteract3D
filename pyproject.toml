@@ -8,7 +8,7 @@ dependencies = [
     "mediapipe>=0.10.32",
     "opencv-python>=4.13.0.92",
     "numpy>=2.2.0",
-    "panda3d>=1.10.15",
+    "panda3d @ https://buildbot.panda3d.org/downloads/86d0376054173b993a3d329a36fb7e994a12b880/panda3d-1.11.0.dev3895-cp312-cp312-macosx_11_0_universal2.whl#md5=e6a6d089c814fccba72213f9052b51c7",
     "pyyaml>=6.0.2",
     "types-panda3d>=0.4.1",
 ]
