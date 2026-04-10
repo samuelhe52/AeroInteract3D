@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-import math
 import logging
+import ctypes
+import ctypes.util
+import platform
+import sys
 from typing import Optional
 import tkinter as tk
 from collections.abc import Callable
@@ -16,6 +19,8 @@ from direct.showbase.ShowBase import ShowBase
 logger = logging.getLogger("rendering_core")
 loadPrcFileData("", "framebuffer-multisample 1")
 loadPrcFileData("", "multisamples 4")
+if sys.platform == "darwin":
+    loadPrcFileData("", "dpi-aware true")
 DEFAULT_WINDOW_ASPECT_RATIO = (16, 9)
 DEFAULT_WINDOW_SCREEN_SCALE = 0.8
 REFERENCE_WINDOW_SIZE = (1600, 900)
@@ -101,6 +106,11 @@ class RenderingCoreManager:
 
     @staticmethod
     def _detect_screen_size() -> tuple[int, int] | None:
+        if sys.platform == "darwin":
+            macos_screen_size = RenderingCoreManager._detect_macos_backing_screen_size()
+            if macos_screen_size is not None:
+                return macos_screen_size
+
         try:
             root = tk.Tk()
             root.withdraw()
@@ -110,6 +120,55 @@ class RenderingCoreManager:
             return width, height
         except Exception:
             logger.debug("Unable to detect screen size; falling back to reference window size", exc_info=True)
+            return None
+
+    @staticmethod
+    def _detect_macos_backing_screen_size() -> tuple[int, int] | None:
+        try:
+            objc_path = ctypes.util.find_library("objc")
+            appkit_path = ctypes.util.find_library("AppKit")
+            if objc_path is None or appkit_path is None:
+                return None
+            objc = ctypes.cdll.LoadLibrary(objc_path)
+            ctypes.cdll.LoadLibrary(appkit_path)
+
+            class CGPoint(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+            class CGSize(ctypes.Structure):
+                _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+            class CGRect(ctypes.Structure):
+                _fields_ = [("origin", CGPoint), ("size", CGSize)]
+
+            objc.objc_getClass.restype = ctypes.c_void_p
+            objc.objc_getClass.argtypes = [ctypes.c_char_p]
+            objc.sel_registerName.restype = ctypes.c_void_p
+            objc.sel_registerName.argtypes = [ctypes.c_char_p]
+            objc.objc_msgSend.restype = ctypes.c_void_p
+            objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+            screen_class = objc.objc_getClass(b"NSScreen")
+            screen = objc.objc_msgSend(screen_class, objc.sel_registerName(b"mainScreen"))
+            if not screen:
+                return None
+
+            msg_send = getattr(objc, "objc_msgSend_stret", objc.objc_msgSend) if platform.machine() == "x86_64" else objc.objc_msgSend
+            msg_send.restype = CGRect
+            msg_send.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            frame = msg_send(screen, objc.sel_registerName(b"frame"))
+
+            objc.objc_msgSend.restype = ctypes.c_double
+            objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            backing_scale = float(objc.objc_msgSend(screen, objc.sel_registerName(b"backingScaleFactor")))
+
+            width = int(frame.size.width * backing_scale)
+            height = int(frame.size.height * backing_scale)
+            if width <= 0 or height <= 0:
+                return None
+            return width, height
+        except Exception:
+            logger.debug("Unable to detect macOS backing screen size", exc_info=True)
             return None
 
     @staticmethod
@@ -217,6 +276,23 @@ class RenderingCoreManager:
         if not self._is_initialized or self._base is None:
             return None
         return getattr(self._base, "pixel2d", None)
+
+    def display_scale(self) -> float:
+        if self._base is None:
+            return 1.0
+        pipe = getattr(self._base, "pipe", None)
+        get_display_zoom = getattr(pipe, "get_display_zoom", None)
+        if not callable(get_display_zoom):
+            get_display_zoom = getattr(pipe, "getDisplayZoom", None)
+        if not callable(get_display_zoom):
+            return 1.0
+        try:
+            scale = float(get_display_zoom())
+        except (TypeError, ValueError):
+            return 1.0
+        if scale <= 0.0:
+            return 1.0
+        return max(1.0, min(scale, 4.0))
     
     def is_initialized(self) -> bool:
         """Check if initialized"""

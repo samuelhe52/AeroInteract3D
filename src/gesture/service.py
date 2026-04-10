@@ -530,7 +530,7 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
             if self._dual_scale_baseline_distance_xy is None:
                 self._dual_scale_baseline_distance_xy = max(pinch_distance_xy, 1e-4)
             ratio_raw = pinch_distance_xy / max(self._dual_scale_baseline_distance_xy, 1e-4)
-            self._dual_scale_ratio = max(0.35, min(2.80, ratio_raw ** 0.85))
+            self._dual_scale_ratio = max(ratio_raw, 1e-6) ** 0.85
         else:
             self._dual_scale_baseline_distance_xy = None
 

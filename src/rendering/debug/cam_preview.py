@@ -297,6 +297,21 @@ class CameraPreviewManager:
             -(self._top_margin + self.PREVIEW_HEIGHT) * active_scale,
         )
 
+    def set_visible(self, visible: bool) -> None:
+        if self._camera_preview_node is None:
+            return
+        if visible:
+            self._camera_preview_node.show()
+        else:
+            self._camera_preview_node.hide()
+
+    def set_brightness(self, brightness: float) -> None:
+        if self._camera_preview_node is None:
+            return
+        set_color_scale = getattr(self._camera_preview_node, "setColorScale", None)
+        if callable(set_color_scale):
+            set_color_scale(brightness, brightness, brightness, 1.0)
+
     def destroy(self) -> None:
         """Clean up camera preview resources"""
         if self._camera_preview_node is not None:

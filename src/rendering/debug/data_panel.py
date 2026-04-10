@@ -21,6 +21,14 @@ class DataPanelManager:
     PANEL_HEIGHT = 400
     PANEL_MARGIN = 12
     PANEL_GAP = 12
+    MENU_HOLD_INDICATOR_HEIGHT = 34
+    MENU_HOLD_INDICATOR_GAP = 10
+    MENU_HOLD_LAMP_SIZE = 18
+    MENU_HOLD_LAMP_GAP = 14
+    MENU_HOLD_LABEL_OFFSET_X = 18
+    MENU_HOLD_LABEL_OFFSET_Y = 22
+    MENU_HOLD_LABEL_SCALE = 29
+    MENU_HOLD_LAMPS_START_X = 156
     TEXT_OFFSET_X = 18
     TEXT_OFFSET_Y = 40
     TEXT_SCALE = 18
@@ -32,8 +40,14 @@ class DataPanelManager:
         self._ui_scale: float = auto_scaling.get_ui_scale()
         self._status_frame: Optional[DirectFrame] = None
         self._status_panel: Optional[OnscreenText] = None
+        self._menu_hold_frame: Optional[DirectFrame] = None
+        self._menu_hold_label: Optional[OnscreenText] = None
+        self._menu_hold_lamps: list[DirectFrame] = []
         self._last_world_norm_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._last_scene_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._menu_hold_lit_count: int = 0
+        self._indicator_visible: bool = True
+        self._panel_visible: bool = True
         self._scale_ratio: float = 1.0
         self._scaling_active: bool = False
         
@@ -50,8 +64,12 @@ class DataPanelManager:
         self.init_panel()
 
     @classmethod
+    def panel_top_margin(cls) -> int:
+        return cls.PANEL_MARGIN + cls.MENU_HOLD_INDICATOR_HEIGHT + cls.MENU_HOLD_INDICATOR_GAP
+
+    @classmethod
     def camera_preview_top_margin(cls) -> int:
-        return cls.PANEL_MARGIN + cls.PANEL_HEIGHT + cls.PANEL_GAP
+        return cls.panel_top_margin() + cls.PANEL_HEIGHT + cls.PANEL_GAP
     
     def init_panel(self) -> None:
         """Initialize data panel (original logic preserved)"""
@@ -59,18 +77,49 @@ class DataPanelManager:
             # Create status frame
             self._status_frame = DirectFrame(
                 parent=self._pixel2d,
-                pos=(self.PANEL_MARGIN * self._ui_scale, 0, -self.PANEL_MARGIN * self._ui_scale),
+                pos=(self.PANEL_MARGIN * self._ui_scale, 0, -self.panel_top_margin() * self._ui_scale),
                 frameSize=(0, self.PANEL_WIDTH * self._ui_scale, -self.PANEL_HEIGHT * self._ui_scale, 0),
                 frameColor=(0.0, 0.0, 0.0, 0.9),  # Black semi-transparent background (original logic preserved)
                 relief=1,
                 borderWidth=(1, 1),
                 color=(60/255, 68/255, 86/255, 1.0)  # Border color (original logic preserved)
             )
+
+            self._menu_hold_frame = DirectFrame(
+                parent=self._pixel2d,
+                pos=(self.PANEL_MARGIN * self._ui_scale, 0, -self.PANEL_MARGIN * self._ui_scale),
+                frameSize=(0, self.PANEL_WIDTH * self._ui_scale, -self.MENU_HOLD_INDICATOR_HEIGHT * self._ui_scale, 0),
+                frameColor=(0.0, 0.0, 0.0, 0.0),
+                relief=None,
+            )
+
+            self._menu_hold_label = OnscreenText(
+                parent=self._pixel2d,
+                pos=((self.PANEL_MARGIN + self.MENU_HOLD_LABEL_OFFSET_X) * self._ui_scale, -(self.PANEL_MARGIN + self.MENU_HOLD_LABEL_OFFSET_Y) * self._ui_scale),
+                align=TextNode.ALeft,
+                scale=self.MENU_HOLD_LABEL_SCALE * self._ui_scale,
+                fg=(0.08, 0.09, 0.10, 1.0),
+                text="menu open",
+                mayChange=False,
+            )
+
+            for _ in range(3):
+                lamp = DirectFrame(
+                    parent=self._menu_hold_frame,
+                    pos=(0, 0, 0),
+                    frameSize=(0, self.MENU_HOLD_LAMP_SIZE * self._ui_scale, -self.MENU_HOLD_LAMP_SIZE * self._ui_scale, 0),
+                    frameColor=(0.30, 0.30, 0.33, 0.95),
+                    relief=1,
+                    borderWidth=(1, 1),
+                )
+                self._menu_hold_lamps.append(lamp)
+            self._layout_menu_hold_indicator()
+            self.update_menu_hold_progress(0, candidate_active=False, overlay_active=False)
             
             # Create status text panel
             self._status_panel = OnscreenText(
                 parent=self._pixel2d,
-                pos=(self.TEXT_OFFSET_X * self._ui_scale, -self.TEXT_OFFSET_Y * self._ui_scale),
+                pos=(self.TEXT_OFFSET_X * self._ui_scale, -(self.panel_top_margin() + self.TEXT_OFFSET_Y) * self._ui_scale),
                 align=TextNode.ALeft,
                 scale=self.TEXT_SCALE * self._ui_scale,
                 fg=(1.0, 1.0, 1.0, 1.0),  # White text (original logic preserved)
@@ -92,6 +141,20 @@ class DataPanelManager:
         except Exception as e:
             logger.error(f"Data panel initialization failed: {str(e)}")
             raise
+
+    def _layout_menu_hold_indicator(self) -> None:
+        if self._menu_hold_frame is None:
+            return
+        self._menu_hold_frame.setPos(self.PANEL_MARGIN * self._ui_scale, 0, -self.PANEL_MARGIN * self._ui_scale)
+        self._menu_hold_frame["frameSize"] = (0, self.PANEL_WIDTH * self._ui_scale, -self.MENU_HOLD_INDICATOR_HEIGHT * self._ui_scale, 0)
+
+        lamp_size = self.MENU_HOLD_LAMP_SIZE * self._ui_scale
+        lamp_gap = self.MENU_HOLD_LAMP_GAP * self._ui_scale
+        left = self.MENU_HOLD_LAMPS_START_X * self._ui_scale
+        top = -(self.MENU_HOLD_INDICATOR_HEIGHT * self._ui_scale - lamp_size) * 0.5
+        for index, lamp in enumerate(self._menu_hold_lamps):
+            lamp.setPos(left + index * (lamp_size + lamp_gap), 0, top)
+            lamp["frameSize"] = (0, lamp_size, -lamp_size, 0)
     
     def update_data(self, packet: Optional[GesturePacket] = None, fps: float = 0.0) -> None:
         """Update data panel display (original logic preserved)"""
@@ -206,6 +269,23 @@ class DataPanelManager:
         self._last_world_norm_pos = world_norm_pos
         self._last_scene_pos = scene_pos
 
+    def update_menu_hold_progress(self, hold_ms: int, *, candidate_active: bool, overlay_active: bool) -> None:
+        if overlay_active:
+            lit_count = 3
+        elif not candidate_active:
+            lit_count = 0
+        else:
+            lit_count = min(3, max(int(hold_ms), 0) // 1000)
+
+        self._menu_hold_lit_count = lit_count
+        lamp_colors = (
+            (0.16, 0.68, 0.32, 0.98),
+            (0.92, 0.72, 0.18, 0.98),
+            (0.88, 0.24, 0.20, 0.98),
+        )
+        off_color = (0.30, 0.30, 0.33, 0.95)
+        for index, lamp in enumerate(self._menu_hold_lamps):
+            lamp["frameColor"] = lamp_colors[index] if index < lit_count else off_color
     def update_scale_status(self, *, scale_ratio: float, scaling_active: bool) -> None:
         self._scale_ratio = float(scale_ratio)
         self._scaling_active = bool(scaling_active)
@@ -255,28 +335,74 @@ class DataPanelManager:
         # Scale data panel
         if self._status_frame:
             # Original position and size
-            original_pos = (self.PANEL_MARGIN, 0, -self.PANEL_MARGIN)
+            original_pos = (self.PANEL_MARGIN, 0, -self.panel_top_margin())
             original_size = (0, self.PANEL_WIDTH, -self.PANEL_HEIGHT, 0)
             # Calculate new position and size
             new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
             new_size = (original_size[0], original_size[1] * scale, original_size[2] * scale, original_size[3])
             self._status_frame.setPos(*new_pos)
             self._status_frame['frameSize'] = new_size
+
+        if self._menu_hold_frame:
+            self._layout_menu_hold_indicator()
+            self.update_menu_hold_progress(self._menu_hold_lit_count * 1000, candidate_active=self._menu_hold_lit_count > 0, overlay_active=self._menu_hold_lit_count >= 3)
+        if self._menu_hold_label:
+            original_pos = (self.PANEL_MARGIN + self.MENU_HOLD_LABEL_OFFSET_X, -(self.PANEL_MARGIN + self.MENU_HOLD_LABEL_OFFSET_Y))
+            self._menu_hold_label['pos'] = (original_pos[0] * scale, original_pos[1] * scale)
+            self._menu_hold_label['scale'] = self.MENU_HOLD_LABEL_SCALE * scale
         
         # Scale data text
         if self._status_panel:
-            original_pos = (self.TEXT_OFFSET_X, -self.TEXT_OFFSET_Y)
+            original_pos = (self.TEXT_OFFSET_X, -(self.panel_top_margin() + self.TEXT_OFFSET_Y))
             original_scale = self.TEXT_SCALE
             new_pos = (original_pos[0] * scale, original_pos[1] * scale)
             new_scale = original_scale * scale
             self._status_panel['pos'] = new_pos
             self._status_panel['scale'] = new_scale
+
+    def set_visible(self, visible: bool) -> None:
+        self.set_indicator_visible(visible)
+        self.set_panel_visible(visible)
+
+    def set_indicator_visible(self, visible: bool) -> None:
+        self._indicator_visible = visible
+        if self._menu_hold_frame:
+            self._menu_hold_frame.show() if visible else self._menu_hold_frame.hide()
+        if self._menu_hold_label:
+            self._menu_hold_label.show() if visible else self._menu_hold_label.hide()
+
+    def set_panel_visible(self, visible: bool) -> None:
+        self._panel_visible = visible
+        if self._status_frame:
+            self._status_frame.show() if visible else self._status_frame.hide()
+        if self._status_panel:
+            self._status_panel.show() if visible else self._status_panel.hide()
+
+    def set_brightness(self, brightness: float) -> None:
+        for widget in (self._menu_hold_frame, self._menu_hold_label, *self._menu_hold_lamps, self._status_frame, self._status_panel):
+            if widget is None:
+                continue
+            set_color_scale = getattr(widget, "setColorScale", None)
+            if callable(set_color_scale):
+                set_color_scale(brightness, brightness, brightness, 1.0)
     
     def destroy(self) -> None:
         """Clean up resources"""
         if self._status_panel:
             self._status_panel.destroy()
             self._status_panel = None
+
+        if self._menu_hold_label:
+            self._menu_hold_label.destroy()
+            self._menu_hold_label = None
+
+        for lamp in self._menu_hold_lamps:
+            lamp.destroy()
+        self._menu_hold_lamps.clear()
+
+        if self._menu_hold_frame:
+            self._menu_hold_frame.destroy()
+            self._menu_hold_frame = None
         
         if self._status_frame:
             self._status_frame.destroy()

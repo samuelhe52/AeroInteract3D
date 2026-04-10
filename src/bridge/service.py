@@ -115,6 +115,32 @@ TABLE_SCENE_OBJECTS: tuple[dict[str, Any], ...] = (
         "interactable": True,
         "interaction_radius": 0.16,
     },
+        # 新增自定义模型配置，和原有格式完全一致
+    {
+        "object_id": "my_teapot",
+        "init_pos": {"x": 0.5, "y": -0.08, "z": 0.18},
+        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": "idle",
+        "shape": "teapot",  # 和Rendering侧注册的shape_id完全一致
+        "scale": {"x": 0.2, "y": 0.2, "z": 0.2},
+        "color": {"r": 0.2, "g": 0.6, "b": 0.9, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.18,
+    },
+        # 新增测试用金字塔模型
+    {
+        "object_id": "test_pyramid",
+        "init_pos": {"x": 0.0, "y": -0.08, "z": 0.3},  # 放在主立方体上方
+        "init_hpr": {"h": 45.0, "p": 0.0, "r": 0.0},     # 初始旋转45度
+        "coordinate_space": "world_norm",
+        "interaction_state": "idle",
+        "shape": "pyramid",  # 直接填文件名（不含后缀）
+        "scale": {"x": 0.15, "y": 0.15, "z": 0.15},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},  # 纯白，显示模型自带的橙色
+        "interactable": True,
+        "interaction_radius": 0.18,
+    },
 )
 TABLE_SURFACE_Y = float(TABLE_SCENE_OBJECTS[0]["init_pos"]["y"]) + (float(TABLE_SCENE_OBJECTS[0]["scale"]["y"]) * 0.5)
 DEFAULT_INTERACTABLE_OBJECT_SCALE = (0.22, 0.22, 0.22)
@@ -161,9 +187,8 @@ class SecondaryHandState:
     debug: dict[str, Any] | None = None
 
 
-DUAL_SCALE_RATIO_MIN = 0.35
-DUAL_SCALE_RATIO_MAX = 2.80
 DUAL_SCALE_RATIO_EXPONENT = 0.85
+DUAL_SCALE_RATIO_EPSILON = 1e-6
 PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.12
 SECONDARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.12
 SECONDARY_PINCH_FALLBACK_RELEASE_DISTANCE = 0.24
@@ -357,7 +382,6 @@ class BridgeServiceImpl(BridgeService):
             and secondary_hand.confidence >= BRIDGE_MIN_TRACKING_CONFIDENCE
         )
         secondary_pinched = self._secondary_is_pinched(secondary_hand)
-        primary_pinched = packet.pinch_state == "pinched"
         primary_dual_scale_pinched = self._primary_allows_dual_scale(packet)
 
         if not primary_available and not secondary_available:
@@ -1009,10 +1033,7 @@ class BridgeServiceImpl(BridgeService):
         baseline_distance = max(self._dual_scale_baseline_distance_xy or 1e-4, 1e-4)
         baseline_scale = self._dual_scale_baseline_scale or object_state.world_scale
         ratio_raw = distance_xy / baseline_distance
-        ratio = max(
-            DUAL_SCALE_RATIO_MIN,
-            min(DUAL_SCALE_RATIO_MAX, ratio_raw ** DUAL_SCALE_RATIO_EXPONENT),
-        )
+        ratio = max(ratio_raw, DUAL_SCALE_RATIO_EPSILON) ** DUAL_SCALE_RATIO_EXPONENT
         object_state.world_scale = (
             baseline_scale[0] * ratio,
             baseline_scale[1] * ratio,
