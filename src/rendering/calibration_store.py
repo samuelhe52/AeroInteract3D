@@ -37,6 +37,12 @@ class CalibrationSettingsStore:
         if not isinstance(profile, dict):
             return False
         try:
+            settings.data_panel_enabled = bool(profile.get("data_panel_enabled", True))
+            settings.cam_preview_enabled = bool(profile.get("cam_preview_enabled", True))
+            settings.set_cursor_scale(float(profile.get("cursor_scale", 1.0)))
+            settings.set_cursor_opacity(float(profile.get("cursor_opacity", 0.92)))
+            settings.set_brightness(float(profile.get("brightness", 100.0)))
+            settings.set_volume(float(profile.get("volume", 50.0)))
             settings.set_ui_cursor_scale_x(float(profile.get("ui_cursor_scale_x", 1.0)))
             settings.set_ui_cursor_scale_y(float(profile.get("ui_cursor_scale_y", 1.0)))
             settings.set_ui_cursor_offset_x(float(profile.get("ui_cursor_offset_x", 0.0)))
@@ -53,6 +59,12 @@ class CalibrationSettingsStore:
             payload["profiles"] = {}
             profiles = payload["profiles"]
         profiles[key] = {
+            "data_panel_enabled": settings.data_panel_enabled,
+            "cam_preview_enabled": settings.cam_preview_enabled,
+            "cursor_scale": settings.cursor_scale,
+            "cursor_opacity": settings.cursor_opacity,
+            "brightness": settings.brightness,
+            "volume": settings.volume,
             "ui_cursor_scale_x": settings.ui_cursor_scale_x,
             "ui_cursor_scale_y": settings.ui_cursor_scale_y,
             "ui_cursor_offset_x": settings.ui_cursor_offset_x,

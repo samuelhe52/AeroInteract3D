@@ -16,6 +16,11 @@ from src.rendering.ui.state import UIInputState, UISettingsState
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
 
 
+@pytest.fixture(autouse=True)
+def isolate_rendering_config(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+
+
 def make_command(
     *,
     command_id: str = "cmd-1",
@@ -2120,6 +2125,33 @@ def test_rendering_persists_calibration_settings_per_device(monkeypatch, tmp_pat
     ui_settings = second_service.health()["stats"]["ui_settings"]
     assert ui_settings["ui_cursor_scale_x"] == 1.24
     assert ui_settings["ui_cursor_offset_y"] == -0.08
+
+
+def test_rendering_persists_general_ui_settings_per_device(monkeypatch, tmp_path) -> None:
+    patch_ui_views(monkeypatch)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("setting")
+    service._setting_view.on_button_activated("data_panel_toggle")
+    service._setting_view.on_button_activated("cam_preview_toggle")
+    service._setting_view.on_button_activated("set_cursor_scale:1.37")
+    service._setting_view.on_button_activated("set_cursor_opacity:0.61")
+    service._setting_view.on_button_activated("set_brightness:48")
+    service._setting_view.on_button_activated("set_volume:73")
+    service.stop()
+
+    second_service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    second_service.start()
+
+    ui_settings = second_service.health()["stats"]["ui_settings"]
+    assert ui_settings["data_panel_enabled"] is False
+    assert ui_settings["cam_preview_enabled"] is False
+    assert ui_settings["cursor_scale"] == 1.37
+    assert ui_settings["cursor_opacity"] == 0.61
+    assert ui_settings["brightness"] == 48.0
+    assert ui_settings["volume"] == 73.0
 
 
 def test_rendering_core_registers_quit_shortcuts() -> None:

@@ -879,11 +879,13 @@ class RenderingServiceImpl(RenderOutputPort):
             return
         if action == "toggle_data_panel":
             self._ui_settings.data_panel_enabled = not self._ui_settings.data_panel_enabled
+            self._save_ui_settings()
             self._apply_ui_settings_to_views()
             self._sync_view_visibility()
             return
         if action == "toggle_cam_preview":
             self._ui_settings.cam_preview_enabled = not self._ui_settings.cam_preview_enabled
+            self._save_ui_settings()
             self._apply_ui_settings_to_views()
             self._sync_view_visibility()
             return
@@ -894,21 +896,25 @@ class RenderingServiceImpl(RenderOutputPort):
             return
         if action == "decrease_brightness":
             self._ui_settings.set_brightness(self._ui_settings.brightness - TABLE_OPTION_STEP)
+            self._save_ui_settings()
             self._apply_ui_settings_to_views()
             self._sync_view_visibility()
             return
         if action == "increase_brightness":
             self._ui_settings.set_brightness(self._ui_settings.brightness + TABLE_OPTION_STEP)
+            self._save_ui_settings()
             self._apply_ui_settings_to_views()
             self._sync_view_visibility()
             return
         if action == "decrease_volume":
             self._ui_settings.set_volume(self._ui_settings.volume - TABLE_OPTION_STEP)
+            self._save_ui_settings()
             self._apply_ui_settings_to_views()
             self._sync_view_visibility()
             return
         if action == "increase_volume":
             self._ui_settings.set_volume(self._ui_settings.volume + TABLE_OPTION_STEP)
+            self._save_ui_settings()
             self._apply_ui_settings_to_views()
             self._sync_view_visibility()
             return
@@ -1012,11 +1018,13 @@ class RenderingServiceImpl(RenderOutputPort):
             return
         if action == "data_panel_toggle":
             self._ui_settings.data_panel_enabled = not self._ui_settings.data_panel_enabled
+            self._save_ui_settings()
             self._apply_ui_settings_to_views()
             self._sync_view_visibility()
             return
         if action == "cam_preview_toggle":
             self._ui_settings.cam_preview_enabled = not self._ui_settings.cam_preview_enabled
+            self._save_ui_settings()
             self._apply_ui_settings_to_views()
             self._sync_view_visibility()
             return
@@ -1045,6 +1053,9 @@ class RenderingServiceImpl(RenderOutputPort):
         self._sync_view_visibility()
 
     def _save_calibration_settings(self) -> None:
+        self._calibration_store.save_from(self._ui_settings, self._calibration_profile_key)
+
+    def _save_ui_settings(self) -> None:
         self._calibration_store.save_from(self._ui_settings, self._calibration_profile_key)
 
     def _apply_setting_action(self, action: str) -> bool:
@@ -1076,8 +1087,7 @@ class RenderingServiceImpl(RenderOutputPort):
         else:
             logger.warning("Unknown setting slider action ignored: %s", action)
             return True
-        if setting_key.startswith("ui_cursor_"):
-            self._save_calibration_settings()
+        self._save_ui_settings()
         self._apply_ui_settings_to_views()
         self._sync_view_visibility()
         return True
