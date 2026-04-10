@@ -108,7 +108,7 @@ class HandLandmarkerRuntime:
         options = vision.HandLandmarkerOptions(
             base_options=mp.tasks.BaseOptions(model_asset_path=str(resolved_model_path)),
             running_mode=vision.RunningMode.VIDEO,
-            num_hands=1,
+            num_hands=2,
             min_hand_detection_confidence=min_detection_confidence,
             min_hand_presence_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
@@ -124,6 +124,12 @@ class HandLandmarkerRuntime:
         self._min_template_match = 0.45
 
     def detect(self, frame_bgr: np.ndarray, *, timestamp_ms: int) -> RawHandObservation | None:
+        observations = self.detect_multi(frame_bgr, timestamp_ms=timestamp_ms)
+        if not observations:
+            return None
+        return observations[0]
+
+    def detect_multi(self, frame_bgr: np.ndarray, *, timestamp_ms: int) -> list[RawHandObservation]:
         frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         blur_level = self._estimate_blur_level(frame_gray)
         detect_frame = resize_for_detection(frame_bgr, max_side=GESTURE_DETECT_MAX_SIDE)
@@ -132,14 +138,43 @@ class HandLandmarkerRuntime:
         result = self._landmarker.detect_for_video(image, timestamp_ms)
 
         if not result.hand_landmarks:
-            return self._detect_fallback(
+            fallback = self._detect_fallback(
                 frame_bgr,
                 frame_gray,
                 timestamp_ms=timestamp_ms,
                 blur_level=blur_level,
             )
+            return [] if fallback is None else [fallback]
 
-        hand_landmarks = result.hand_landmarks[0]
+        observations: list[RawHandObservation] = []
+        fallback_anchor: RawHandObservation | None = None
+        fallback_anchor_confidence = -1.0
+        handedness_entries = getattr(result, "handedness", [])
+        for hand_index, hand_landmarks in enumerate(result.hand_landmarks[:2]):
+            observation = self._build_observation(
+                hand_landmarks=hand_landmarks,
+                handedness_entries=handedness_entries,
+                hand_index=hand_index,
+                blur_level=blur_level,
+            )
+            observations.append(observation)
+            if observation.confidence >= fallback_anchor_confidence:
+                fallback_anchor = observation
+                fallback_anchor_confidence = observation.confidence
+
+        if fallback_anchor is not None:
+            self._update_fallback_state(frame_gray, fallback_anchor, timestamp_ms=timestamp_ms)
+        observations.sort(key=lambda item: item.confidence, reverse=True)
+        return observations
+
+    def _build_observation(
+        self,
+        *,
+        hand_landmarks,
+        handedness_entries,
+        hand_index: int,
+        blur_level: float,
+    ) -> RawHandObservation:
         landmarks = [
             Vec3(
                 x=float(landmark.x),
@@ -153,10 +188,12 @@ class HandLandmarkerRuntime:
         handedness = None
         confidence = 0.0
 
-        if result.handedness:
-            category = result.handedness[0][0]
-            handedness = getattr(category, "category_name", None)
-            confidence = float(getattr(category, "score", 0.0))
+        if hand_index < len(handedness_entries):
+            categories = handedness_entries[hand_index]
+            if categories:
+                category = categories[0]
+                handedness = getattr(category, "category_name", None)
+                confidence = float(getattr(category, "score", 0.0))
 
         index_tip = landmark_to_camera_vec3(landmarks[INDEX_TIP_LANDMARK_INDEX], depth_hint=depth_hint)
         thumb_tip = landmark_to_camera_vec3(landmarks[THUMB_TIP_LANDMARK_INDEX], depth_hint=depth_hint)
@@ -167,7 +204,7 @@ class HandLandmarkerRuntime:
             hand_scale=hand_scale,
         )
 
-        observation = RawHandObservation(
+        return RawHandObservation(
             index_tip=index_tip,
             thumb_tip=thumb_tip,
             wrist=wrist,
@@ -182,8 +219,6 @@ class HandLandmarkerRuntime:
             blur_level=blur_level,
             quality_hint=max(0.0, 1.0 - (blur_level * 0.55)),
         )
-        self._update_fallback_state(frame_gray, observation, timestamp_ms=timestamp_ms)
-        return observation
 
     def _detect_fallback(
         self,

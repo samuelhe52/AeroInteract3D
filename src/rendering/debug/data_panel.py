@@ -18,7 +18,7 @@ class DataPanelManager:
     """Data panel manager, responsible for data panel frame+text initialization, gesture data updates, and scaling adaptation"""
 
     PANEL_WIDTH = 384
-    PANEL_HEIGHT = 330
+    PANEL_HEIGHT = 400
     PANEL_MARGIN = 12
     PANEL_GAP = 12
     MENU_HOLD_INDICATOR_HEIGHT = 34
@@ -48,6 +48,8 @@ class DataPanelManager:
         self._menu_hold_lit_count: int = 0
         self._indicator_visible: bool = True
         self._panel_visible: bool = True
+        self._scale_ratio: float = 1.0
+        self._scaling_active: bool = False
         
         # ========== 新增代码开始 ==========
         # 新增：交互调试数据存储
@@ -134,6 +136,7 @@ class DataPanelManager:
                 fps: 0.0""",  # Text content (original logic preserved)
                 mayChange=True
             )
+
             logger.info("Data panel initialized successfully")
         except Exception as e:
             logger.error(f"Data panel initialization failed: {str(e)}")
@@ -157,8 +160,11 @@ class DataPanelManager:
         """Update data panel display (original logic preserved)"""
         if not self._status_panel:
             return
-        
+
+        dual_hand_lines = self._dual_hand_lines(packet)
+
         if packet is None:
+            rotation_lines = self._default_rotation_lines()
             lines = (
                 "frame: 0",
                 "tracking: idle",
@@ -167,8 +173,12 @@ class DataPanelManager:
                 "pinch_distance: 0.000",
                 "wrist: (+0.00, +0.00, +0.00)",
                 f"fps: {fps:.1f}",
-            )
+                f"scale_ratio: {self._scale_ratio:.2f}x | scaling: {'YES' if self._scaling_active else 'NO'}",
+                f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
+                f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
+            ) + rotation_lines + dual_hand_lines
         else:
+            rotation_lines = self._rotation_lines(packet) or self._default_rotation_lines()
             lines = (
                 f"frame: {packet.frame_id}",
                 f"tracking: {packet.tracking_state}",
@@ -177,24 +187,32 @@ class DataPanelManager:
                 f"pinch_distance: {0.0 if packet.pinch_distance is None else packet.pinch_distance:.3f}",
                 f"wrist: ({packet.wrist.x:+.2f}, {packet.wrist.y:+.2f}, {packet.wrist.z:+.2f})",
                 f"fps: {fps:.1f}",
+                f"scale_ratio: {self._scale_ratio:.2f}x | scaling: {'YES' if self._scaling_active else 'NO'}",
                 f"world_norm: ({self._last_world_norm_pos[0]:+.2f}, {self._last_world_norm_pos[1]:+.2f}, {self._last_world_norm_pos[2]:+.2f})",
                 f"scene_pos: ({self._last_scene_pos[0]:+.2f}, {self._last_scene_pos[1]:+.2f}, {self._last_scene_pos[2]:+.2f})",
-            ) + self._rotation_lines(packet)
+            ) + rotation_lines + dual_hand_lines
 
         # ========== 新增代码开始 ==========
         # 新增：交互调试信息（放在所有内容的最后）
-        interaction_debug_lines = (
-            "--- Interaction Debug ---",
-            f"object_pos: ({self._object_world_pos[0]:+.2f}, {self._object_world_pos[1]:+.2f}, {self._object_world_pos[2]:+.2f})",
-            f"index_tip: ({self._index_tip_world[0]:+.2f}, {self._index_tip_world[1]:+.2f}, {self._index_tip_world[2]:+.2f})",
-            f"thumb_tip: ({self._thumb_tip_world[0]:+.2f}, {self._thumb_tip_world[1]:+.2f}, {self._thumb_tip_world[2]:+.2f})",
-            f"distance: {self._distance_to_object:.3f} | state: {self._interaction_state} | mode: {self._interaction_mode}",
-        )
-        # 合并原有lines和新增的调试信息
-        lines = lines + interaction_debug_lines
+        if packet is not None:
+            interaction_debug_lines = (
+                "--- Interaction Debug ---",
+                f"object_pos: ({self._object_world_pos[0]:+.2f}, {self._object_world_pos[1]:+.2f}, {self._object_world_pos[2]:+.2f})",
+                f"index_tip: ({self._index_tip_world[0]:+.2f}, {self._index_tip_world[1]:+.2f}, {self._index_tip_world[2]:+.2f})",
+                f"thumb_tip: ({self._thumb_tip_world[0]:+.2f}, {self._thumb_tip_world[1]:+.2f}, {self._thumb_tip_world[2]:+.2f})",
+                f"distance: {self._distance_to_object:.3f} | state: {self._interaction_state} | mode: {self._interaction_mode}",
+            )
+            lines = lines + interaction_debug_lines
         # ========== 新增代码结束 ==========
-        
+
         self._status_panel.setText("\n".join(lines))
+
+    @staticmethod
+    def _default_rotation_lines() -> tuple[str, str]:
+        return (
+            "rot: MOVE_ONLY move/idle g00",
+            "xyz: +00.0 +00.0 +00.0",
+        )
 
     @staticmethod
     def _rotation_lines(packet: GesturePacket) -> tuple[str, ...]:
@@ -220,6 +238,31 @@ class DataPanelManager:
             f"rot: {mode_name} {mode_label}/{state_label} g{gate_count:02d}",
             f"xyz: {deg_x:+05.1f} {deg_y:+05.1f} {deg_z:+05.1f}",
         )
+
+    @staticmethod
+    def _dual_hand_lines(packet: Optional[GesturePacket]) -> tuple[str, ...]:
+        if packet is None:
+            return ("--- Dual Hand ---", "hands: 0 | both_pinched: NO", "2nd: n/a | pinch: n/a")
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return ()
+        dual_hand = debug_payload.get("dual_hand")
+        if not isinstance(dual_hand, dict):
+            return ()
+        active_hand_count = int(dual_hand.get("active_hand_count", 1))
+        both_pinched = bool(dual_hand.get("both_pinched", False))
+        secondary = dual_hand.get("secondary_hand")
+        if isinstance(secondary, dict):
+            sec_tracking = str(secondary.get("tracking_state", "n/a"))
+            sec_pinch = str(secondary.get("pinch_state", "n/a"))
+        else:
+            sec_tracking = "n/a"
+            sec_pinch = "n/a"
+        return (
+            "--- Dual Hand ---",
+            f"hands: {active_hand_count} | both_pinched: {'YES' if both_pinched else 'NO'}",
+            f"2nd: {sec_tracking} | pinch: {sec_pinch}",
+        )
     
     def update_coordinate_data(self, world_norm_pos: tuple, scene_pos: tuple) -> None:
         """Update coordinate data for display"""
@@ -243,6 +286,28 @@ class DataPanelManager:
         off_color = (0.30, 0.30, 0.33, 0.95)
         for index, lamp in enumerate(self._menu_hold_lamps):
             lamp["frameColor"] = lamp_colors[index] if index < lit_count else off_color
+    def update_scale_status(self, *, scale_ratio: float, scaling_active: bool) -> None:
+        self._scale_ratio = float(scale_ratio)
+        self._scaling_active = bool(scaling_active)
+
+    def _update_scale_from_packet(self, packet: Optional[GesturePacket]) -> None:
+        if packet is None:
+            return
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return
+        dual_hand = debug_payload.get("dual_hand")
+        if not isinstance(dual_hand, dict):
+            return
+
+        ratio = dual_hand.get("scale_ratio")
+        if isinstance(ratio, (int, float)):
+            self._scale_ratio = float(ratio)
+
+        # Fallback state when bridge-level dual-scale status is not available.
+        both_pinched = dual_hand.get("both_pinched")
+        if isinstance(both_pinched, bool) and not self._scaling_active:
+            self._scaling_active = both_pinched
 
     # ========== 新增代码开始 ==========
     def update_interaction_debug_data(

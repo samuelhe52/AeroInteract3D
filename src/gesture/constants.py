@@ -57,7 +57,7 @@ LATERAL_BLUR_Y_DELTA_BLEND = 0.40
 
 # Equivalent XYZ rotation channel tuning.
 # Use cyclic slots per axis; more slots gives smoother feel.
-ROT_SLOT_COUNT = 18
+ROT_SLOT_COUNT = 24
 ROT_SLOT_STEP_DEG = 360.0 / ROT_SLOT_COUNT
 ROT_EQ_GAIN_X = 220.0
 ROT_EQ_GAIN_Y = 220.0

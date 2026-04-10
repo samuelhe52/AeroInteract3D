@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from src.contracts import GesturePacket, SceneCommand, Vec3
@@ -589,6 +591,63 @@ def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
 
     assert service.health()["lifecycle_state"] == LIFECYCLE_RUNNING
     assert service.active_view == "home"
+
+
+def test_rendering_start_keeps_camera_preview_when_debug_stats_disabled(monkeypatch) -> None:
+    created_components: list[tuple[str, object]] = []
+
+    class FakeOverlayWindowAdapter(FakeWindowAdapter):
+        def get_pixel2d(self):
+            return FakeNodePath("pixel2d")
+
+    class FakeAutoScalingManager:
+        def __init__(self, rendering_core) -> None:
+            self._rendering_core = rendering_core
+
+        def set_scale_callback(self, callback) -> None:
+            self.callback = callback
+
+        def get_ui_scale(self) -> float:
+            return 1.0
+
+    class FakeDataPanel:
+        @classmethod
+        def camera_preview_top_margin(cls) -> int:
+            return 120
+
+        def __init__(self, auto_scaling) -> None:
+            created_components.append(("data_panel", auto_scaling))
+
+        def destroy(self) -> None:
+            return None
+
+    class FakeCameraPreview:
+        PREVIEW_MARGIN = 12
+
+        def __init__(self, auto_scaling, *, top_margin: int) -> None:
+            created_components.append(("camera_preview", top_margin))
+
+        def destroy(self) -> None:
+            return None
+
+        def set_ui_scale(self, scale: float) -> None:
+            return None
+
+    monkeypatch.setattr(rendering_service, "NodePath", FakeNodePath)
+    monkeypatch.setattr(rendering_service, "VirtualHand", FakeVirtualHand)
+    monkeypatch.setattr(rendering_service, "AutoScalingManager", FakeAutoScalingManager)
+    monkeypatch.setattr(rendering_service, "DataPanelManager", FakeDataPanel)
+    monkeypatch.setattr(rendering_service, "CameraPreviewManager", FakeCameraPreview)
+
+    service = RenderingServiceImpl(
+        window_adapter_factory=FakeOverlayWindowAdapter,
+        debug_stats_enabled=False,
+    )
+
+    service.start()
+
+    assert service.health()["lifecycle_state"] == LIFECYCLE_RUNNING
+    assert created_components == [("camera_preview", 12)]
     assert service.health()["errors"] == []
     assert service._last_command_ts is None
     assert service._executed_command_ids == set()
@@ -763,6 +822,16 @@ def test_rendering_health_exposes_structured_metrics() -> None:
     assert stats["duplicate_commands"] == 1
     assert stats["stale_commands"] == 1
     assert stats["rejected_commands"] == 1
+
+
+def test_rendering_heartbeat_logging_is_debug_only(caplog) -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+
+    with caplog.at_level(logging.INFO, logger="rendering_service"):
+        service.push(make_command(command_id="heartbeat-info-1", frame_id=1, command_type="heartbeat"))
+
+    assert "Received heartbeat command, module state" not in caplog.text
 
 
 def test_rendering_records_structured_errors_for_recoverable_command_format_issues() -> None:
@@ -1029,6 +1098,73 @@ def test_rendering_updates_virtual_hand_from_scene_command() -> None:
 
     assert service._virtual_hand.last_points is not None
     assert service.health()["stats"]["hand_pose_updates"] == 1
+
+
+def test_rendering_routes_hand_pose_to_both_virtual_hands() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    service._virtual_hands = {
+        "hand-1": FakeVirtualHand(),
+        "hand-2": FakeVirtualHand(),
+    }
+
+    base_payload = {
+        "coordinate_space": "world_norm",
+        "visible": True,
+        "points": {
+            "wrist": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "thumb_tip": {"x": 0.1, "y": 0.0, "z": 0.0},
+            "index_tip": {"x": -0.1, "y": 0.0, "z": 0.0},
+            "anchor": {"x": 0.0, "y": 0.05, "z": 0.0},
+        },
+    }
+
+    service.push(
+        make_command(
+            command_id="hand-1",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_hand_pose",
+            object_id="hand-1",
+            payload=base_payload,
+        )
+    )
+    service.push(
+        make_command(
+            command_id="hand-2",
+            frame_id=2,
+            timestamp_ms=120,
+            command_type="set_hand_pose",
+            object_id="hand-2",
+            payload=base_payload,
+        )
+    )
+
+    assert service._virtual_hands["hand-1"].last_points is not None
+    assert service._virtual_hands["hand-2"].last_points is not None
+
+
+def test_rendering_tracks_dual_scale_status_from_pose_payload() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    service._object_cache["primary_cube"] = FakeObjectNode()
+
+    service.push(
+        make_command(
+            command_id="pose-scale-debug",
+            frame_id=1,
+            timestamp_ms=100,
+            command_type="set_object_pose",
+            payload={
+                "coordinate_space": "world_norm",
+                "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "debug": {"dual_scale": {"active": True, "ratio": 1.42, "distance_xy": 0.12}},
+            },
+        )
+    )
+
+    assert service._dual_scale_active is True
+    assert service._dual_scale_ratio == pytest.approx(1.42)
 
 
 def test_rendering_reset_restores_cached_scene_pose() -> None:

@@ -7,20 +7,27 @@ import numpy as np
 import src.gesture.service as gesture_service
 from src.gesture.runtime import RawHandObservation
 from src.gesture.service import GestureServiceImpl
+from src.gesture.constants import ROT_SLOT_COUNT
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
 from src.contracts import Vec3
 
 
-def make_observation(*, wrist_x: float = 0.0, pinch_gap: float = 0.05) -> RawHandObservation:
+def make_observation(
+    *,
+    wrist_x: float = 0.0,
+    pinch_gap: float = 0.05,
+    confidence: float = 0.92,
+    handedness: str = "Right",
+) -> RawHandObservation:
     return RawHandObservation(
         index_tip=Vec3(wrist_x + pinch_gap, 0.1, 0.0),
         thumb_tip=Vec3(wrist_x, 0.1, 0.0),
         wrist=Vec3(wrist_x, 0.0, 0.0),
-        confidence=0.92,
+        confidence=confidence,
         raw_pinch_distance=pinch_gap,
         hand_scale=0.30,
         landmarks=[Vec3(0.5, 0.5, 0.0) for _ in range(21)],
-        handedness="Right",
+        handedness=handedness,
     )
 
 
@@ -53,12 +60,65 @@ class FakeDetector:
         self.closed = True
 
 
+class FakeDualHandDetector:
+    def __init__(self, **_: object) -> None:
+        self.closed = False
+
+    def detect_multi(self, frame, *, timestamp_ms: int):
+        assert frame is not None
+        assert timestamp_ms > 0
+        return [
+            make_observation(wrist_x=0.0),
+            make_observation(wrist_x=0.4),
+        ]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeTwoFrameCapture:
+    def __init__(self, **_: object) -> None:
+        self.frames = [
+            np.zeros((8, 8, 3), dtype=np.uint8),
+            np.zeros((8, 8, 3), dtype=np.uint8),
+        ]
+        self.closed = False
+
+    def read(self):
+        if not self.frames:
+            return None
+        return self.frames.pop(0)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakePrimaryDisappearsDetector:
+    def __init__(self, **_: object) -> None:
+        self.calls = 0
+        self.closed = False
+
+    def detect_multi(self, frame, *, timestamp_ms: int):
+        assert frame is not None
+        assert timestamp_ms > 0
+        self.calls += 1
+        if self.calls == 1:
+            return [
+                make_observation(wrist_x=0.45, handedness="Right", confidence=0.95),
+                make_observation(wrist_x=-0.45, handedness="Left", confidence=0.90),
+            ]
+        return [make_observation(wrist_x=-0.42, handedness="Left", confidence=0.91)]
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class FakePreview:
     def __init__(self) -> None:
         self.calls = 0
         self.is_open = True
 
-    def render(self, frame, *, observation, packet) -> None:
+    def render(self, frame, *, observation, packet, secondary_observation=None) -> None:
         assert frame is not None
         assert packet.frame_id > 0
         self.calls += 1
@@ -191,3 +251,66 @@ def test_gesture_service_passes_flip_camera_setting_to_capture() -> None:
     service.start()
 
     assert captured_kwargs["flip_horizontal"] is False
+
+
+def test_gesture_service_emits_both_hands_in_debug_payload() -> None:
+    service = GestureServiceImpl(
+        capture_factory=FakeCapture,
+        detector_factory=FakeDualHandDetector,
+        clock=iter([7.0]).__next__,
+    )
+
+    service.start()
+    packet = service.poll()
+
+    assert packet is not None
+    assert packet.debug is not None
+    assert packet.debug["dual_hand"]["active_hand_count"] == 2
+    assert packet.debug["primary_hand"] is not None
+    assert packet.debug["secondary_hand"] is not None
+    assert isinstance(packet.debug["dual_hand"]["pinch_distance_xy"], float)
+    assert packet.debug["dual_hand"]["both_pinched"] is False
+    assert packet.debug["dual_hand"]["scale_ratio"] == 1.0
+
+
+def test_gesture_service_keeps_secondary_slot_when_primary_disappears() -> None:
+    service = GestureServiceImpl(
+        capture_factory=FakeTwoFrameCapture,
+        detector_factory=FakePrimaryDisappearsDetector,
+        clock=iter([7.5, 7.6]).__next__,
+    )
+
+    service.start()
+
+    first_packet = service.poll()
+    second_packet = service.poll()
+
+    assert first_packet is not None
+    assert second_packet is not None
+    assert second_packet.debug is not None
+    assert second_packet.debug["secondary_hand"] is not None
+    assert second_packet.debug["secondary_hand"]["tracking_state"] == "tracked"
+    assert second_packet.debug["secondary_hand"]["handedness"] == "left"
+    assert second_packet.debug["secondary_hand"]["wrist"]["x"] < 0.0
+    assert second_packet.wrist.x > 0.0
+
+
+def test_gesture_service_skips_debug_payload_when_disabled() -> None:
+    service = GestureServiceImpl(
+        emit_debug_payload=False,
+        capture_factory=FakeCapture,
+        detector_factory=FakeDetector,
+        clock=iter([8.0]).__next__,
+    )
+
+    service.start()
+    packet = service.poll()
+
+    assert packet is not None
+    assert packet.debug is None
+    assert isinstance(packet.rotation, dict)
+    assert service.health()["stats"]["emit_debug_payload"] is False
+
+
+def test_rotation_slot_count_is_24() -> None:
+    assert ROT_SLOT_COUNT == 24

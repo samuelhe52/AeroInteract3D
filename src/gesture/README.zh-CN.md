@@ -23,6 +23,10 @@ Gesture 模块不得在本地重复定义 `GesturePacket` 数据类。
 - `src/gesture/debug/live_preview.py`：实时预览配置入口
 - `src/gesture/debug/live_preview_runtime.py`：预览窗口、叠加层与实际 FPS 显示
 
+## 设计提案
+
+- [GesturePacket 双手化重构提案](DUAL_HAND_GESTURE_PACKET_REFACTOR.zh-CN.md)：说明当前单手 `GesturePacket` 如何演进为双手帧容器，以及契约升级与迁移影响面。
+
 ## 功能要求
 
 - MVP 必须支持单手跟踪。

@@ -105,6 +105,8 @@ def validate_gesture_packet(
     ):
         errors.extend(validate_vec3(name, vec))
 
+    errors.extend(validate_dual_hand_debug(packet.debug))
+
     return errors
 
 
@@ -228,6 +230,36 @@ def validate_vec3(name: str, value: Vec3) -> list[dict[str, Any]]:
                     recoverable=True,
                     hint="Emit floating-point vector components.",
                     details={"value": component},
+                )
+            )
+    return errors
+
+
+def validate_dual_hand_debug(debug_payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(debug_payload, dict):
+        return []
+
+    dual_hand = debug_payload.get("dual_hand")
+    if dual_hand is not None and not isinstance(dual_hand, dict):
+        return [
+            error_entry(
+                "gesture.debug.dual_hand.invalid",
+                "debug.dual_hand must be a dictionary when present",
+                recoverable=True,
+                hint="Emit dual-hand debug payload as an object with primary_hand and secondary_hand.",
+            )
+        ]
+
+    errors: list[dict[str, Any]] = []
+    for field_name in ("primary_hand", "secondary_hand"):
+        payload = debug_payload.get(field_name)
+        if payload is not None and not isinstance(payload, dict):
+            errors.append(
+                error_entry(
+                    f"gesture.debug.{field_name}.invalid",
+                    f"debug.{field_name} must be a dictionary or null",
+                    recoverable=True,
+                    hint="Emit hand payload as a compact dictionary for compatibility.",
                 )
             )
     return errors

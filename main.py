@@ -2,22 +2,22 @@ from __future__ import annotations
 
 import argparse
 import logging
+from pathlib import Path
 import signal
 import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import yaml
 
-from src.gesture.constants import (
+from src.constants import (
     DEFAULT_CAMERA_INDEX,
     DEFAULT_FRAME_HEIGHT,
     DEFAULT_FRAME_WIDTH,
     DEFAULT_TARGET_FPS,
-    GESTURE_MOTION_PRESET,
 )
 from src.bridge.service import BridgeServiceImpl
+from src.gesture.constants import GESTURE_MOTION_PRESET
 from src.gesture.service import GestureServiceImpl
 from src.ports import BridgeService, DebugFrameSource, GestureInputPort, RenderOutputPort
 from src.rendering.service import RenderingServiceImpl
@@ -237,9 +237,13 @@ class App:
 
                 if self.debug_frame_source is not None:
                     camera_frame, observation = self.debug_frame_source.get_camera_data()
-                    if camera_frame is not None:
-                        self.render_output.update_camera_frame(camera_frame, observation, packet)
-                
+                elif hasattr(self.gesture_input, "get_camera_data"):
+                    camera_frame, observation = self.gesture_input.get_camera_data()
+                else:
+                    camera_frame, observation = None, None
+                if camera_frame is not None:
+                    self.render_output.update_camera_frame(camera_frame, observation, packet)
+
                 commands = self.bridge.process(packet)
                 for command in commands:
                     self.render_output.push(command)
@@ -347,7 +351,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         debug_stats=defaults["debug_stats"],
         aggressive_release_guard=defaults["aggressive_release_guard"],
     )
-    return parser.parse_args(argv)
+    parsed = parser.parse_args(argv)
+    parsed.virtual_hand = defaults.get("virtual_hand")
+    return parsed
 
 
 def setup_logging(level: str) -> None:
@@ -359,14 +365,6 @@ def setup_logging(level: str) -> None:
 
 
 def build_config(args: argparse.Namespace) -> AppConfig:
-    # Get virtual hand config from defaults
-    import sys
-    from pathlib import Path
-    
-    # Load run config to get virtual_hand settings
-    defaults, _ = _resolve_run_defaults(sys.argv[1:])
-    virtual_hand_config = defaults.get("virtual_hand", {})
-    
     return AppConfig(
         log_level=args.log_level.upper(),
         camera_index=args.camera_index,
@@ -379,7 +377,7 @@ def build_config(args: argparse.Namespace) -> AppConfig:
         bridge_rotation_sensitivity=args.bridge_rotation_sensitivity,
         motion_preset=args.motion_preset,
         aggressive_release_guard=args.aggressive_release_guard,
-        virtual_hand=virtual_hand_config,
+        virtual_hand=getattr(args, "virtual_hand", None),
     )
 
 
@@ -393,6 +391,7 @@ def build_app(config: AppConfig) -> App:
         preview_enabled=False,
         motion_preset=config.motion_preset,
         aggressive_release_guard=config.aggressive_release_guard,
+        emit_debug_payload=True,
     )
     bridge = BridgeServiceImpl(
         input_mirrored=config.flip_camera,
