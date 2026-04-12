@@ -14,6 +14,7 @@ wheels/
 # 渲染模块的主目录
 src/rendering/main/
 src/rendering/UI_MODULE_DESIGN_v1.md
+src/rendering/MODEL_IMPORT_SCHEME.md
 
 # 虚拟环境
 .venv/

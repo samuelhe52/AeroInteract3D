@@ -6,6 +6,11 @@ Rendering stack is fixed for current milestones: **Python + Panda3D**.
 
 Contract behavior remains fixed regardless of implementation details.
 
+## Related Docs
+
+- Custom model import guide: [MODEL_IMPORT.md](MODEL_IMPORT.md)
+- Custom model import guide (Chinese): [MODEL_IMPORT.zh-CN.md](MODEL_IMPORT.zh-CN.md)
+
 ## Technical Baseline (Python + Panda3D)
 
 - MUST implement renderer logic in Python.

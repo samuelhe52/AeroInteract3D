@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import sys
 
@@ -1053,6 +1054,72 @@ def test_auto_scanned_custom_models_preserve_authored_materials(tmp_path) -> Non
     assert factory.uses_builtin_materials("teapot") is False
 
 
+def test_auto_scanned_custom_model_sidecar_applies_template_fields(tmp_path) -> None:
+    custom_model = tmp_path / "teapot.egg"
+    custom_model.write_text("placeholder", encoding="utf-8")
+    sidecar = tmp_path / "teapot.model.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "display_name": "Tea Pot",
+                "default_scale": [2.0, 3.0, 4.0],
+                "center_offset": [0.1, 0.2, -0.3],
+                "two_sided": True,
+                "use_builtin_materials": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    factory = rendering_service.ModelResourceFactory(loader=FakeLoader(), auto_scan_dir=str(tmp_path))
+
+    template = factory._template_registry["teapot"]
+    assert template.display_name == "Tea Pot"
+    assert template.default_scale == pytest.approx((2.0, 3.0, 4.0))
+    assert template.center_offset == pytest.approx((0.1, 0.2, -0.3))
+    assert template.two_sided is True
+    assert template.use_builtin_materials is True
+
+    loaded_model = factory._load_model_template("teapot")
+    assert loaded_model.pos == pytest.approx((0.1, 0.2, -0.3))
+    assert loaded_model.two_sided is True
+
+
+def test_auto_scanned_custom_models_skip_duplicate_shape_ids(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    (tmp_path / "teapot.egg").write_text("placeholder", encoding="utf-8")
+    (tmp_path / "teapot.glb").write_text("placeholder", encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        factory = rendering_service.ModelResourceFactory(loader=None, auto_scan_dir=str(tmp_path))
+
+    assert "teapot" not in factory._template_registry
+    assert any("shape_id conflict" in message for message in caplog.messages)
+
+
+def test_auto_scanned_custom_models_skip_reserved_builtin_names(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    (tmp_path / "cube.egg").write_text("placeholder", encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        factory = rendering_service.ModelResourceFactory(loader=None, auto_scan_dir=str(tmp_path))
+
+    template = factory._template_registry["cube"]
+    assert template.model_path == "models/box"
+    assert template.use_builtin_materials is True
+    assert any("reserved or existing template" in message for message in caplog.messages)
+
+
+def test_invalid_model_sidecar_does_not_block_registration(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    (tmp_path / "pyramid.egg").write_text("placeholder", encoding="utf-8")
+    (tmp_path / "pyramid.model.json").write_text("{invalid json", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        factory = rendering_service.ModelResourceFactory(loader=None, auto_scan_dir=str(tmp_path))
+
+    assert "pyramid" in factory._template_registry
+    assert factory.uses_builtin_materials("pyramid") is False
+    assert any("Failed to parse model sidecar" in message for message in caplog.messages)
+
+
 def test_model_factory_applies_scene_scale_to_object_root() -> None:
     factory = rendering_service.ModelResourceFactory(loader=FakeLoader())
     parent = FakeNodePath("scene_root")
@@ -1068,6 +1135,28 @@ def test_model_factory_applies_scene_scale_to_object_root() -> None:
 
     assert object_np.scale == pytest.approx((0.22, 0.22, 0.22))
     assert object_np.children[0].scale is None
+
+
+def test_model_factory_applies_template_default_scale_to_object_root(tmp_path) -> None:
+    (tmp_path / "teapot.egg").write_text("placeholder", encoding="utf-8")
+    (tmp_path / "teapot.model.json").write_text(
+        json.dumps({"default_scale": [2.0, 3.0, 4.0]}),
+        encoding="utf-8",
+    )
+
+    factory = rendering_service.ModelResourceFactory(loader=FakeLoader(), auto_scan_dir=str(tmp_path))
+    parent = FakeNodePath("scene_root")
+
+    object_np = factory.create_instance(
+        shape_id="teapot",
+        parent=parent,
+        object_id="custom_teapot",
+        scale=(0.1, 0.2, 0.3),
+        color=(1.0, 1.0, 1.0, 1.0),
+        interactable=True,
+    )
+
+    assert object_np.scale == pytest.approx((0.2, 0.6, 1.2))
 
 
 def test_rendering_uses_color_scale_for_custom_model_states() -> None:

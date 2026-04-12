@@ -6,6 +6,11 @@
 
 无论具体实现细节如何，契约行为必须固定。
 
+## 相关文档
+
+- 自定义模型导入说明（英文）：[MODEL_IMPORT.md](MODEL_IMPORT.md)
+- 自定义模型导入说明（中文）：[MODEL_IMPORT.zh-CN.md](MODEL_IMPORT.zh-CN.md)
+
 ## 技术基线（Python + Panda3D）
 
 - 必须使用 Python 实现渲染逻辑。
