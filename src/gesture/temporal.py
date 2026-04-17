@@ -39,11 +39,10 @@ from src.gesture.constants import (
     ROT_EQ_GAIN_X,
     ROT_EQ_GAIN_Y,
     ROT_EQ_GAIN_Z,
-    ROT_EQ_STEP_THRESHOLD_X,
-    ROT_EQ_STEP_THRESHOLD_Y,
-    ROT_EQ_STEP_THRESHOLD_Z,
+    ROT_CONTINUOUS_DELTA_ALPHA,
     ROT_DELTA_CLAMP_DEG,
     ROT_DELTA_NOISE_DEG,
+    ROT_DOMINANT_AXIS_RATIO,
     ROT_GATE_FRAMES,
     ROT_GATE_RELEASE_FRAMES,
     ROT_HAND_GRAB_TIP_SPREAD_MAX,
@@ -52,10 +51,10 @@ from src.gesture.constants import (
     ROT_MODE_TOGGLE_COOLDOWN_MS,
     ROT_MODE_TIMEOUT_FRAMES,
     ROT_OPPOSITE_JITTER_SUPPRESS_DEG,
+    ROT_SECONDARY_AXIS_ATTENUATION,
     ROT_SLOT_COUNT,
     ROT_SLOT_STEP_DEG,
-    ROT_STEP_ACCUM_MIN_DEG,
-    ROT_STACK_CLEAR_IDLE_FRAMES,
+    ROT_HAND_GRAB_TIP_WRIST_MAX,
     ROT_TREND_MIN_DEG,
     RELEASE_CONFIRM_FRAMES,
     RELEASE_THRESHOLD,
@@ -139,6 +138,12 @@ class TemporalReducer:
     _rotation_last_midpoint: Vec3 | None = field(init=False, default=None)
     _rotation_source: str = field(init=False, default="none")
     _rotation_gate_count: int = field(init=False, default=0)
+    _rotation_angle_x_deg: float = field(init=False, default=0.0)
+    _rotation_angle_y_deg: float = field(init=False, default=0.0)
+    _rotation_angle_z_deg: float = field(init=False, default=0.0)
+    _rotation_smoothed_delta_x_deg: float = field(init=False, default=0.0)
+    _rotation_smoothed_delta_y_deg: float = field(init=False, default=0.0)
+    _rotation_smoothed_delta_z_deg: float = field(init=False, default=0.0)
     _rotation_last_delta_x_deg: float = field(init=False, default=0.0)
     _rotation_last_delta_y_deg: float = field(init=False, default=0.0)
     _rotation_last_delta_z_deg: float = field(init=False, default=0.0)
@@ -185,6 +190,12 @@ class TemporalReducer:
         self._rotation_last_midpoint = None
         self._rotation_source = "none"
         self._rotation_gate_count = 0
+        self._rotation_angle_x_deg = 0.0
+        self._rotation_angle_y_deg = 0.0
+        self._rotation_angle_z_deg = 0.0
+        self._rotation_smoothed_delta_x_deg = 0.0
+        self._rotation_smoothed_delta_y_deg = 0.0
+        self._rotation_smoothed_delta_z_deg = 0.0
         self._rotation_last_delta_x_deg = 0.0
         self._rotation_last_delta_y_deg = 0.0
         self._rotation_last_delta_z_deg = 0.0
@@ -815,13 +826,15 @@ class TemporalReducer:
             self._rotation_source = "none"
             self._rotation_gate_count = 0
             self._rotation_rotating_smoothed = False
+            self._rotation_smoothed_delta_x_deg = 0.0
+            self._rotation_smoothed_delta_y_deg = 0.0
+            self._rotation_smoothed_delta_z_deg = 0.0
             self._rotation_last_delta_x_deg = 0.0
             self._rotation_last_delta_y_deg = 0.0
             self._rotation_last_delta_z_deg = 0.0
             self._rotation_step_buffer_x_deg = 0.0
             self._rotation_step_buffer_y_deg = 0.0
             self._rotation_step_buffer_z_deg = 0.0
-            self._rotation_stack_idle_frames = 0
             return self._rotation_debug_payload(
                 enabled=False,
                 rotating=False,
@@ -876,30 +889,32 @@ class TemporalReducer:
 
         has_delta = self._rotation_last_midpoint is not None
         if has_delta:
-            self._accumulate_axis_stack(delta_x_deg, axis="x")
-            self._accumulate_axis_stack(delta_y_deg, axis="y")
-            self._accumulate_axis_stack(delta_z_deg, axis="z")
+            delta_x_deg, delta_y_deg, delta_z_deg = self._stabilize_rotation_deltas(
+                delta_x_deg,
+                delta_y_deg,
+                delta_z_deg,
+            )
+            applied_x_deg = self._smooth_rotation_delta(delta_x_deg, axis="x")
+            applied_y_deg = self._smooth_rotation_delta(delta_y_deg, axis="y")
+            applied_z_deg = self._smooth_rotation_delta(delta_z_deg, axis="z")
 
-            if rotating:
-                self._emit_axis_slot_if_needed(axis="x", threshold=ROT_EQ_STEP_THRESHOLD_X)
-                self._emit_axis_slot_if_needed(axis="y", threshold=ROT_EQ_STEP_THRESHOLD_Y)
-                self._emit_axis_slot_if_needed(axis="z", threshold=ROT_EQ_STEP_THRESHOLD_Z)
-            elif self._rotation_stack_idle_frames >= ROT_STACK_CLEAR_IDLE_FRAMES:
-                self._rotation_step_buffer_x_deg = 0.0
-                self._rotation_step_buffer_y_deg = 0.0
-                self._rotation_step_buffer_z_deg = 0.0
-                self._rotation_stack_idle_frames = 0
+            self._rotation_angle_x_deg += applied_x_deg
+            self._rotation_angle_y_deg += applied_y_deg
+            self._rotation_angle_z_deg += applied_z_deg
+            self._rotation_step_buffer_x_deg = applied_x_deg
+            self._rotation_step_buffer_y_deg = applied_y_deg
+            self._rotation_step_buffer_z_deg = applied_z_deg
 
             self._rotation_last_delta_x_deg = delta_x_deg if abs(delta_x_deg) > 0.0 else (self._rotation_last_delta_x_deg * 0.65)
             self._rotation_last_delta_y_deg = delta_y_deg if abs(delta_y_deg) > 0.0 else (self._rotation_last_delta_y_deg * 0.65)
             self._rotation_last_delta_z_deg = delta_z_deg if abs(delta_z_deg) > 0.0 else (self._rotation_last_delta_z_deg * 0.65)
         else:
-            self._rotation_stack_idle_frames += 1
-            if (not rotating) and self._rotation_stack_idle_frames >= ROT_STACK_CLEAR_IDLE_FRAMES:
-                self._rotation_step_buffer_x_deg = 0.0
-                self._rotation_step_buffer_y_deg = 0.0
-                self._rotation_step_buffer_z_deg = 0.0
-                self._rotation_stack_idle_frames = 0
+            self._rotation_smoothed_delta_x_deg = 0.0
+            self._rotation_smoothed_delta_y_deg = 0.0
+            self._rotation_smoothed_delta_z_deg = 0.0
+            self._rotation_step_buffer_x_deg = 0.0
+            self._rotation_step_buffer_y_deg = 0.0
+            self._rotation_step_buffer_z_deg = 0.0
 
         self._rotation_last_midpoint = pinch_mid
         self._rotation_source = "equivalent_xyz"
@@ -980,8 +995,8 @@ class TemporalReducer:
         self._rotation_last_tip_max_dist = max_dist
         self._rotation_last_fist_curl = 0.0
 
-        # Simplified grab detector: strictly based on tip spread as requested.
-        return spread <= ROT_HAND_GRAB_TIP_SPREAD_MAX
+        # Allow compact curled fists even when horizontal fingertip spread is a bit wide.
+        return spread <= ROT_HAND_GRAB_TIP_SPREAD_MAX or max_dist <= ROT_HAND_GRAB_TIP_WRIST_MAX
 
     def _is_hand_open(self, *, landmarks: list[Vec3], wrist: Vec3) -> bool:
         tip_indices = (4, 8, 12, 16, 20)
@@ -996,8 +1011,8 @@ class TemporalReducer:
         self._rotation_last_tip_min_dist = min_dist
         self._rotation_last_tip_max_dist = max_dist
 
-        # Spread-only release detector. Keep it exclusive from grab.
-        return spread > ROT_HAND_GRAB_TIP_SPREAD_MAX
+        # Keep release exclusive from the compact-fist grab detector.
+        return spread > ROT_HAND_GRAB_TIP_SPREAD_MAX and max_dist > ROT_HAND_GRAB_TIP_WRIST_MAX
 
     def _tip_wrist_dist_range(
         self,
@@ -1040,49 +1055,59 @@ class TemporalReducer:
             return 0.0
         return delta_deg
 
-    def _accumulate_axis_stack(self, delta_deg: float, *, axis: str) -> None:
-        if abs(delta_deg) < ROT_STEP_ACCUM_MIN_DEG:
-            self._rotation_stack_idle_frames += 1
-            return
+    def _stabilize_rotation_deltas(
+        self,
+        delta_x_deg: float,
+        delta_y_deg: float,
+        delta_z_deg: float,
+    ) -> tuple[float, float, float]:
+        deltas = [delta_x_deg, delta_y_deg, delta_z_deg]
+        magnitudes = [abs(value) for value in deltas]
+        dominant_magnitude = max(magnitudes)
+        if dominant_magnitude < ROT_EQ_ACTIVE_MIN_DEG:
+            return delta_x_deg, delta_y_deg, delta_z_deg
 
-        self._rotation_stack_idle_frames = 0
-        if axis == "x":
-            if self._rotation_step_buffer_x_deg * delta_deg < 0.0:
-                self._rotation_step_buffer_x_deg = 0.0
-            self._rotation_step_buffer_x_deg += delta_deg
-            return
-        if axis == "y":
-            if self._rotation_step_buffer_y_deg * delta_deg < 0.0:
-                self._rotation_step_buffer_y_deg = 0.0
-            self._rotation_step_buffer_y_deg += delta_deg
-            return
-        if self._rotation_step_buffer_z_deg * delta_deg < 0.0:
-            self._rotation_step_buffer_z_deg = 0.0
-        self._rotation_step_buffer_z_deg += delta_deg
+        dominant_index = magnitudes.index(dominant_magnitude)
+        secondary_magnitude = max(magnitudes[idx] for idx in range(3) if idx != dominant_index)
+        if secondary_magnitude > 0.0 and dominant_magnitude < (secondary_magnitude * ROT_DOMINANT_AXIS_RATIO):
+            return delta_x_deg, delta_y_deg, delta_z_deg
 
-    def _emit_axis_slot_if_needed(self, *, axis: str, threshold: float) -> None:
+        for idx in range(3):
+            if idx != dominant_index:
+                deltas[idx] *= ROT_SECONDARY_AXIS_ATTENUATION
+        return deltas[0], deltas[1], deltas[2]
+
+    def _smooth_rotation_delta(self, delta_deg: float, *, axis: str) -> float:
+        if abs(delta_deg) <= ROT_DELTA_NOISE_DEG:
+            if axis == "x":
+                self._rotation_smoothed_delta_x_deg = 0.0
+            elif axis == "y":
+                self._rotation_smoothed_delta_y_deg = 0.0
+            else:
+                self._rotation_smoothed_delta_z_deg = 0.0
+            return 0.0
+
+        previous = 0.0
         if axis == "x":
-            if self._rotation_step_buffer_x_deg >= threshold:
-                self._rotation_slot_x = (self._rotation_slot_x + 1) % ROT_SLOT_COUNT
-                self._rotation_step_buffer_x_deg = 0.0
-            elif self._rotation_step_buffer_x_deg <= -threshold:
-                self._rotation_slot_x = (self._rotation_slot_x - 1) % ROT_SLOT_COUNT
-                self._rotation_step_buffer_x_deg = 0.0
-            return
-        if axis == "y":
-            if self._rotation_step_buffer_y_deg >= threshold:
-                self._rotation_slot_y = (self._rotation_slot_y + 1) % ROT_SLOT_COUNT
-                self._rotation_step_buffer_y_deg = 0.0
-            elif self._rotation_step_buffer_y_deg <= -threshold:
-                self._rotation_slot_y = (self._rotation_slot_y - 1) % ROT_SLOT_COUNT
-                self._rotation_step_buffer_y_deg = 0.0
-            return
-        if self._rotation_step_buffer_z_deg >= threshold:
-            self._rotation_slot_z = (self._rotation_slot_z + 1) % ROT_SLOT_COUNT
-            self._rotation_step_buffer_z_deg = 0.0
-        elif self._rotation_step_buffer_z_deg <= -threshold:
-            self._rotation_slot_z = (self._rotation_slot_z - 1) % ROT_SLOT_COUNT
-            self._rotation_step_buffer_z_deg = 0.0
+            previous = self._rotation_smoothed_delta_x_deg
+        elif axis == "y":
+            previous = self._rotation_smoothed_delta_y_deg
+        else:
+            previous = self._rotation_smoothed_delta_z_deg
+
+        smoothed = self._lerp(previous, delta_deg, ROT_CONTINUOUS_DELTA_ALPHA)
+        if axis == "x":
+            self._rotation_smoothed_delta_x_deg = smoothed
+        elif axis == "y":
+            self._rotation_smoothed_delta_y_deg = smoothed
+        else:
+            self._rotation_smoothed_delta_z_deg = smoothed
+        return smoothed
+
+    @staticmethod
+    def _rotation_slot_from_degrees(degrees: float) -> int:
+        normalized = degrees % 360.0
+        return int(normalized / ROT_SLOT_STEP_DEG) % ROT_SLOT_COUNT
 
     def _rotation_debug_payload(
         self,
@@ -1090,9 +1115,12 @@ class TemporalReducer:
         enabled: bool,
         rotating: bool,
     ) -> dict[str, Any]:
-        deg_x = self._rotation_slot_x * ROT_SLOT_STEP_DEG
-        deg_y = self._rotation_slot_y * ROT_SLOT_STEP_DEG
-        deg_z = self._rotation_slot_z * ROT_SLOT_STEP_DEG
+        deg_x = self._rotation_angle_x_deg
+        deg_y = self._rotation_angle_y_deg
+        deg_z = self._rotation_angle_z_deg
+        self._rotation_slot_x = self._rotation_slot_from_degrees(deg_x)
+        self._rotation_slot_y = self._rotation_slot_from_degrees(deg_y)
+        self._rotation_slot_z = self._rotation_slot_from_degrees(deg_z)
         return {
             "enabled": enabled,
             "rotating": rotating,

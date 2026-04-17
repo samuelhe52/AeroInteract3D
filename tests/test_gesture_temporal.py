@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.gesture.constants import ROT_SLOT_COUNT, TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
+from src.gesture.constants import ROT_SLOT_COUNT, ROT_SLOT_STEP_DEG, TEMPORAL_TRACKING_TEMPORARY_LOSS_FRAMES
 from src.contracts import Vec3
 from src.gesture.runtime import RawHandObservation, normalized_pinch_distance
 from src.gesture.temporal import MOTION_PRESET_TUNINGS, TemporalReducer, temporal_tuning_for_motion_preset
@@ -59,6 +59,15 @@ def make_eq_rotation_observation(
         landmarks=make_hand_landmarks(wrist=wrist, pose=hand_pose),
         handedness="Right",
     )
+
+
+def make_curled_grab_landmarks(*, wrist: Vec3) -> list[Vec3]:
+    points = [Vec3(wrist.x, wrist.y, wrist.z) for _ in range(21)]
+    tip_indices = [4, 8, 12, 16, 20]
+    offsets = [-0.05, -0.025, 0.0, 0.025, 0.05]
+    for offset, tip_idx in zip(offsets, tip_indices):
+        points[tip_idx] = Vec3(wrist.x + offset, wrist.y + 0.045, wrist.z)
+    return points
 
 
 def activate_rotation_mode(reducer: TemporalReducer, *, start_frame_id: int = 1) -> int:
@@ -207,12 +216,13 @@ def test_temporal_motion_preset_affects_responsiveness() -> None:
     assert low_packet.wrist.x > high_packet.wrist.x
 
 
-def test_equivalent_rotation_x_axis_updates_slot_x() -> None:
+def test_equivalent_rotation_x_axis_updates_continuously() -> None:
     reducer = TemporalReducer()
     frame_id = activate_rotation_mode(reducer, start_frame_id=1)
 
-    first = None
     mid_x = 0.0
+    previous_deg_x = None
+    step_deltas: list[float] = []
     for step in range(1, 28):
         mid_x += 0.008
         packet = reducer.reduce(
@@ -220,11 +230,14 @@ def test_equivalent_rotation_x_axis_updates_slot_x() -> None:
             frame_id=frame_id + step,
             timestamp_ms=(frame_id + step) * 16,
         )
-        if first is None:
-            first = packet.debug["rotation"]["slot_x"]
+        current_deg_x = float(packet.debug["rotation"]["deg_x"])
+        if previous_deg_x is not None:
+            step_deltas.append(current_deg_x - previous_deg_x)
+        previous_deg_x = current_deg_x
 
     assert packet.debug["rotation"]["enabled"] is True
-    assert packet.debug["rotation"]["slot_x"] != first
+    assert packet.debug["rotation"]["deg_x"] > 0.0
+    assert any(0.0 < delta < ROT_SLOT_STEP_DEG for delta in step_deltas)
 
 
 def test_equivalent_rotation_y_axis_updates_slot_y() -> None:
@@ -249,6 +262,7 @@ def test_equivalent_rotation_y_axis_updates_slot_y() -> None:
         )
 
     assert packet.debug["rotation"]["slot_y"] != start_slot
+    assert packet.debug["rotation"]["deg_y"] > 0.0
 
 
 def test_equivalent_rotation_z_axis_updates_slot_z() -> None:
@@ -274,6 +288,7 @@ def test_equivalent_rotation_z_axis_updates_slot_z() -> None:
 
     assert packet.debug["rotation"]["slot_z"] != start_slot
     assert packet.debug["rotation"]["slot"] == packet.debug["rotation"]["slot_z"]
+    assert packet.debug["rotation"]["deg_z"] > 0.0
 
 
 def test_equivalent_rotation_slots_wrap_on_continuous_motion() -> None:
@@ -319,6 +334,34 @@ def test_rotation_mode_switches_with_single_grab_open_sequence() -> None:
     assert packet is not None
     assert packet.debug["rotation"]["mode_active"] is True
     assert packet.debug["rotation"]["mode_name"] == "ROTATE_ENABLED"
+
+
+def test_rotation_mode_switches_with_curled_fist_grab_sequence() -> None:
+    reducer = TemporalReducer()
+
+    frame_id = 1
+    packet = None
+    for _ in range(6):
+        observation = make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="grab")
+        observation.landmarks = make_curled_grab_landmarks(wrist=Vec3(0.0, 0.0, 0.0))
+        packet = reducer.reduce(
+            observation,
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    for _ in range(6):
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+            frame_id=frame_id,
+            timestamp_ms=frame_id * 16,
+        )
+        frame_id += 1
+
+    assert packet is not None
+    assert packet.debug["rotation"]["mode_active"] is True
+    assert packet.debug["rotation"]["grab_detected"] is False
 
 
 def test_rotation_mode_jitter_does_not_switch() -> None:
@@ -379,34 +422,46 @@ def test_rotation_mode_progress_times_out() -> None:
     assert packet.debug["rotation"]["mode_active"] is False
 
 
-def test_rotation_stack_resets_after_single_slot_jump() -> None:
+def test_rotation_updates_before_gate_fully_opens() -> None:
     reducer = TemporalReducer()
     frame_id = activate_rotation_mode(reducer, start_frame_id=1)
 
-    jump_packet = None
-    jump_slot = 0
-    mid_z = 0.10
-    for step in range(1, 40):
-        mid_z += 0.01
-        candidate = reducer.reduce(
-            make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=mid_z, hand_pose="open"),
+    start_packet = reducer.reduce(
+        make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.10, hand_pose="open"),
+        frame_id=frame_id,
+        timestamp_ms=frame_id * 16,
+    )
+    packet = reducer.reduce(
+        make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=0.106, hand_pose="open"),
+        frame_id=frame_id + 1,
+        timestamp_ms=(frame_id + 1) * 16,
+    )
+
+    assert packet.debug["rotation"]["rotating"] is False
+    assert packet.debug["rotation"]["deg_z"] > start_packet.debug["rotation"]["deg_z"]
+    assert packet.debug["rotation"]["stack_z_deg"] > 0.0
+
+
+def test_rotation_dominant_axis_suppresses_minor_cross_axis_noise() -> None:
+    reducer = TemporalReducer()
+    frame_id = activate_rotation_mode(reducer, start_frame_id=1)
+
+    mid_x = 0.0
+    mid_y = 0.20
+    packet = None
+    for step in range(1, 18):
+        mid_x += 0.012
+        mid_y += 0.0062
+        packet = reducer.reduce(
+            make_eq_rotation_observation(mid_x=mid_x, mid_y=mid_y, mid_z=0.10, hand_pose="open"),
             frame_id=frame_id + step,
             timestamp_ms=(frame_id + step) * 16,
         )
-        if candidate.debug["rotation"]["slot_z"] != 0:
-            jump_packet = candidate
-            jump_slot = candidate.debug["rotation"]["slot_z"]
-            break
 
-    assert jump_packet is not None
-    assert jump_packet.debug["rotation"]["stack_z_deg"] == 0.0
-
-    tiny_packet = reducer.reduce(
-        make_eq_rotation_observation(mid_x=0.0, mid_y=0.20, mid_z=mid_z + 0.0003, hand_pose="open"),
-        frame_id=frame_id + 60,
-        timestamp_ms=(frame_id + 60) * 16,
-    )
-    assert tiny_packet.debug["rotation"]["slot_z"] == jump_slot
+    assert packet is not None
+    assert packet.debug["rotation"]["deg_x"] > 0.0
+    assert packet.debug["rotation"]["deg_y"] > 0.0
+    assert packet.debug["rotation"]["deg_y"] < (packet.debug["rotation"]["deg_x"] * 0.35)
 
 
 def test_rotation_gate_hysteresis_keeps_state_stable_on_short_drop() -> None:

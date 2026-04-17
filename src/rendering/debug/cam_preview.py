@@ -199,6 +199,7 @@ class CameraPreviewManager:
         mode_progress = 0
         mode_target = 1
         tip_spread = 0.0
+        tip_max_dist = 0.0
         grab_detected = False
         packet = self._last_packet
         if packet is not None and isinstance(packet.debug, dict):
@@ -217,6 +218,7 @@ class CameraPreviewManager:
                 mode_progress = int(rotation.get("mode_progress", 0))
                 mode_target = int(rotation.get("mode_target", 1))
                 tip_spread = float(rotation.get("tip_spread", 0.0))
+                tip_max_dist = float(rotation.get("tip_max_dist", 0.0))
                 grab_detected = bool(rotation.get("grab_detected", False))
 
         text = f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})/{slot_count:02d}" if slot_count > 0 else f"slot xyz: ({slot_x:02d},{slot_y:02d},{slot_z:02d})"
@@ -232,7 +234,7 @@ class CameraPreviewManager:
         cv2.putText(frame, f"Y: {deg_y:6.1f} deg", (126, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (70, 230, 70), 1, cv2.LINE_AA)
         cv2.putText(frame, f"Z: {deg_z:6.1f} deg", (236, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 170, 60), 1, cv2.LINE_AA)
         cv2.putText(frame, f"grab: {'YES' if grab_detected else 'NO'}", (18, 93), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 255, 255), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"spread: {tip_spread:.3f}  (grab < 0.270)", (108, 93), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (220, 220, 120), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"spread: {tip_spread:.3f}  max: {tip_max_dist:.3f}", (108, 93), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (220, 220, 120), 1, cv2.LINE_AA)
         cv2.putText(frame, f"primary: {primary_state}", (18, 113), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (220, 220, 220), 1, cv2.LINE_AA)
         cv2.putText(frame, f"secondary: {secondary_state}", (18, 129), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (220, 220, 220), 1, cv2.LINE_AA)
         cv2.putText(
