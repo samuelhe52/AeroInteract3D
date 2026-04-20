@@ -173,22 +173,22 @@ AeroInteract3D 是一个基于单目摄像头的实时 3D 手势交互原型系�
 
 **`GesturePacket`**：描述单帧手势检测结果。
 
-| 字段 | 说明 |
-| ---- | ---- |
-| `frame_id` / `timestamp_ms` | 帧序号与时间戳 |
-| `tracking_state` | `tracked` / `temporarily_lost` / `not_detected` |
-| `pinch_state` | `open` / `pinch_candidate` / `pinched` / `release_candidate` |
-| `index_tip` / `thumb_tip` / `wrist` | 食指尖、拇指尖、腕部三维坐标 |
-| `coordinate_space` | 坐标空间标记，下游必须据此做单位转换 |
+| 字段                                | 说明                                                         |
+| ----------------------------------- | ------------------------------------------------------------ |
+| `frame_id` / `timestamp_ms`         | 帧序号与时间戳                                               |
+| `tracking_state`                    | `tracked` / `temporarily_lost` / `not_detected`              |
+| `pinch_state`                       | `open` / `pinch_candidate` / `pinched` / `release_candidate` |
+| `index_tip` / `thumb_tip` / `wrist` | 食指尖、拇指尖、腕部三维坐标                                 |
+| `coordinate_space`                  | 坐标空间标记，下游必须据此做单位转换                         |
 
 **`SceneCommand`**：描述渲染模块需要执行的场景更新命令。
 
-| 字段 | 说明 |
-| ---- | ---- |
-| `command_id` | 唯一命令标识 |
+| 字段           | 说明                                                                                                        |
+| -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `command_id`   | 唯一命令标识                                                                                                |
 | `command_type` | `init_scene` / `set_hand_pose` / `set_object_state` / `set_object_pose` / `reset_interaction` / `heartbeat` |
-| `object_id` | 命令目标对象 ID |
-| `payload` | 命令附带数据，结构随 `command_type` 不同而变化 |
+| `object_id`    | 命令目标对象 ID                                                                                             |
+| `payload`      | 命令附带数据，结构随 `command_type` 不同而变化                                                              |
 
 通过共享契约，模块之间实现了松耦合：Gesture 只需保证输出满足 `GesturePacket` 的字段要求，Bridge 只需保证输出满足 `SceneCommand` 的字段要求，渲染模块则只需根据命令类型和 payload 结构进行处理，而不需要关心上游的具体实现细节。
 
@@ -246,11 +246,11 @@ def _constrain_object_to_table(self, world_position, object_state):
 
 | 命令类型            | 用途                                                              |
 | ------------------- | ----------------------------------------------------------------- |
-| `init_scene`        | 初始化场景                                                |
-| `set_hand_pose`     | 同步虚拟手姿态                                          |
+| `init_scene`        | 初始化场景                                                        |
+| `set_hand_pose`     | 同步虚拟手姿态                                                    |
 | `set_object_state`  | 切换对象交互状态（`idle`、`pending_grab`、`grabbed`、`rotating`） |
-| `set_object_pose`   | 更新对象的位置、姿态或缩放状态                                        |
-| `reset_interaction` | 输入无效或 Gesture 模块异常情况下重置物体状态                                      |
+| `set_object_pose`   | 更新对象的位置、姿态或缩放状态                                    |
+| `reset_interaction` | 输入无效或 Gesture 模块异常情况下重置物体状态                     |
 
 Bridge 还内置了桌面场景对象管理能力，支持导入 3D 模型，可以对多对象场景进行组织和管理。Bridge 同时承担输入包过滤与异常兜底职责：对于重复包、过期帧、契约不合法数据或持续跟踪丢失情况，模块不会继续发出不安全的姿态命令，而是根据情况忽略、拒绝或下发 `reset_interaction`。
 
@@ -504,12 +504,12 @@ Rendering 模块是系统的输出端，负责把 Bridge 模块输出的 `SceneC
 
 Rendering 模块实现了一套完整的多视图 UI 系统，所有视图均基于指尖锚点进行手势驱动交互，无需键盘鼠标：
 
-| 视图 | 源文件 | 内容 |
-| ---- | ------ | ---- |
-| Home 视图 | `home_view.py` | 启动主页，含 table、setting 两个导航按钮 |
-| Table 视图 | `table_overlay_view.py` | 桌面场景叠加层，含 resume table、table options、return home 按钮及亮度/音量两个滑块 |
-| Setting 视图 | `setting_view.py` | 全局设置页，含光标缩放、光标透明度、亮度、音量四个滑块 |
-| Calibration 视图 | `calibration_view.py` | 光标标定页，支持对 cursor scale x/y 和 cursor offset x/y 四项参数的键盘精调，并实时预览标定效果 |
+| 视图             | 源文件                  | 内容                                                                                            |
+| ---------------- | ----------------------- | ----------------------------------------------------------------------------------------------- |
+| Home 视图        | `home_view.py`          | 启动主页，含 table、setting 两个导航按钮                                                        |
+| Table 视图       | `table_overlay_view.py` | 桌面场景叠加层，含 resume table、table options、return home 按钮及亮度/音量两个滑块             |
+| Setting 视图     | `setting_view.py`       | 全局设置页，含光标缩放、光标透明度、亮度、音量四个滑块                                          |
+| Calibration 视图 | `calibration_view.py`   | 光标标定页，支持对 cursor scale x/y 和 cursor offset x/y 四项参数的键盘精调，并实时预览标定效果 |
 
 其中，`table` 代表桌面的真实交互场景；所有可交互控件（按钮、滑块）均实现了三态视觉样式（idle / hover / pressed 或 idle / hover / active）提供视觉反馈。
 
@@ -517,17 +517,19 @@ Rendering 模块实现了一套完整的多视图 UI 系统，所有视图均基
 
 系统当前支持的完整手势交互功能如下：
 
-| 功能 | 触发方式 | 说明 |
-| ---- | -------- | ---- |
-| 按钮 | 双指捏合 | 指尖锚点进入按钮区域后高亮，稳定 pinch 触发按钮激活 |
-| 滑块调节 | 指尖悬停 + pinch 拖拽 | 悬停至滑块轨道后 pinch，拖拽改变参数值，释放提交 |
-| 对象悬停 | 指尖接近对象 | 进入邻域后对象进入 pending\_grab 状态，显示高亮 |
-| 对象抓取 | 悬停中 pinch | 稳定 pinch 后对象跟随两指尖中点移动 |
-| 对象平移 | 抓取中移动 | 拖拽期间对象实时跟随，并受桌面平面约束 |
-| 对象旋转 | 抓取中切换旋转模式 | 激活旋转模式后，捏合拖拽转化为对对象姿态的控制 |
-| 虚拟手显示 | 检测到手部 | 在场景中渲染虚拟手，实现视觉反馈 |
+| 功能       | 触发方式              | 说明                                                |
+| ---------- | --------------------- | --------------------------------------------------- |
+| 按钮       | 双指捏合              | 指尖锚点进入按钮区域后高亮，稳定 pinch 触发按钮激活 |
+| 滑块调节   | 指尖悬停 + pinch 拖拽 | 悬停至滑块轨道后 pinch，拖拽改变参数值，释放提交    |
+| 对象悬停   | 指尖接近对象          | 进入邻域后对象进入 pending_grab 状态，显示高亮      |
+| 对象抓取   | 悬停中 pinch          | 稳定 pinch 后对象跟随两指尖中点移动                 |
+| 对象平移   | 抓取中移动            | 拖拽期间对象实时跟随，并受桌面平面约束              |
+| 对象旋转   | 抓取中切换旋转模式    | 激活旋转模式后，捏合拖拽转化为对对象姿态的控制      |
+| 虚拟手显示 | 检测到手部            | 在场景中渲染虚拟手，实现视觉反馈                    |
 
 ### 自定义模型导入
+
+**此部分后续根据具体实现完善**
 
 渲染模块支持在运行时导入外部 3D 模型文件，作为可交互场景对象使用。用户可以将自定义模型放置于指定目录，系统会在初始化时自动发现并注册，与内置几何体一样参与场景管理和手势交互。这使得系统不局限于固定的演示场景，具备面向不同应用场景的扩展能力。
 
@@ -568,27 +570,127 @@ def run(self) -> None:
 
 # 系统展示
 
-## 建议展示流程
+## 已完成的 UI 页面
 
-"初始化 → 识别 → 悬停 → 抓取 → 移动 → 旋转 → 丢失恢复"
+本次展示中，桌面 UI 的三张截图已经整理完成并复制到 `assets/`。它们分别对应主页、设置页和光标标定页，可以直接用于报告排版。
 
-## 展示交互流程
+```{=latex}
+\begin{figure}[htbp]
+\centering
+\noindent\makebox[\textwidth][c]{%
+\begin{minipage}[t]{0.40\textwidth}
+\centering
+\includegraphics[width=\linewidth]{assets/system-ui-home.jpg}
+\par\vspace{0.35em}
+{\small \textbf{主页}}
+\par{\footnotesize table / setting 两个入口}
+\end{minipage}
+\hspace{0.05\textwidth}%
+\begin{minipage}[t]{0.40\textwidth}
+\centering
+\includegraphics[width=\linewidth]{assets/system-ui-settings.jpg}
+\par\vspace{0.35em}
+{\small \textbf{设置页}}
+\par{\footnotesize 全局参数与预览面板}
+\end{minipage}
+}
+\par\vspace{0.95em}
+\noindent\makebox[\textwidth][c]{%
+\begin{minipage}[t]{0.40\textwidth}
+\centering
+\includegraphics[width=\linewidth]{assets/system-ui-calibration.jpg}
+\par\vspace{0.35em}
+{\small \textbf{光标标定页}}
+\par{\footnotesize scale / offset 调整}
+\end{minipage}
+}
+\caption{当前可直接展示的 UI 页面}
+\label{fig:system-ui-showcase}
+\end{figure}
+```
 
-- 启动后桌面场景初始化
-- 手部进入视野后的预览与虚拟手显示
-- 指尖靠近对象触发悬停高亮
-- 稳定 pinch 后抓取对象并跟随移动
-- 进入旋转模式后对对象姿态进行调整
-- 跟踪丢失后系统自动恢复到安全状态
+## 桌面场景占位
 
-## 素材占位
+实际桌面 table 场景仍在迭代中，因此这里先按最终演示顺序预留占位。建议补拍的最小闭环是 `初始态 → 悬停高亮 → 抓取拖拽 → 旋转 → 双手缩放`，这样可以完整覆盖报告中已经实现的对象交互主链路。
 
-| 素材                   | 路径                                              |
-| ---------------------- | ------------------------------------------------- |
-| 系统主界面截图         | `report/assets/system-ui-placeholder.png`         |
-| 手势跟踪与调试面板截图 | `report/assets/debug-panel-placeholder.png`       |
-| 对象抓取过程截图       | `report/assets/grab-sequence-placeholder.png`     |
-| 对象旋转过程截图       | `report/assets/rotation-sequence-placeholder.png` |
+```{=latex}
+\begin{figure}[htbp]
+\centering
+\noindent\makebox[\textwidth][c]{%
+\begin{minipage}[t]{0.42\textwidth}
+\centering
+\fcolorbox{gray!55}{gray!10}{%
+\begin{minipage}[c][3.35cm][c]{0.98\linewidth}
+\centering
+{\large \textbf{桌面场景}}\\[0.25em]
+{\footnotesize 待补拍}
+\end{minipage}}
+\par\vspace{0.35em}
+{\small \textbf{初始态}}
+\end{minipage}
+\hspace{0.03\textwidth}%
+\begin{minipage}[t]{0.42\textwidth}
+\centering
+\fcolorbox{gray!55}{gray!10}{%
+\begin{minipage}[c][3.35cm][c]{0.98\linewidth}
+\centering
+{\large \textbf{桌面场景}}\\[0.25em]
+{\footnotesize 待补拍}
+\end{minipage}}
+\par\vspace{0.35em}
+{\small \textbf{悬停高亮}}
+\end{minipage}
+}
+
+\vspace{0.55em}
+
+\noindent\makebox[\textwidth][c]{%
+\begin{minipage}[t]{0.42\textwidth}
+\centering
+\fcolorbox{gray!55}{gray!10}{%
+\begin{minipage}[c][3.35cm][c]{0.98\linewidth}
+\centering
+{\large \textbf{桌面场景}}\\[0.25em]
+{\footnotesize 待补拍}
+\end{minipage}}
+\par\vspace{0.35em}
+{\small \textbf{抓取拖拽}}
+\end{minipage}
+\hspace{0.03\textwidth}%
+\begin{minipage}[t]{0.42\textwidth}
+\centering
+\fcolorbox{gray!55}{gray!10}{%
+\begin{minipage}[c][3.35cm][c]{0.98\linewidth}
+\centering
+{\large \textbf{桌面场景}}\\[0.25em]
+{\footnotesize 待补拍}
+\end{minipage}}
+\par\vspace{0.35em}
+{\small \textbf{旋转}}
+\end{minipage}
+}
+
+\vspace{0.55em}
+
+\noindent\makebox[\textwidth][c]{%
+\begin{minipage}[t]{0.42\textwidth}
+\centering
+\fcolorbox{gray!55}{gray!10}{%
+\begin{minipage}[c][3.35cm][c]{0.98\linewidth}
+\centering
+{\large \textbf{桌面场景}}\\[0.25em]
+{\footnotesize 待补拍}
+\end{minipage}}
+\par\vspace{0.35em}
+{\small \textbf{双手缩放}}
+\end{minipage}
+}
+\caption{桌面场景演示占位，后续按同序补拍后替换}
+\label{fig:system-scene-placeholder}
+\end{figure}
+```
+
+如果后续还想额外强调虚拟手或调试信息，可以再补一张叠加视图，但它不属于当前最小必需集。
 
 # 总结
 
@@ -648,10 +750,10 @@ AeroInteract3D/
 
 系统在以下多个平台上完成了功能验证：
 
-| 设备 | CPU | 内存 | 操作系统 |
-| ---- | --- | ---- | -------- |
-| MacBook Pro | Apple M1 Pro | 16 GB | macOS |
+| 设备           | CPU                     | 内存  | 操作系统   |
+| -------------- | ----------------------- | ----- | ---------- |
+| MacBook Pro    | Apple M1 Pro            | 16 GB | macOS      |
 | Windows 笔记本 | Intel Core Ultra 5 225H | 32 GB | Windows 11 |
-| Windows 笔记本 | Intel Core i7-14650HX | 32 GB | Windows 11 |
+| Windows 笔记本 | Intel Core i7-14650HX   | 32 GB | Windows 11 |
 
 摄像头输入均使用电脑自带摄像头，分辨率为 720p 或 1080p。软件环境：Python 3.12、MediaPipe ≥ 0.10.32、OpenCV ≥ 4.13.0、Panda3D 1.11.0-dev。
