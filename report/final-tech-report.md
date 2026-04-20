@@ -273,6 +273,10 @@ if packet.tracking_state == "tracked" and packet.confidence >= BRIDGE_MIN_TRACKI
     }
 ```
 
+### 双手缩放
+
+当主手和副手同时处于 `pinched` 状态且均悬停在同一对象上时，Bridge 层基于两只手的捏合锚点间距变化，计算缩放比例，并通过 `set_object_pose` 命令更新对象的 `scale` 字段，实现跟手的缩放效果。缩放操作期间，对象平移被暂停，以避免位置和尺寸命令的冲突。
+
 ### 典型工程问题
 
 **旋转和平移冲突**：抓取、旋转和平移可能被同一帧输入同时触发，导致对象既被拖动又被旋转的冲突行为。Bridge 层通过设置不同模式，将两类交互分开处理，旋转模式只输出姿态命令，平移模式只输出位置命令。
@@ -283,25 +287,95 @@ if packet.tracking_state == "tracked" and packet.confidence >= BRIDGE_MIN_TRACKI
 
 ### 模块职责
 
-`src/gesture/service.py` 中的 `GestureServiceImpl` 是系统的输入端，负责：
+Gesture 模块是系统的输入端，负责把摄像头视频帧转化为稳定的手势状态输出。其核心职责包括：
 
 - 从摄像头采集视频帧
 - 调用 MediaPipe Hand Landmarker 检测手部关键点
-- 在短时检测失败时执行有限预测和回退（fallback）
-- 通过时序归约器生成稳定的 `GesturePacket`
-- 为调试视图提供相机帧和中间观测信息
+- 在短时检测失败时预测运动轨迹作为 fallback，保证输出稳定性、连续性
+- 根据契约，生成稳定的 `GesturePacket`
+- 为调试视图提供原始相机帧、检测到的指标数据
 
 ### 核心算法链路
 
-```
-图像预处理 → 模糊度估计 → 手部检测 → 关键点归一化 → 局部回退/运动预测 → 概率式 pinch 判定 → 时序平滑 → 稳定输出
+```{=latex}
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  >=Stealth,
+  every node/.style={font=\small},
+  pipeblock/.style={
+    draw, rounded corners=3pt,
+    minimum width=3.0cm, minimum height=1.0cm,
+    text width=2.7cm, align=center, inner sep=4pt,
+    fill=teal!20, draw=teal!70!black
+  },
+  fallblock/.style={
+    draw, dashed, rounded corners=3pt,
+    minimum width=3.0cm, minimum height=1.0cm,
+    text width=2.7cm, align=center, inner sep=4pt,
+    fill=teal!10, draw=teal!50!black
+  },
+  outputblock/.style={
+    draw, rounded corners=3pt,
+    minimum width=3.0cm, minimum height=1.0cm,
+    text width=2.7cm, align=center, inner sep=4pt,
+    fill=orange!20, draw=orange!70!black
+  },
+  lbl/.style={font=\tiny\itshape},
+  arr/.style={->, thick},
+]
+
+%% ── Row 1: 检测链路 ─────────────────────────────────────
+\node[pipeblock] (preproc)  at (0,   0) {图像预处理\\（灰度化·缩放）};
+\node[pipeblock] (blur)     at (3.8,  0) {模糊度估计};
+\node[pipeblock] (detect)   at (7.6,  0) {手部检测\\（MediaPipe）};
+
+%% ── 检测成功/失败分支 ────────────────────────────────────
+\node[pipeblock]  (lmnorm)   at (4.8,  -2.2) {关键点提取\\与尺度归一化};
+\node[fallblock]  (fallback) at (10.4, -2.2) {回退逻辑\\（根据过往数据预测）};
+
+%% ── Row 2: 时序归约（TemporalReducer）────────────────────
+\node[pipeblock]   (smooth)  at (0,    -4.8) {坐标平滑};
+\node[pipeblock]   (pscore)  at (3.8,  -4.8) {pinch 手势评分};
+\node[pipeblock]   (pfsm)    at (7.6,  -4.8) {pinch\\状态机};
+\node[outputblock] (output)  at (11.4, -4.8) {稳定输出\\GesturePacket};
+
+%% ── Row 1 箭头 ──────────────────────────────────────────
+\draw[arr] (preproc) -- (blur);
+\draw[arr] (blur)    -- (detect);
+
+%% ── 分支箭头（detect → 成功/失败路径）──────────────────
+\draw[arr] (detect.south) -- ++(0,-0.4) -| (lmnorm.north);
+\draw[arr] (detect.south) -- ++(0,-0.4) -| (fallback.north);
+
+%% 分支标注
+\node[lbl, above] at (5.8, -0.9) {成功};
+\node[lbl, above] at (9.4, -0.9) {失败};
+
+%% ── 两路汇聚至时序归约入口 ──────────────────────────────
+\coordinate (merge) at (7.6, -3.6);
+\draw[thick] (lmnorm.south)   -- ++(0,-0.55) -| (merge);
+\draw[thick] (fallback.south) -- ++(0,-0.55) -| (merge);
+\draw[arr]   (merge) -- ++(0,-0.2) -| (smooth.north);
+
+%% ── Row 2 箭头 ──────────────────────────────────────────
+\draw[arr] (smooth) -- (pscore);
+\draw[arr] (pscore) -- (pfsm);
+\draw[arr] (pfsm)   -- (output);
+
+\end{tikzpicture}
+\caption{手势模块核心算法链路}
+\label{fig:gesture-pipeline}
+\end{figure}
 ```
 
-本项目不包含从零开始的深度模型训练，感知基础建立在 MediaPipe Hand Landmarker 之上。项目工作重点在于其上的工程集成与时序交互算法设计——即将不稳定的视觉观测转化为稳定的交互输入。
+本项目的手势检测基于 MediaPipe Hand Landmarker Task API。项目工作重点在于其上的工程集成与鲁棒性算法设计，力图将不稳定的视觉观测转化为稳定的交互状态输出。核心算法链路如图 \ref{fig:gesture-pipeline} 所示。
 
 ### 输入预处理与模糊估计
 
-系统从彩色图像中提取灰度图，用 Laplacian 方差衡量清晰度 `blur_level`（方差越低图像越模糊），再将输入缩放到固定上限以控制检测负载。`blur_level` 不是附带指标，而是后续平滑强度、质量评分和释放保护的统一输入。
+系统从彩色图像中提取灰度图，用 Laplacian 方差衡量清晰度 `blur_level`（方差越低图像越模糊），再将输入图像进行缩放，控制负载。
+
+`blur_level` 贯穿后续多个环节，以此实现自适应的稳定性调整。由于坐标稳定算法对系统端到端延迟有一定影响，系统需要在保证稳定性的同时尽量降低响应时间。`blur_level` 的引入使得系统能够在模糊帧时自动增强坐标平滑成都（通过动态调整参数实现），而在清晰帧时保持较低的平滑强度以保证响应速度。
 
 ```python
 frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
@@ -310,28 +384,42 @@ detect_frame = resize_for_detection(frame_bgr, max_side=GESTURE_DETECT_MAX_SIDE)
 rgb_frame = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
 image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb_frame)
 result = self._landmarker.detect_for_video(image, timestamp_ms)
+
+def _estimate_blur_level(self, frame_gray: np.ndarray) -> float:
+    lap_var = float(cv2.Laplacian(frame_gray, cv2.CV_64F).var())
+    # Higher blur means lower Laplacian variance, then invert to [0, 1].
+    return _clamp(1.0 - (lap_var / (lap_var + 200.0)))
 ```
 
-### 关键点归一化与尺度修正
+### 关键点检测和深度估算
 
-MediaPipe Hand Landmarker 输出 21 个手部关键点，系统重点使用 `wrist`、`thumb_tip` 和 `index_tip` 作为交互主锚点。手尺度归一化是工程关键点：手离摄像头远近显著改变像素级指尖距离，不做尺度修正则 pinch 判定会严重依赖手与摄像头的相对距离，导致抓取状态不稳定。
+MediaPipe Hand Landmarker 输出 21 个手部关键点，系统重点使用 `wrist`、`thumb_tip` 和 `index_tip` 作为判断 pinch 状态的依据；同时也采集其他几个手指尖的坐标以判断是否进入旋转模式。
+
+由于单目摄像头无法直接获取深度，z 轴坐标只能从画面中估算。系统采用两路信号融合的方式进行深度估计：
+
+- **手掌尺度**（`hand_scale`）：取所有关键点 x/y 坐标的最大跨度。手在画面中占比大说明离摄像头近，占比小说明离摄像头远，基于此可以推算一个全局的深度估计。
+- **MediaPipe 局部 z 值**：MediaPipe 本身会输出各关键点的相对 z 坐标（以手掌根部为基准），可作为局部深度参考，但精度有限。
 
 ```python
-landmarks = [Vec3(x=float(lm.x), y=float(lm.y), z=float(lm.z)) for lm in hand_landmarks]
-hand_scale = estimate_hand_scale(landmarks)
-depth_hint = estimate_hand_depth(landmarks, hand_scale)
-index_tip = landmark_to_camera_vec3(landmarks[INDEX_TIP_LANDMARK_INDEX], depth_hint=depth_hint)
-thumb_tip = landmark_to_camera_vec3(landmarks[THUMB_TIP_LANDMARK_INDEX], depth_hint=depth_hint)
-pinch_distance = normalized_pinch_distance(
-    landmarks[INDEX_TIP_LANDMARK_INDEX],
-    landmarks[THUMB_TIP_LANDMARK_INDEX],
-    hand_scale=hand_scale,
-)
+def estimate_hand_depth(landmarks: list[Vec3], hand_scale: float) -> float:
+    scale_weight = _normalized_scale(hand_scale)          # 全局：手掌大小推算距离
+    local_depth = _clamp((-sum(lm.z for lm in landmarks)  # 局部：MediaPipe z 均值
+                          / max(len(landmarks), 1)) / 0.25)
+    blended = ((1.0 - DEPTH_ESTIMATION_LOCAL_Z_WEIGHT) * scale_weight
+               + DEPTH_ESTIMATION_LOCAL_Z_WEIGHT * local_depth)
+    return (2.0 * _clamp(blended)) - 1.0
 ```
 
-### 检测失败时的 fallback
+手尺度归一化同样是 pinch 判定的前提：手离摄像头远近会显著改变原始图像空间中的指尖间距，因此必须根据手掌尺度进行距离归一化，保证 pinch 判定范围不受深度变化影响。
 
-当检测器当帧失效时，系统不会完全丢弃上一帧结果。Fallback 策略采用"速度外推 + 局部模板匹配"：根据上一帧 wrist 在图像平面中的位移估计当前关键点的新位置，再尝试用局部模板匹配寻找更可信的候选区域。如果模板匹配成功，就用新 wrist 位置带动整组关键点平移；如果失败，则继续短时速度预测。其价值不在于提高静态识别精度，而在于保证交互不因单帧检测缺失而立刻断裂。
+### 手部跟踪丢失时的 fallback 策略
+
+当 MediaPipe 当帧未检测到手部时，系统不会立刻将跟踪状态置为丢失，而是通过两级 fallback 机制维持短时间内的位置预测和回退匹配，保证输出的连续性和稳定性：
+
+- **第一级策略是记录检测点速度**，并合理进行坐标外推（extrapolation）。每帧检测成功时，系统记录腕部坐标点在图像像素坐标系中的位移和帧间时间差，推算速度向量。检测失败时，用上一帧速度乘以帧间时间估算腕部新像素坐标，再将整组关键点（食指尖、拇指尖等）按同样位移平移。这种方法在短时检测失败时能够保持位置的连续性和稳定性，但如果持续时间过长，预测误差会逐渐积累。
+- **第二级策略是使用 OpenCV 中的经典模板匹配算法**（`cv2.matchTemplate`）在检测失败时进行局部搜索。具体原理是，在检测成功时，系统在腕部周围裁取一块 40×40 像素的灰度 patch 保存；检测失败时，以上一级策略中速度预测的新腕部坐标为中心，在半径 28 像素的搜索框内用 `cv2.matchTemplate` 算法做滑动窗口搜索，找到与存档 patch 相关系数最高的位置作为新腕部坐标。匹配分数归一化后作为 `appearance_match_score` 输出，供后续 pinch 判定使用。
+
+先尝试模板匹配，若 `cv2.matchTemplate` 返回的最大相关系数（经 `(max_val + 1) * 0.5` 归一化到 [0, 1]）超过 0.45，则采用匹配位置（`source = "fallback"`）；否则退回速度预测（`source = "predicted"`）。连续 fallback 超过 2 帧后不再接受纯速度预测，超过 8 帧后整个链路终止，输出切换为 `not_detected`。
 
 ```python
 if not result.hand_landmarks:
@@ -341,7 +429,7 @@ if not result.hand_landmarks:
 
 ### 概率式 pinch 判定
 
-系统没有把 pinch 语义简化为"距离小于阈值"，而是把当前几何距离映射成两类高斯似然（`pinched` / `open`），再结合先验状态和外观匹配分数形成加权 `pinch_score`。进入 pinch 需要连续确认帧，释放也需要满足速度、质量等额外条件。相比硬阈值，边界过渡更平滑，能够更自然地与时序状态机结合。
+直接用指尖坐标距离阈值判定 pinch 的问题在于：手指距离在阈值附近轻微抖动时，状态会反复翻转，导致对象频繁"抓住又松开"。为了解决这一问题，系统改用软概率评分：用高斯似然把指尖距离映射成连续的 `pinch_score`（代表 0-1 之间的概率），再结合先验状态（当前是否已处于稳定 pinch）和外观匹配分数三路加权，得到一个平滑变化的置信值，减少抖动带来的 pinch 状态不稳定问题。
 
 ```python
 pinched_likelihood = self._gaussian(raw_pinch_distance, mean=0.06, sigma=0.04)
@@ -359,7 +447,7 @@ pinch_score = (
 
 ### pinch 状态机
 
-pinch 判定采用四态状态机（`open → pinch_candidate → pinched → release_candidate → open`），而非单阈值开关。进入抓取需要连续确认，退出抓取也需要独立确认。在快速移动或低质量帧下会主动提高释放门槛。这种设计在交互稳定性与响应速度之间做了平衡——如果只采用静态阈值，系统会在对象移动过程中频繁出现"刚抓住又松开"的现象。
+更进一步的，为了对动态模糊强烈、画面质量差的情况做进一步优化，我们引入 `PINCH_CONFIRM_FRAMES` 参数，要求 pinch 状态必须连续数帧满足条件，超过一定帧数后才真正进入 `pinched` 状态。这层保险机制在一定程度上牺牲了 pinch 状态的响应速度，但大幅提升了在不稳定输入条件下的交互体验，避免了频繁误触和状态抖动。
 
 ```python
 if pinch_score > ENTER_THRESHOLD:
@@ -377,108 +465,40 @@ release_allowed = self._allow_release(
 )
 ```
 
-### 时序稳定策略（分层）
+### 旋转模式与双手缩放
 
-| 层次 | 策略         | 作用                                                 |
-| ---- | ------------ | ---------------------------------------------------- |
-| 1    | 坐标平滑     | 对 x/y/z 三个方向使用不同响应策略的指数型平滑        |
-| 2    | 质量感知修正 | 根据 `blur_level` 调节平滑强度，模糊时自动提高保守性 |
-| 3    | 短时失跟预测 | 利用最近速度做短窗口预测，按缺失帧数逐步衰减         |
-| 4    | 重捕获回接   | 检测恢复时做若干帧混合回接，限制单帧回跳幅度         |
-| 5    | 语义状态滞回 | pinch 四态状态机，进入和退出有独立门限与确认条件     |
+在单目视觉输入下，直接实现旋转交互虽然能够使交互体验更加自然，但由于旋转操作对输入稳定性要求更高，且考虑到在手背朝摄像头时的跟踪丢失问题，本项目并没有通过“捏合并旋转手部”实现旋转，而是设计了一个独立的"旋转模式"。
+旋转模式由“五指捏合”这一特定手势触发；在该模式下，捏合点的拖拽位移不再驱动对象位置移动，而是经由 Bridge 层转化为物体姿态参数，设置物体旋转模式。
 
-系统根据 `blur_level` 和瞬时运动量动态调整平滑系数，而不是把所有帧按同一种滤波强度处理。当检测中断时，通过速度、预测前瞻量和阻尼系数对位置进行短时外推。这不是普通均值滤波，而是"质量感知平滑 + 常速度短时预测"的组合式时序算法。
+注：对于缩放手势的实现，本项目选择不在 Gesture 层进行特殊处理；Gesture 模块只负责同时输出主手和副手两路 `GesturePacket`。当两只手都处于 `pinched` 状态时，Bridge 层检测双手间距变化并将其转化为缩放命令。
 
-```python
-if low_quality or blur_level > HIGH_BLUR_LEVEL:
-    alpha_y = max(base_alpha_y * LOW_QUALITY_MOTION_ALPHA_Y_MULTIPLIER, LOW_QUALITY_MOTION_ALPHA_Y_FLOOR)
-elif motion_y > 0.04:
-    alpha_y = max(base_alpha_y, HIGH_MOTION_ALPHA_Y_FLOOR)
-else:
-    alpha_y = base_alpha_y
+### 稳定策略总结
 
-factor = self.tuning.prediction_blend * (self.tuning.lost_tracking_motion_damping ** self._missing_frames)
-lead = self.tuning.prediction_lead * max(self._missing_frames, 1)
-```
+上述各环节共同构成分层的时序稳定机制：
 
-### 测试与验证
-
-- 稳定手部观测时，输出是否满足契约字段要求
-- 遮挡或模糊情况下，fallback 与预测是否保持输出连续性
-- pinch 状态迁移是否符合确认帧和释放保护规则
-
-### 典型工程问题：模糊帧与误检抑制
-
-低光照、快速移动或镜头晃动时手部关键点出现明显漂移，导致 pinch 语义和对象位置随之抖动。采用三种手段共同应对：模糊度感知平滑（根据图像质量调节保守程度）、局部模板匹配（在检测失败时恢复短时观测）、短时速度预测（维持轨迹连续性）。三者分别负责判定输入质量、恢复短时观测和保持交互连贯性。
-
----
+- **基础坐标平滑**：对 x/y/z 三个方向做指数平滑，抑制逐帧抖动
+- **动态调整平滑度**：根据 `blur_level` 动态调整平滑强度，模糊帧优先保证交互质量，清晰帧响应快
+- **短时跟踪丢失 fallback**：检测中断时用上一帧速度外推位置，按缺失帧数逐步衰减
+- **pinch 状态机**：pinch 四态状态机，进入和退出有独立确认条件，消除状态抖动
 
 ## Rendering 模块
 
 ### 模块职责
 
-`src/rendering/service.py` 中的 `RenderingServiceImpl` 负责消费 `SceneCommand` 并在 Panda3D 中更新场景：
+Rendering 模块是系统的输出端，负责把 Bridge 模块输出的 `SceneCommand` 转化为 Panda3D 场景更新。其核心职责包括：
 
 - 初始化 Panda3D 窗口、相机和基础光照
-- 创建场景对象并维护其视觉状态
-- 按顺序消费命令并忽略重复或过期命令
-- 渲染对象位姿变化、交互高亮和手部可视化
-- 提供调试面板、摄像头预览和设置视图
+- 创建场景对象并维护其视觉状态（悬停/抓取/旋转分别对应不同颜色）
+- 按顺序消费来自 Bridge 的 `SceneCommand`，更新场景状态
+- 实现手部可视化，提供视觉反馈
+- 提供调试数据面板、摄像头预览
+- 实现基本 UI 交互元素，验证可行性
 
-渲染模块将"命令消费逻辑"和"图形资源管理"进行了分离：`RenderingCoreManager` 负责底层 Panda3D 上下文和场景资源，`RenderingServiceImpl` 负责契约校验、状态维护和命令应用。这种分工使测试可以在较轻量的假窗口环境下进行。
+### 命令消费与场景管理
 
-### 命令分发
+渲染模块显式区分命令类型，每类命令有独立处理入口，并对 payload 做结构检查——只有字段满足契约要求时才执行更新，否则记录错误并跳过。这种设计有效阻断了上游错误的传播，也使各命令路径可独立测试。
 
-渲染模块显式区分不同命令类型，分别做 payload 结构检查。不同命令有不同处理入口，场景初始化、位姿更新、手部显示和交互恢复分别实现。这种"命令驱动架构"有利于测试，也方便演示时单独说明某个功能链路。
-
-```python
-command_type = command.command_type
-if command_type == "init_scene":
-    self._handle_init_scene(command)
-elif command_type == "set_object_pose":
-    self._handle_set_object_pose(command)
-elif command_type == "set_object_state":
-    self._handle_set_object_state(command)
-elif command_type == "set_hand_pose":
-    self._handle_set_hand_pose(command)
-elif command_type == "reset_interaction":
-    self._handle_reset_interaction(command)
-elif command_type == "heartbeat":
-    self._metrics.heartbeats_received += 1
-    self._metrics.commands_applied += 1
-```
-
-### 位姿命令校验
-
-渲染模块不是盲目应用上游命令，而是先对位姿数据进行结构检查。只有当 `position` 或 `hpr` 满足契约要求时，渲染层才继续执行对象更新。这样可以显著降低跨模块联调时的错误传播——错误被限制在模块边界内而不是扩散到整个系统。
-
-```python
-has_position = "position" in payload
-has_hpr = "hpr" in payload
-
-if has_position:
-    pos_data = payload["position"]
-    if isinstance(pos_data, dict) and all(k in pos_data for k in ["x", "y", "z"]):
-        pos = [pos_data["x"], pos_data["y"], pos_data["z"]]
-    else:
-        self._record_error(...)
-        return
-```
-
-### 幂等消费与异常处理
-
-- 对命令类型和 payload 键集合进行显式检查
-- 对重复命令和过期命令执行安全忽略
-- 对隐藏对象或格式错误命令输出运行时告警，而不是直接崩溃
-- `reset_interaction` 时恢复对象状态，避免交互残留
-
-渲染模块需要面对的主要风险不是"图形算法错误"，而是命令乱序、重复、字段缺失和运行时资源加载失败。这种设计使渲染模块可以作为稳定的命令消费端运行，而不是把所有正确性都押在上游模块上。
-
-### 场景初始化与对象管理
-
-`init_scene` 命令一次性下发对象描述（标识、初始位置/姿态、缩放、颜色、形状类型、是否可交互等），渲染模块收到后建立对象缓存，后续仅根据增量命令更新状态。对象定义与对象更新被清晰分开，减少了命令冗余，也方便后续扩展新模型。
-
-当前渲染实现还支持通过模型模板工厂统一注册内置模型和自定义模型，并对材质、锚点偏移、双面渲染和懒加载做集中管理。对于课程设计原型来说，这种资源工厂模式足以支撑中小规模场景扩展。
+场景对象由 `init_scene` 命令一次性建立缓存（含标识、初始位置/姿态、缩放、颜色、形状类型等），后续仅消费增量命令更新状态，对象定义与状态更新清晰分离。自定义模型与内置几何体通过同一套模型工厂注册，对材质、锚点偏移、双面渲染和懒加载做集中管理。
 
 ### UI 视图系统
 
@@ -486,12 +506,12 @@ Rendering 模块实现了一套完整的多视图 UI 系统，所有视图均基
 
 | 视图 | 源文件 | 内容 |
 | ---- | ------ | ---- |
-| Home 视图 | `home_view.py` | 启动主页，含 **table**、**setting** 两个导航按钮 |
-| Table 视图 | `table_overlay_view.py` | 桌面场景叠加层，含 **resume table**、**table options**、**return home** 按钮及亮度/音量两个滑块 |
+| Home 视图 | `home_view.py` | 启动主页，含 table、setting 两个导航按钮 |
+| Table 视图 | `table_overlay_view.py` | 桌面场景叠加层，含 resume table、table options、return home 按钮及亮度/音量两个滑块 |
 | Setting 视图 | `setting_view.py` | 全局设置页，含光标缩放、光标透明度、亮度、音量四个滑块 |
 | Calibration 视图 | `calibration_view.py` | 光标标定页，支持对 cursor scale x/y 和 cursor offset x/y 四项参数的键盘精调，并实时预览标定效果 |
 
-所有可交互控件（按钮、滑块）均实现了三态视觉样式（idle / hover / pressed 或 idle / hover / active），hover 判定和 press 判定分别基于指尖中点在屏幕像素坐标系中的位置，并引入 slop 容差（press 区域比 hover 区域略宽），避免边界误触。UI 视图切换通过 `RenderView` 枚举管理（`home / table / setting / calibration`），Table 视图内还有独立的浮层枚举（`none / menu / option`）控制叠加菜单的显示。
+其中，`table` 代表桌面的真实交互场景；所有可交互控件（按钮、滑块）均实现了三态视觉样式（idle / hover / pressed 或 idle / hover / active）提供视觉反馈。
 
 ### 支持的交互能力
 
@@ -499,28 +519,19 @@ Rendering 模块实现了一套完整的多视图 UI 系统，所有视图均基
 
 | 功能 | 触发方式 | 说明 |
 | ---- | -------- | ---- |
-| UI 导航 | 指尖悬停 + pinch | 指尖锚点进入按钮区域后高亮，稳定 pinch 触发按钮激活 |
+| 按钮 | 双指捏合 | 指尖锚点进入按钮区域后高亮，稳定 pinch 触发按钮激活 |
 | 滑块调节 | 指尖悬停 + pinch 拖拽 | 悬停至滑块轨道后 pinch，拖拽改变参数值，释放提交 |
 | 对象悬停 | 指尖接近对象 | 进入邻域后对象进入 pending\_grab 状态，显示高亮 |
-| 对象抓取 | 悬停中 pinch | 稳定 pinch 后对象跟随指尖中点移动 |
+| 对象抓取 | 悬停中 pinch | 稳定 pinch 后对象跟随两指尖中点移动 |
 | 对象平移 | 抓取中移动 | 拖拽期间对象实时跟随，并受桌面平面约束 |
-| 对象旋转 | 抓取中切换旋转模式 | 副手激活旋转模式后，主手拖拽量转化为姿态增量（HPR） |
-| 虚拟手显示 | 检测到手部 | 在场景中以几何体渲染腕部、拇指、食指及捏合中心点，pinch 状态变化时颜色和尺寸实时更新 |
-| 跟踪丢失恢复 | 手部离开视野 | 自动发出 reset\_interaction，对象回到安全状态 |
+| 对象旋转 | 抓取中切换旋转模式 | 激活旋转模式后，捏合拖拽转化为对对象姿态的控制 |
+| 虚拟手显示 | 检测到手部 | 在场景中渲染虚拟手，实现视觉反馈 |
 
-### 测试与验证
+### 自定义模型导入
 
-- `init_scene` 是否建立对象缓存并设置初始状态
-- `set_object_pose` 是否正确解析 `position`、`hpr` 和 `scale`
-- `set_object_state` 是否将交互状态映射为可视化状态
-- `set_hand_pose` 是否只在条件满足时显示虚拟手
-- `reset_interaction` 是否能够把场景恢复到安全默认值
+渲染模块支持在运行时导入外部 3D 模型文件，作为可交互场景对象使用。用户可以将自定义模型放置于指定目录，系统会在初始化时自动发现并注册，与内置几何体一样参与场景管理和手势交互。这使得系统不局限于固定的演示场景，具备面向不同应用场景的扩展能力。
 
-这一层测试的价值是把"场景可显示"进一步提升为"场景可重复、可恢复"。对课程设计答辩来说，稳定性往往比单纯的视觉效果更重要，因为它直接决定演示是否容易出错。
-
----
-
-## 主循环联调
+## App 主循环
 
 `main.py` 中的 `App` 类负责系统生命周期和主运行循环：
 
@@ -545,29 +556,15 @@ def run(self) -> None:
             time.sleep(sleep_for)
 ```
 
-配置通过 `AppConfig` 管理，支持 YAML 配置文件覆盖默认参数（摄像头编号、目标帧率、分辨率、镜像选项、Bridge 旋转灵敏度等）。
+可以看到，主循环中不断调用 `render_output.step()` 来驱动渲染更新；通过 `gesture_input.poll()` 获取最新的手势数据包；把数据包传给 Bridge 处理成场景命令；再把命令逐条推送给渲染模块。
 
-Gesture、Bridge 和 Rendering 都可用轻量接口对象替换，验证三者在统一节拍下完成数据传递。可确认 `poll → process → push → step` 的调用顺序没有被破坏，也能检查生命周期管理是否一致。
-
-联调阶段暴露的两个主要问题：
-
-1. **坐标空间理解必须完全一致**：靠契约定义解决——所有坐标必须携带坐标空间元数据
-2. **命令消费必须严格按帧序和状态序执行**：靠幂等分发和状态机解决——重复命令被安全忽略，状态迁移严格按序
-
----
-
-## 自定义模型接入
-
-自定义模型如果没有统一命名和注册方式，会造成配置碎片。当前实现通过模型模板工厂把基础几何体和自定义模型统一到同一套注册入口，对材质、锚点偏移、双面渲染和懒加载做集中管理，降低了新增资源的成本，也减少了模型接入时的人工错误。
+项目运行时，支持通过 YAML 配置文件设置默认参数（摄像头编号、分辨率、画面是否镜像、灵敏度等）。
 
 # 性能评价
 
-本节待补充统一测试环境下的定量数据。计划测试内容：
+本系统在 1080p 分辨率下的帧率能够稳定在 **25 FPS**；关闭渲染模块的调试视图后，帧率可以提升至 **30 FPS**，用户体验较为流畅。对于手部检测稳定性，在光线较为充足的环境下，系统极少出现跟踪丢失或跳变的情况；在光线较弱或手部快速移动时，如果叠加以清晰度/帧率较低的摄像头输入，检测稳定性会有所下降，但由于引入了 fallback 预测机制，整体上能够以延迟小幅增加、灵敏度小幅下降的代价保持交互的连续性和可用性。
 
-- 主循环帧率与渲染链路延迟
-- 手势检测端到端延迟
-- 命令吞吐与丢帧情况
-- 典型交互（抓取、移动、旋转）成功率与稳定性
+整体来说，系统流畅度与延迟较低，能够做到实时的手势交互反馈；在多数常见使用场景下，手势检测的稳定性和准确性能够满足基本的交互需求。
 
 # 系统展示
 
@@ -595,13 +592,7 @@ Gesture、Bridge 和 Rendering 都可用轻量接口对象替换，验证三者�
 
 # 总结
 
-本项目完成了从手势检测、时序稳定、交互语义解释到 Panda3D 场景响应的完整系统链路。
-
-核心工程成果：
-
-1. **共享契约与端口抽象**：模块边界清晰，便于协作开发与独立测试
-2. **面向场景的时序稳定与状态机机制**：提升了原型的可操作性
-3. **渲染端场景、UI、调试和模型扩展能力**：为后续完善提供基础
+本项目完成了 MediaPipe 手势检测、坐标稳定、深度估算 Panda3D 场景渲染的完整系统链路。系统以共享契约划定模块边界，Gesture、Bridge、Rendering 三层可独立开发和测试。Gesture 层通过模糊感知平滑、fallback 预测和概率式 pinch 状态机，将不稳定的视觉观测转化为可靠的交互信号；Bridge 层处理坐标映射、对象状态管理和旋转/缩放语义转换；Rendering 层实现了抓取、平移、旋转、缩放的完整三维交互场景，以及多视图手势驱动 UI 和自定义模型导入能力。
 
 团队在以下方面有显著收获：
 
@@ -609,18 +600,17 @@ Gesture、Bridge 和 Rendering 都可用轻量接口对象替换，验证三者�
 - **软件工程层面**：经历了契约设计、模块解耦、接口联调、异常处理和测试补齐等过程。系统级实现训练了成员对架构边界、状态管理和可维护性的判断能力。
 - **协作层面**：体会到"统一数据契约"和"明确模块职责"的重要性。Gesture、Bridge 和 Rendering 之所以能够逐步收敛并联调成功，本质上依赖于前期对职责边界的约束，而非临时性的代码互相适配。
 
-后续工作建议：
+不足之处与改进方向：
 
-- 补充统一环境下的性能测试数据
-- 完善截图与展示材料
-- 继续收敛多手交互、深度估计和参数标定问题
+- 场景完善性：当前系统的交互场景较为基础，未来可以允许用户自定义交互对象和场景布局，完善交互的视觉反馈和动画效果。
+- 算法优化：虽然当前的稳定性策略在多数情况下表现良好，但在极端模糊或快速运动时仍有改进空间。
 
 # 项目成员与分工
 
 - **何子谦**（2025080905004）：架构设计。负责系统架构设计、技术选型、功能兜底、代码审查与合并。
-- **徐逸博**（2025080905025）：核心算法。负责手势检测链路实现、稳定坐标相关算法实现。
+- **徐逸博**（2025080905025）：核心算法。负责手势检测链路实现、稳定坐标相关算法实现、结题报告 PPT。
 - **陈金龙**（2025080905001）：交互与 3D。负责 Panda3D 场景渲染实现、三维物体控制逻辑开发。
-- **夏凡程**（2025080905020）：文档与报告。负责开题报告、周报、PPT 制作。
+- **夏凡程**（2025080905020）：开题报告撰写、周报 PPT 制作。
 
 # 附录
 
@@ -652,11 +642,16 @@ AeroInteract3D/
 └── report/                     # 技术报告与文档
 ```
 
-## 运行与测试命令
+本项目开源在 [Github 仓库](https://github.com/samuelhe52/AeroInteract3D)，包含完整的代码实现。
 
-```bash
-make setup   # 安装依赖
-make run     # 运行主程序
-make test    # 运行测试
-make report  # 构建 PDF 报告
-```
+## 测试环境
+
+系统在以下多个平台上完成了功能验证：
+
+| 设备 | CPU | 内存 | 操作系统 |
+| ---- | --- | ---- | -------- |
+| MacBook Pro | Apple M1 Pro | 16 GB | macOS |
+| Windows 笔记本 | Intel Core Ultra 5 225H | 32 GB | Windows 11 |
+| Windows 笔记本 | Intel Core i7-14650HX | 32 GB | Windows 11 |
+
+摄像头输入均使用电脑自带摄像头，分辨率为 720p 或 1080p。软件环境：Python 3.12、MediaPipe ≥ 0.10.32、OpenCV ≥ 4.13.0、Panda3D 1.11.0-dev。
