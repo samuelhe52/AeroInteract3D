@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import json
 import logging
 import math
+from pathlib import Path
+import struct
 import time
 from typing import Any, Optional
 
@@ -43,107 +46,192 @@ logger = logging.getLogger("bridge.service")
 coordinate_logger = logging.getLogger("bridge.coordinate_transformation")
 
 INITIAL_OBJECT_POSITION = Vec3(0.0, 0.0, 0.0)
+_CUSTOM_MODELS_DIR = Path(__file__).resolve().parents[2] / "assets" / "custom_models"
+_WOODEN_TABLE_MODEL_PATH = _CUSTOM_MODELS_DIR / "wooden_table.glb"
+
+
+def _has_usable_glb_scene(model_path: Path) -> bool:
+    try:
+        payload = model_path.read_bytes()
+    except OSError:
+        return False
+    if len(payload) < 28 or payload[:4] != b"glTF":
+        return False
+    try:
+        chunk_len, chunk_type = struct.unpack_from("<I4s", payload, 12)
+    except struct.error:
+        return False
+    if chunk_type != b"JSON":
+        return False
+    try:
+        scene_payload = json.loads(payload[20:20 + chunk_len].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return bool(scene_payload.get("nodes")) and bool(scene_payload.get("meshes"))
+
+
+def _table_visual_shape() -> str:
+    return "wooden_table" if _has_usable_glb_scene(_WOODEN_TABLE_MODEL_PATH) else "plane"
+
+
+def _table_visual_color() -> dict[str, float]:
+    if _table_visual_shape() == "wooden_table":
+        return {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}
+    return {"r": 0.56, "g": 0.43, "b": 0.31, "a": 1.0}
+
+
+def _table_visual_init_y() -> float:
+    if _table_visual_shape() == "wooden_table":
+        return -1.94
+    return -0.35
+
+
+def _table_visual_scale() -> dict[str, float]:
+    if _table_visual_shape() == "wooden_table":
+        return {
+            "x": 2.2919410217835164,
+            "y": 2.3640589645458817,
+            "z": 2.436176907308247,
+        }
+    return {"x": 2.6, "y": 0.12, "z": 1.72}
+
+
+def _table_collision_surface_y() -> float:
+    if _table_visual_shape() == "wooden_table":
+        return -0.05
+    return -0.29
+
+
+def _tabletop_prop_y_offset() -> float:
+    if _table_visual_shape() == "wooden_table":
+        return 0.205
+    return 0.0
+
+
+def _scene_collision_surface_y(descriptor: dict[str, Any]) -> float:
+    explicit_surface_y = descriptor.get("collision_surface_y")
+    if isinstance(explicit_surface_y, int | float):
+        return float(explicit_surface_y)
+    return float(descriptor["init_pos"]["y"]) + (float(descriptor["scale"]["y"]) * 0.5)
+
+
 TABLE_SCENE_OBJECTS: tuple[dict[str, Any], ...] = (
     {
         "object_id": "table_plane",
-        "init_pos": {"x": 0.0, "y": -0.34, "z": 0.18},
+        "init_pos": {"x": 0.0, "y": _table_visual_init_y(), "z": 0.18},
         "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
         "coordinate_space": "world_norm",
         "interaction_state": INTERACTION_IDLE,
-        "shape": "plane",
-        "scale": {"x": 2.2, "y": 0.10, "z": 1.42},
-        "color": {"r": 0.68, "g": 0.64, "b": 0.58, "a": 1.0},
+        "shape": _table_visual_shape(),
+        "scale": _table_visual_scale(),
+        "color": _table_visual_color(),
+        "collision_surface_y": _table_collision_surface_y(),
         "interactable": False,
     },
     {
-        "object_id": PRIMARY_OBJECT_ID,
-        "init_pos": {"x": 0.0, "y": -0.08, "z": 0.18},
-        "init_hpr": {"h": 12.0, "p": 8.0, "r": 0.0},
+        "object_id": "apple_model",
+        "init_pos": {"x": 0.46, "y": -0.175 + _tabletop_prop_y_offset(), "z": 0.38},
+        "init_hpr": {"h": -18.0, "p": 0.0, "r": 0.0},
         "coordinate_space": "world_norm",
         "interaction_state": INTERACTION_IDLE,
-        "shape": "cube",
-        "scale": {"x": 0.22, "y": 0.22, "z": 0.22},
-        "color": {"r": 0.86, "g": 0.48, "b": 0.26, "a": 1.0},
+        "shape": "apple",
+        "scale": {"x": 0.16, "y": 0.16, "z": 0.16},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
         "interactable": True,
-        "interaction_radius": 0.18,
+        "interaction_radius": 0.14,
     },
     {
-        "object_id": "tile_left",
-        "init_pos": {"x": -0.48, "y": -0.14, "z": 0.02},
-        "init_hpr": {"h": -8.0, "p": 0.0, "r": 0.0},
+        "object_id": "bun_left",
+        "init_pos": {"x": 0.34, "y": -0.18 + _tabletop_prop_y_offset(), "z": 0.58},
+        "init_hpr": {"h": -12.0, "p": 0.0, "r": 0.0},
         "coordinate_space": "world_norm",
         "interaction_state": INTERACTION_IDLE,
-        "shape": "tile",
-        "scale": {"x": 0.28, "y": 0.06, "z": 0.22},
-        "color": {"r": 0.31, "g": 0.55, "b": 0.82, "a": 1.0},
-        "interactable": True,
-        "interaction_radius": 0.16,
-    },
-    {
-        "object_id": "pillar_left",
-        "init_pos": {"x": -0.24, "y": -0.06, "z": 0.32},
-        "init_hpr": {"h": 18.0, "p": 0.0, "r": 0.0},
-        "coordinate_space": "world_norm",
-        "interaction_state": INTERACTION_IDLE,
-        "shape": "pillar",
-        "scale": {"x": 0.14, "y": 0.32, "z": 0.14},
-        "color": {"r": 0.90, "g": 0.79, "b": 0.34, "a": 1.0},
-        "interactable": True,
-        "interaction_radius": 0.18,
-    },
-    {
-        "object_id": "cube_right",
-        "init_pos": {"x": 0.34, "y": -0.10, "z": -0.04},
-        "init_hpr": {"h": -14.0, "p": 6.0, "r": 0.0},
-        "coordinate_space": "world_norm",
-        "interaction_state": INTERACTION_IDLE,
-        "shape": "cube",
-        "scale": {"x": 0.18, "y": 0.18, "z": 0.18},
-        "color": {"r": 0.35, "g": 0.75, "b": 0.60, "a": 1.0},
-        "interactable": True,
-        "interaction_radius": 0.16,
-    },
-    {
-        "object_id": "tile_right",
-        "init_pos": {"x": 0.54, "y": -0.16, "z": 0.30},
-        "init_hpr": {"h": 10.0, "p": 0.0, "r": 0.0},
-        "coordinate_space": "world_norm",
-        "interaction_state": INTERACTION_IDLE,
-        "shape": "tile",
-        "scale": {"x": 0.32, "y": 0.05, "z": 0.20},
-        "color": {"r": 0.72, "g": 0.41, "b": 0.65, "a": 1.0},
-        "interactable": True,
-        "interaction_radius": 0.16,
-    },
-        # 新增自定义模型配置，和原有格式完全一致
-    {
-        "object_id": "my_teapot",
-        "init_pos": {"x": 0.5, "y": -0.08, "z": 0.18},
-        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
-        "coordinate_space": "world_norm",
-        "interaction_state": "idle",
-        "shape": "teapot",  # 和Rendering侧注册的shape_id完全一致
-        "scale": {"x": 0.2, "y": 0.2, "z": 0.2},
-        "color": {"r": 0.2, "g": 0.6, "b": 0.9, "a": 1.0},
-        "interactable": True,
-        "interaction_radius": 0.18,
-    },
-        # 新增测试用金字塔模型
-    {
-        "object_id": "test_pyramid",
-        "init_pos": {"x": 0.0, "y": -0.08, "z": 0.3},  # 放在主立方体上方
-        "init_hpr": {"h": 45.0, "p": 0.0, "r": 0.0},     # 初始旋转45度
-        "coordinate_space": "world_norm",
-        "interaction_state": "idle",
-        "shape": "pyramid",  # 直接填文件名（不含后缀）
+        "shape": "burger_bun01",
         "scale": {"x": 0.15, "y": 0.15, "z": 0.15},
-        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},  # 纯白，显示模型自带的橙色
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.14,
+    },
+    {
+        "object_id": "bun_center",
+        "init_pos": {"x": 0.52, "y": -0.18 + _tabletop_prop_y_offset(), "z": 0.61},
+        "init_hpr": {"h": 6.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "burger_bun02",
+        "scale": {"x": 0.15, "y": 0.15, "z": 0.15},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.14,
+    },
+    {
+        "object_id": "bun_right",
+        "init_pos": {"x": 0.69, "y": -0.18 + _tabletop_prop_y_offset(), "z": 0.56},
+        "init_hpr": {"h": 16.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "burger_bun03",
+        "scale": {"x": 0.15, "y": 0.15, "z": 0.15},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.14,
+    },
+    {
+        "object_id": "croissant_left",
+        "init_pos": {"x": 0.22, "y": -0.03 + _tabletop_prop_y_offset(), "z": 0.42},
+        "init_hpr": {"h": -38.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "croissant",
+        "scale": {"x": 0.45, "y": 0.45, "z": 0.45},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.22,
+    },
+    {
+        "object_id": "lemon_right",
+        "init_pos": {"x": 0.65, "y": -0.173 + _tabletop_prop_y_offset(), "z": 0.40},
+        "init_hpr": {"h": 34.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "lemon",
+        "scale": {"x": 0.165, "y": 0.165, "z": 0.165},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.15,
+    },
+    {
+        "object_id": "desk_frame",
+        "init_pos": {"x": -0.84, "y": -0.135 + _tabletop_prop_y_offset(), "z": 0.72},
+        "init_hpr": {"h": -60.0, "p": -12.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "frame",
+        "scale": {"x": 0.24, "y": 0.24, "z": 0.24},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
         "interactable": True,
         "interaction_radius": 0.18,
+    },
+    {
+        "object_id": "plant_back_left",
+        "init_pos": {"x": 0.82, "y": -0.075 + _tabletop_prop_y_offset(), "z": 0.72},
+        "init_hpr": {"h": 24.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "potted_plant",
+        "scale": {"x": 0.36, "y": 0.36, "z": 0.36},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "interaction_radius": 0.20,
     },
 )
-TABLE_SURFACE_Y = float(TABLE_SCENE_OBJECTS[0]["init_pos"]["y"]) + (float(TABLE_SCENE_OBJECTS[0]["scale"]["y"]) * 0.5)
+TABLE_SURFACE_Y = _scene_collision_surface_y(TABLE_SCENE_OBJECTS[0])
 DEFAULT_INTERACTABLE_OBJECT_SCALE = (0.22, 0.22, 0.22)
+PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.05
+SECONDARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.05
+SECONDARY_PINCH_FALLBACK_RELEASE_DISTANCE = 0.06
+DUAL_SCALE_RATIO_EPSILON = 1e-3
+DUAL_SCALE_RATIO_EXPONENT = 1.0
 
 
 @dataclass(slots=True)
@@ -162,6 +250,7 @@ class ObjectInteractionState:
     object_id: str
     world_position: Vec3
     interaction_radius: float = HOVER_DISTANCE_THRESHOLD
+    base_interaction_radius: float = HOVER_DISTANCE_THRESHOLD
     half_height: float = 0.1
     world_scale: tuple[float, float, float] = DEFAULT_INTERACTABLE_OBJECT_SCALE
     initial_world_scale: tuple[float, float, float] = DEFAULT_INTERACTABLE_OBJECT_SCALE
@@ -187,46 +276,50 @@ class SecondaryHandState:
     debug: dict[str, Any] | None = None
 
 
-DUAL_SCALE_RATIO_EXPONENT = 0.85
-DUAL_SCALE_RATIO_EPSILON = 1e-6
-PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.12
-SECONDARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.12
-SECONDARY_PINCH_FALLBACK_RELEASE_DISTANCE = 0.24
-
-
 class BridgeServiceImpl(BridgeService):
-    def __init__(self, *, input_mirrored: bool = True, rotation_sensitivity: float = 1.0) -> None:
-        self.lifecycle_state = LIFECYCLE_STOPPED
-        self._expected_contract_version = EXPECTED_CONTRACT_VERSION
-        self._input_mirrored = bool(input_mirrored)
-        self._rotation_sensitivity = max(float(rotation_sensitivity), 0.001)
-        self._interaction_state = BRIDGE_STATE_IDLE
-        self._last_frame_id: int | None = None
-        self._last_timestamp_ms: int | None = None
-        self._errors: list[dict[str, Any]] = []
-        self._metrics = BridgeMetrics()
-        self._pending_init = False
-        self._object_states: dict[str, ObjectInteractionState] = {}
-        self._hovered_object_id: str | None = None
-        self._grabbed_object_id: str | None = None
-        self._rotation_object_id: str | None = None
-        self._dual_scale_active = False
-        self._dual_scale_object_id: str | None = None
-        self._dual_scale_baseline_distance_xy: float | None = None
-        self._dual_scale_baseline_scale: tuple[float, float, float] | None = None
-        self._dual_scale_ratio: float = 1.0
-        self._pinch_capture_lock_object_id: str | None = None
-        self._dual_scale_rotation_blocked_until_open: bool = False
-
-    def start(self) -> None:
-        if self.lifecycle_state == LIFECYCLE_RUNNING:
-            return None
-
-        self.lifecycle_state = LIFECYCLE_INITIALIZING
+    def __init__(
+        self,
+        *,
+        expected_contract_version: str = EXPECTED_CONTRACT_VERSION,
+        input_mirrored: bool = True,
+        rotation_sensitivity: float = 1.0,
+    ) -> None:
+        self._expected_contract_version = expected_contract_version
+        self._input_mirrored = input_mirrored
+        self._rotation_sensitivity = float(rotation_sensitivity)
         self._interaction_state = BRIDGE_STATE_IDLE
         self._last_frame_id = None
         self._last_timestamp_ms = None
         self._errors = []
+        self._metrics = BridgeMetrics()
+        self._pending_init = True
+        self._object_states = {}
+        self._hovered_object_id = None
+        self._grabbed_object_id = None
+        self._rotation_object_id = None
+        self._dual_scale_active = False
+        self._dual_scale_object_id = None
+        self._dual_scale_baseline_distance_xy = None
+        self._dual_scale_baseline_scale = None
+        self._dual_scale_ratio = 1.0
+        self._pinch_capture_lock_object_id = None
+        self._dual_scale_rotation_blocked_until_open = False
+        self._ensure_object_state(
+            PRIMARY_OBJECT_ID,
+            world_position=INITIAL_OBJECT_POSITION,
+            interaction_radius=HOVER_DISTANCE_THRESHOLD,
+            half_height=0.1,
+            world_scale=DEFAULT_INTERACTABLE_OBJECT_SCALE,
+            interaction_state=BRIDGE_STATE_IDLE,
+            initialized=False,
+        )
+        self.lifecycle_state = LIFECYCLE_RUNNING
+        return None
+
+    def start(self) -> None:
+        self._interaction_state = BRIDGE_STATE_IDLE
+        self._last_frame_id = None
+        self._last_timestamp_ms = None
         self._metrics = BridgeMetrics()
         self._pending_init = True
         self._object_states = {}
@@ -958,9 +1051,13 @@ class BridgeServiceImpl(BridgeService):
             return False
         if secondary_hand.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
             return False
-        if secondary_hand.pinch_distance is None:
+        pinch_distance = self._effective_pinch_distance(
+            secondary_hand.pinch_distance,
+            secondary_hand.debug,
+        )
+        if pinch_distance is None:
             return False
-        return secondary_hand.pinch_distance <= SECONDARY_PINCH_FALLBACK_ENTER_DISTANCE
+        return pinch_distance <= SECONDARY_PINCH_FALLBACK_ENTER_DISTANCE
 
     @staticmethod
     def _primary_allows_dual_scale(packet: GesturePacket) -> bool:
@@ -972,9 +1069,31 @@ class BridgeServiceImpl(BridgeService):
             return False
         if packet.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
             return False
-        if packet.pinch_distance is None:
+        pinch_distance = BridgeServiceImpl._effective_pinch_distance(packet.pinch_distance, packet.debug)
+        if pinch_distance is None:
             return False
-        return packet.pinch_distance <= PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE
+        return pinch_distance <= PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE
+
+    @staticmethod
+    def _effective_pinch_distance(
+        pinch_distance: float | None,
+        debug_payload: dict[str, Any] | None,
+    ) -> float | None:
+        distances: list[float] = []
+        if pinch_distance is not None:
+            distances.append(float(pinch_distance))
+        if isinstance(debug_payload, dict):
+            raw_distance = debug_payload.get("raw_pinch_distance")
+            if isinstance(raw_distance, (int, float)):
+                distances.append(float(raw_distance))
+            nested_debug = debug_payload.get("debug")
+            if isinstance(nested_debug, dict):
+                nested_raw_distance = nested_debug.get("raw_pinch_distance")
+                if isinstance(nested_raw_distance, (int, float)):
+                    distances.append(float(nested_raw_distance))
+        if not distances:
+            return None
+        return min(distances)
 
     def _dual_scale_target_object(
         self,
@@ -1040,6 +1159,7 @@ class BridgeServiceImpl(BridgeService):
             baseline_scale[2] * ratio,
         )
         object_state.absolute_scale_ratio = self._absolute_scale_ratio(object_state)
+        self._refresh_object_interaction_extents(object_state)
         self._dual_scale_ratio = object_state.absolute_scale_ratio
         self._grabbed_object_id = object_state.object_id
         self._hovered_object_id = object_state.object_id
@@ -1316,6 +1436,7 @@ class BridgeServiceImpl(BridgeService):
                 object_id=object_id,
                 world_position=world_position,
                 interaction_radius=interaction_radius,
+                base_interaction_radius=interaction_radius,
                 half_height=half_height,
                 world_scale=world_scale,
                 initial_world_scale=world_scale,
@@ -1323,21 +1444,31 @@ class BridgeServiceImpl(BridgeService):
                 interaction_state=interaction_state,
                 initialized=initialized,
             )
+            self._refresh_object_interaction_extents(object_state)
             self._object_states[object_id] = object_state
             return object_state
 
         object_state.world_position = world_position
-        object_state.interaction_radius = interaction_radius
-        object_state.half_height = half_height
         object_state.world_scale = world_scale
         if not object_state.initialized and initialized:
             object_state.initial_world_scale = world_scale
+            object_state.base_interaction_radius = interaction_radius
             object_state.absolute_scale_ratio = 1.0
         else:
             object_state.absolute_scale_ratio = self._absolute_scale_ratio(object_state)
+        object_state.half_height = half_height
+        self._refresh_object_interaction_extents(object_state)
         object_state.interaction_state = interaction_state
         object_state.initialized = initialized
         return object_state
+
+    def _refresh_object_interaction_extents(self, object_state: ObjectInteractionState) -> None:
+        scale_ratio = max(
+            float(current) / max(float(initial), 1e-6)
+            for current, initial in zip(object_state.world_scale, object_state.initial_world_scale)
+        )
+        object_state.interaction_radius = float(object_state.base_interaction_radius) * max(scale_ratio, 1.0)
+        object_state.half_height = max(float(object_state.world_scale[1]) * 0.5, 0.0)
 
     def _object_state(self, object_id: str) -> ObjectInteractionState:
         object_state = self._object_states.get(object_id)

@@ -36,7 +36,7 @@ HOVER_DISTANCE_THRESHOLD = 0.15  # 小于此距离进入hover
 GRAB_RELEASE_DISTANCE_THRESHOLD = 0.2  # 大于此距离强制释放
 
 # 交互物体ID
-PRIMARY_OBJECT_ID = "primary_cube"
+PRIMARY_OBJECT_ID = "apple_model"
 
 __all__ = [
     "BRIDGE_HEARTBEAT_INTERVAL_FRAMES",
