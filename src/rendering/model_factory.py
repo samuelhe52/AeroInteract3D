@@ -259,11 +259,11 @@ class ModelResourceFactory:
                 model_filename = Filename.fromOsSpecific(template.model_path)
                 model_filename.makeAbsolute()
                 logger.debug(
-                    "Loading custom model: path=%s exists=%s",
+                    "Loading custom model without Panda3D cache: path=%s exists=%s",
                     model_filename,
                     model_filename.exists(),
                 )
-                model = self._loader.loadModel(model_filename)
+                model = self._loader.loadModel(model_filename, noCache=True)
             else:
                 logger.debug("Loading built-in model: path=%s", template.model_path)
                 model = self._loader.loadModel(template.model_path)
@@ -288,6 +288,15 @@ class ModelResourceFactory:
     def uses_builtin_materials(self, shape_id: str) -> bool:
         return self._resolve_template(shape_id).use_builtin_materials
 
+    def get_display_name(self, shape_id: str) -> str | None:
+        display_name = self._resolve_template(shape_id).display_name
+        if isinstance(display_name, str) and display_name.strip():
+            return display_name.strip()
+        return None
+
+    def get_template_default_scale(self, shape_id: str) -> tuple[float, float, float]:
+        return self._resolve_template(shape_id).default_scale
+
     def create_instance(
         self,
         shape_id: str,
@@ -310,7 +319,8 @@ class ModelResourceFactory:
         object_np.setScale(*effective_scale)
 
         object_np.setColorScale(*color)
-        object_np.setTransparency(1)
+        if color[3] < 1.0:
+            object_np.setTransparency(1)
 
         if template.use_builtin_materials and self._material_cache and "idle" in self._material_cache:
             object_np.setMaterial(self._material_cache["idle"], 1)

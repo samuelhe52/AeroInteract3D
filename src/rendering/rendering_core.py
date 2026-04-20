@@ -251,17 +251,25 @@ class RenderingCoreManager:
         if not self._is_initialized:
             raise RuntimeError("Window is not initialized; cannot create lights")
         try:
-            # Ambient light.
-            amb_light = AmbientLight("ambient_light")
-            amb_light.setColor((0.2, 0.2, 0.2, 1.0))
+            # Keep the table readable even when a model face turns away from the key light.
+            amb_light = AmbientLight("table_ambient_light")
+            amb_light.setColor((0.34, 0.34, 0.34, 1.0))
             amb_light_np = self._base.render.attachNewNode(amb_light)
             self._base.render.setLight(amb_light_np)
-            # Directional light.
-            dir_light = DirectionalLight("directional_light")
-            dir_light.setColor((0.8, 0.8, 0.8, 1.0))
+
+            # Main overhead light.
+            dir_light = DirectionalLight("table_key_light")
+            dir_light.setColor((0.82, 0.82, 0.82, 1.0))
             dir_light_np = self._base.render.attachNewNode(dir_light)
-            dir_light_np.setHpr(45, -45, 0)
+            dir_light_np.setHpr(35, -55, 0)
             self._base.render.setLight(dir_light_np)
+
+            # Camera-facing fill light reduces the black front-face look on cubes and GLB imports.
+            fill_light = DirectionalLight("table_fill_light")
+            fill_light.setColor((0.48, 0.48, 0.52, 1.0))
+            fill_light_np = self._base.render.attachNewNode(fill_light)
+            fill_light_np.setHpr(180, -18, 0)
+            self._base.render.setLight(fill_light_np)
             logger.info("Basic lights created successfully")
         except Exception as e:
             logger.error(f"Light creation failed: {str(e)}")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from src.contracts import GesturePacket
 
 from .state import UIInputState, UISettingsState
@@ -27,11 +29,11 @@ class UIGestureInputAdapter:
         width = max(int(window_size[0]), 1)
         height = max(int(window_size[1]), 1)
 
-        if packet is None or packet.tracking_state != "tracked":
+        midpoint = self._cursor_midpoint(packet)
+        if midpoint is None:
             return UIInputState(cursor_pixels=(width * 0.5, height * 0.5), visible=False)
 
-        midpoint_x = (float(packet.index_tip.x) + float(packet.thumb_tip.x)) * 0.5
-        midpoint_y = (float(packet.index_tip.y) + float(packet.thumb_tip.y)) * 0.5
+        midpoint_x, midpoint_y = midpoint
         raw_cursor_norm = (
             (1.0 - midpoint_x) * 0.5,
             (1.0 - midpoint_y) * 0.5,
@@ -50,3 +52,35 @@ class UIGestureInputAdapter:
             cursor_pixels=cursor_pixels,
             visible=True,
         )
+
+    def _cursor_midpoint(self, packet: GesturePacket | None) -> tuple[float, float] | None:
+        if packet is None:
+            return None
+        if packet.tracking_state == "tracked":
+            return (
+                (float(packet.index_tip.x) + float(packet.thumb_tip.x)) * 0.5,
+                (float(packet.index_tip.y) + float(packet.thumb_tip.y)) * 0.5,
+            )
+
+        debug_payload = getattr(packet, "debug", None)
+        if not isinstance(debug_payload, dict):
+            return None
+        return self._secondary_hand_midpoint(debug_payload.get("secondary_hand"))
+
+    @staticmethod
+    def _secondary_hand_midpoint(secondary_hand: Any) -> tuple[float, float] | None:
+        if not isinstance(secondary_hand, dict):
+            return None
+        if secondary_hand.get("tracking_state") != "tracked":
+            return None
+        index_tip = secondary_hand.get("index_tip")
+        thumb_tip = secondary_hand.get("thumb_tip")
+        if not isinstance(index_tip, dict) or not isinstance(thumb_tip, dict):
+            return None
+        try:
+            return (
+                (float(index_tip["x"]) + float(thumb_tip["x"])) * 0.5,
+                (float(index_tip["y"]) + float(thumb_tip["y"])) * 0.5,
+            )
+        except (KeyError, TypeError, ValueError):
+            return None

@@ -1,0 +1,15 @@
+{
+    "display_name": "Photo Frame",
+    "default_scale": [
+        5.4,
+        5.4,
+        5.4
+    ],
+    "center_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "two_sided": false,
+    "use_builtin_materials": false
+}

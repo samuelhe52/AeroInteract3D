@@ -1,0 +1,15 @@
+{
+    "display_name": "Wooden Table",
+    "default_scale": [
+        1.0,
+        1.0,
+        1.0
+    ],
+    "center_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "two_sided": false,
+    "use_builtin_materials": false
+}

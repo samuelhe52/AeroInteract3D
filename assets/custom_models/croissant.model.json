@@ -1,0 +1,15 @@
+{
+    "display_name": "Croissant",
+    "default_scale": [
+        5.0,
+        5.0,
+        5.0
+    ],
+    "center_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "two_sided": false,
+    "use_builtin_materials": false
+}

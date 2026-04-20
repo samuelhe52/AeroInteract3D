@@ -1,0 +1,15 @@
+{
+    "display_name": "Burger Bun 03",
+    "default_scale": [
+        9.3,
+        9.3,
+        9.3
+    ],
+    "center_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "two_sided": false,
+    "use_builtin_materials": false
+}

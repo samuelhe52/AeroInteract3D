@@ -162,16 +162,22 @@ class FakeWindow:
 class FakeRenderRoot:
     def __init__(self) -> None:
         self.children: list[object] = []
+        self.light_nodes: list[object] = []
 
     def attachNewNode(self, node) -> "FakeNodePath":
         child = FakeNodePath(getattr(node, "name", "child"))
         child.parent = self
+        child.source = node
         self.children.append(child)
         return child
 
+    def setLight(self, node) -> None:
+        self.light_nodes.append(node)
+
 
 class FakeLoader:
-    def loadModel(self, model_path):
+    def loadModel(self, model_path, **kwargs):
+        self.last_load_kwargs = kwargs
         return FakeLoadedModel(model_path)
 
 
@@ -1075,6 +1081,7 @@ def test_auto_scanned_custom_model_sidecar_applies_template_fields(tmp_path) -> 
 
     template = factory._template_registry["teapot"]
     assert template.display_name == "Tea Pot"
+    assert factory.get_display_name("teapot") == "Tea Pot"
     assert template.default_scale == pytest.approx((2.0, 3.0, 4.0))
     assert template.center_offset == pytest.approx((0.1, 0.2, -0.3))
     assert template.two_sided is True
@@ -1083,6 +1090,18 @@ def test_auto_scanned_custom_model_sidecar_applies_template_fields(tmp_path) -> 
     loaded_model = factory._load_model_template("teapot")
     assert loaded_model.pos == pytest.approx((0.1, 0.2, -0.3))
     assert loaded_model.two_sided is True
+
+
+def test_auto_scanned_custom_models_bypass_panda3d_cache(tmp_path) -> None:
+    custom_model = tmp_path / "apple.glb"
+    custom_model.write_text("placeholder", encoding="utf-8")
+
+    loader = FakeLoader()
+    factory = rendering_service.ModelResourceFactory(loader=loader, auto_scan_dir=str(tmp_path))
+
+    factory._load_model_template("apple")
+
+    assert loader.last_load_kwargs.get("noCache") is True
 
 
 def test_auto_scanned_custom_models_skip_duplicate_shape_ids(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
@@ -1308,12 +1327,98 @@ def test_rendering_reset_restores_cached_scene_pose() -> None:
     service._object_initial_states["primary_cube"] = ObjectInitialState(
         pos=(0.1, -0.2, 0.4),
         hpr=(1.0, 2.0, 3.0),
+        scale=(1.8, 1.8, 1.8),
+        template_default_scale=(10.0, 10.0, 10.0),
     )
 
     service.push(make_command(command_id="reset-1", frame_id=1, command_type="reset_interaction"))
 
     assert obj.pos == (0.1, -0.2, 0.4)
     assert obj.hpr == (1.0, 2.0, 3.0)
+    assert obj.scale == (1.8, 1.8, 1.8)
+
+
+def test_rendering_applies_template_default_scale_when_scale_update_starts() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["apple_model"] = obj
+    service._object_initial_states["apple_model"] = ObjectInitialState(
+        pos=(0.0, -0.08, 0.18),
+        hpr=(0.0, 0.0, 0.0),
+        scale=(1.8, 1.8, 1.8),
+        template_default_scale=(10.0, 10.0, 10.0),
+    )
+
+    service.push(
+        make_command(
+            command_id="scale-1",
+            frame_id=1,
+            command_type="set_object_pose",
+            object_id="apple_model",
+            payload={
+                "coordinate_space": "world_norm",
+                "position": {"x": 0.0, "y": -0.08, "z": 0.18},
+                "scale": {"x": 0.18, "y": 0.18, "z": 0.18},
+            },
+        )
+    )
+
+    assert obj.scale == pytest.approx((1.8, 1.8, 1.8))
+
+
+def test_rendering_init_scene_populates_object_cache_and_overlay_items(monkeypatch, tmp_path) -> None:
+    patch_ui_views(monkeypatch)
+    custom_model_dir = tmp_path / "custom_models"
+    custom_model_dir.mkdir()
+    (custom_model_dir / "apple.glb").write_text("placeholder", encoding="utf-8")
+    (custom_model_dir / "apple.model.json").write_text(
+        json.dumps({"display_name": "Apple", "default_scale": [10, 10, 10], "use_builtin_materials": False}),
+        encoding="utf-8",
+    )
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service._custom_models_dir = str(custom_model_dir)
+    service.start()
+
+    service.push(
+        make_command(
+            command_id="init-scene-with-custom-model",
+            frame_id=1,
+            command_type="init_scene",
+            payload={
+                "objects": [
+                    {
+                        "object_id": "table_plane",
+                        "init_pos": {"x": 0.0, "y": -0.4, "z": 0.0},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+                        "shape": "tile",
+                        "scale": {"x": 1.6, "y": 0.05, "z": 1.2},
+                        "color": {"r": 0.7, "g": 0.7, "b": 0.72, "a": 1.0},
+                        "interactable": False,
+                    },
+                    {
+                        "object_id": "apple_model",
+                        "init_pos": {"x": 0.22, "y": -0.08, "z": 0.18},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+                        "shape": "apple",
+                        "scale": {"x": 0.18, "y": 0.18, "z": 0.18},
+                        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+                        "interactable": True,
+                    },
+                ]
+            },
+        )
+    )
+
+    assert set(service._object_cache) == {"table_plane", "apple_model"}
+    assert service._object_initial_states["apple_model"].scale == pytest.approx((1.8, 1.8, 1.8))
+    assert {item["object_id"] for item in service._table_overlay_view.last_object_items} == {
+        "table_plane",
+        "apple_model",
+    }
+    labels_by_id = {item["object_id"]: item["label"] for item in service._table_overlay_view.last_object_items}
+    assert labels_by_id["apple_model"] == "Apple"
 
 
 def test_rendering_step_advances_panda3d_task_manager(monkeypatch) -> None:
@@ -1398,6 +1503,23 @@ def test_rendering_core_reads_display_zoom_from_graphics_pipe() -> None:
     manager._base = type("FakeBaseWithPipe", (), {"pipe": FakePipe()})()
 
     assert manager.display_scale() == 2.0
+
+
+def test_rendering_core_creates_three_point_lighting() -> None:
+    manager = RenderingCoreManager()
+    fake_base = FakeBase()
+    manager._base = fake_base
+    manager._is_initialized = True
+
+    manager.create_base_lights()
+
+    assert [node.name for node in fake_base.render.light_nodes] == [
+        "table_ambient_light",
+        "table_key_light",
+        "table_fill_light",
+    ]
+    assert fake_base.render.light_nodes[1].hpr == (35, -55, 0)
+    assert fake_base.render.light_nodes[2].hpr == (180, -18, 0)
 
 
 def test_rendering_core_aspect_lock_prefers_width_when_width_changes_more() -> None:
@@ -1490,6 +1612,25 @@ def test_ui_gesture_input_adapter_hides_cursor_when_tracking_is_lost() -> None:
 
     assert ui_state.visible is False
     assert ui_state.cursor_pixels == pytest.approx((800.0, 450.0))
+
+
+def test_ui_gesture_input_adapter_falls_back_to_secondary_hand_debug_payload() -> None:
+    adapter = UIGestureInputAdapter()
+    packet = make_packet_with_rotation()
+    packet.tracking_state = "temporarily_lost"
+    packet.debug = {
+        "secondary_hand": {
+            "tracking_state": "tracked",
+            "index_tip": {"x": 0.50, "y": 0.30, "z": 0.1},
+            "thumb_tip": {"x": 0.30, "y": 0.30, "z": 0.1},
+        }
+    }
+
+    ui_state = adapter.to_ui_input(packet, window_size=(1600, 900))
+
+    assert ui_state.visible is True
+    assert ui_state.cursor_norm == pytest.approx((0.30, 0.35))
+    assert ui_state.cursor_pixels == pytest.approx((480.0, 315.0))
 
 
 def test_ui_button_interaction_controller_activates_on_release_inside() -> None:

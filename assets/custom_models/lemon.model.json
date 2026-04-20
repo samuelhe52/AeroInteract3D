@@ -1,0 +1,15 @@
+{
+    "display_name": "Lemon",
+    "default_scale": [
+        10.5,
+        10.5,
+        10.5
+    ],
+    "center_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "two_sided": false,
+    "use_builtin_materials": false
+}

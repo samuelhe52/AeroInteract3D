@@ -67,6 +67,7 @@ class ObjectInitialState:
     pos: tuple[float, float, float]
     hpr: tuple[float, float, float]
     scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    template_default_scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
     state: str = "idle"
 
 
@@ -435,6 +436,13 @@ class RenderingServiceImpl(RenderOutputPort):
             interactable=descriptor.interactable
         )
         return object_np
+
+    @staticmethod
+    def _combine_scales(
+        scale: tuple[float, float, float],
+        multiplier: tuple[float, float, float],
+    ) -> tuple[float, float, float]:
+        return tuple(float(component) * float(factor) for component, factor in zip(scale, multiplier))
 
     @staticmethod
     def _state_color_scale(
@@ -902,10 +910,29 @@ class RenderingServiceImpl(RenderOutputPort):
     def _table_object_visibility_items(self) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
         for object_id in self._object_cache:
+            label = object_id.replace("_", " ")
+            if self._model_factory is not None:
+                obj_np = self._object_cache.get(object_id)
+                shape_id: str | None = None
+                get_tag = getattr(obj_np, "getTag", None)
+                if callable(get_tag):
+                    candidate = get_tag("shape")
+                    if isinstance(candidate, str) and candidate:
+                        shape_id = candidate
+                if shape_id is None:
+                    tags = getattr(obj_np, "tags", None)
+                    if isinstance(tags, dict):
+                        candidate = tags.get("shape")
+                        if isinstance(candidate, str) and candidate:
+                            shape_id = candidate
+                if shape_id is not None:
+                    display_name = self._model_factory.get_display_name(shape_id)
+                    if display_name:
+                        label = display_name
             items.append(
                 {
                     "object_id": object_id,
-                    "label": object_id.replace("_", " "),
+                    "label": label,
                     "visible": self._is_object_visible(object_id),
                 }
             )
@@ -1546,6 +1573,7 @@ class RenderingServiceImpl(RenderOutputPort):
             if not self._is_object_visible(object_id):
                 logger.info("Ignoring set_object_pose for hidden object: %s", object_id)
                 return
+            initial_state = self._object_initial_states.get(object_id)
             raw_scene_pos = getattr(obj_np, "pos", (0.0, 0.0, 0.0))
             current_scene_pos = tuple(raw_scene_pos) if isinstance(raw_scene_pos, (list, tuple)) and len(raw_scene_pos) == 3 else (0.0, 0.0, 0.0)
             raw_hpr = getattr(obj_np, "hpr", (0.0, 0.0, 0.0))
@@ -1570,6 +1598,12 @@ class RenderingServiceImpl(RenderOutputPort):
                 obj_np.setHpr(*clipped_hpr)
             if scale is not None and all(v > 0.0 for v in scale):
                 scene_scale = self._world_norm_to_scene_scale(scale)
+                template_default_scale = (
+                    initial_state.template_default_scale
+                    if initial_state is not None
+                    else (1.0, 1.0, 1.0)
+                )
+                scene_scale = self._combine_scales(scene_scale, template_default_scale)
                 obj_np.setScale(*scene_scale)
             self._metrics.pose_updates += 1
             self._metrics.commands_applied += 1
@@ -1886,12 +1920,16 @@ class RenderingServiceImpl(RenderOutputPort):
                     base_color=descriptor.color,
                     use_builtin_materials=self._model_factory.uses_builtin_materials(descriptor.shape),
                 )
+                scene_scale = self._world_norm_to_scene_scale(descriptor.scale)
+                template_default_scale = self._model_factory.get_template_default_scale(descriptor.shape)
+                effective_initial_scale = self._combine_scales(scene_scale, template_default_scale)
                 effective_state = descriptor.interaction_state if descriptor.interaction_state in self._material_cache else "idle"
                 self._apply_object_visual_state(descriptor.object_id, effective_state)
                 self._object_initial_states[descriptor.object_id] = ObjectInitialState(
                     pos=scene_init_pos,
                     hpr=descriptor.init_hpr,
-                    scale=self._world_norm_to_scene_scale(descriptor.scale),
+                    scale=effective_initial_scale,
+                    template_default_scale=template_default_scale,
                     state=descriptor.interaction_state if descriptor.interactable else "idle",
                 )
                 self._object_interaction_states[descriptor.object_id] = effective_state

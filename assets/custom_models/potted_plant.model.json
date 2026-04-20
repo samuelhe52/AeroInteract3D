@@ -1,0 +1,15 @@
+{
+    "display_name": "Potted Plant",
+    "default_scale": [
+        2.1,
+        2.1,
+        2.1
+    ],
+    "center_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "two_sided": false,
+    "use_builtin_materials": false
+}
