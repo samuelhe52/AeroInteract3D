@@ -175,20 +175,31 @@ AeroInteract3D 是一个基于单目摄像头的实时 3D 手势交互原型系�
 
 | 字段                                | 说明                                                         |
 | ----------------------------------- | ------------------------------------------------------------ |
+| `contract_version`                  | 契约版本号                                                   |
 | `frame_id` / `timestamp_ms`         | 帧序号与时间戳                                               |
+| `hand_id`                           | 手部位标识（如 `hand-1`、`hand-2`）                          |
 | `tracking_state`                    | `tracked` / `temporarily_lost` / `not_detected`              |
+| `confidence`                        | 跟踪置信度（0–1）                                            |
 | `pinch_state`                       | `open` / `pinch_candidate` / `pinched` / `release_candidate` |
 | `index_tip` / `thumb_tip` / `wrist` | 食指尖、拇指尖、腕部三维坐标                                 |
-| `coordinate_space`                  | 坐标空间标记，下游必须据此做单位转换                         |
+| `coordinate_space`                  | 坐标空间标记（`camera_norm` / `world_norm`）                 |
+| `pinch_distance`                    | 归一化 pinch 距离（可选）                                    |
+| `velocity`                          | 腕部速度向量（可选）                                         |
+| `smoothing_hint`                    | 平滑参数提示（可选）                                         |
+| `rotation`                          | 旋转模式状态与角度（可选）                                   |
+| `debug`                             | 调试用附加数据（可选）                                       |
 
 **`SceneCommand`**：描述渲染模块需要执行的场景更新命令。
 
-| 字段           | 说明                                                                                                        |
-| -------------- | ----------------------------------------------------------------------------------------------------------- |
-| `command_id`   | 唯一命令标识                                                                                                |
-| `command_type` | `init_scene` / `set_hand_pose` / `set_object_state` / `set_object_pose` / `reset_interaction` / `heartbeat` |
-| `object_id`    | 命令目标对象 ID                                                                                             |
-| `payload`      | 命令附带数据，结构随 `command_type` 不同而变化                                                              |
+| 字段               | 说明                                           |
+| ------------------ | ---------------------------------------------- |
+| `contract_version` | 契约版本号                                     |
+| `command_id`       | 唯一命令标识                                   |
+| `frame_id`         | 帧序号                                         |
+| `timestamp_ms`     | 时间戳                                         |
+| `command_type`     | 场景命令类型枚举                               |
+| `object_id`        | 命令目标对象 ID                                |
+| `payload`          | 命令附带数据，结构随 `command_type` 不同而变化 |
 
 通过共享契约，模块之间实现了松耦合：Gesture 只需保证输出满足 `GesturePacket` 的字段要求，Bridge 只需保证输出满足 `SceneCommand` 的字段要求，渲染模块则只需根据命令类型和 payload 结构进行处理，而不需要关心上游的具体实现细节。
 
@@ -264,18 +275,23 @@ if packet.tracking_state == "tracked" and packet.confidence >= BRIDGE_MIN_TRACKI
     thumb_tip_world = self._camera_to_world_position(packet.thumb_tip)
     wrist_world = self._camera_to_world_position(packet.wrist)
     anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
+    thumb_base_world, index_base_world = self._finger_base_points(
+        wrist_world, anchor_world, thumb_tip_world, index_tip_world
+    )
     payload["visible"] = True
     payload["points"] = {
         "wrist": vec3_payload(wrist_world),
         "thumb_tip": vec3_payload(thumb_tip_world),
         "index_tip": vec3_payload(index_tip_world),
         "anchor": vec3_payload(anchor_world),
+        "thumb_base": vec3_payload(thumb_base_world),
+        "index_base": vec3_payload(index_base_world),
     }
 ```
 
 ### 双手缩放
 
-当主手和副手同时处于 `pinched` 状态且均悬停在同一对象上时，Bridge 层基于两只手的捏合锚点间距变化，计算缩放比例，并通过 `set_object_pose` 命令更新对象的 `scale` 字段，实现跟手的缩放效果。缩放操作期间，对象平移被暂停，以避免位置和尺寸命令的冲突。
+当主手和副手同时处于 `pinched` 状态且至少有一只手悬停在可交互对象上时，Bridge 层基于两只手的捏合锚点间距变化，计算缩放比例，并通过 `set_object_pose` 命令更新对象的 `scale` 字段，实现跟手的缩放效果。缩放操作期间，对象平移与旋转被暂停，以避免命令冲突。
 
 ### 典型工程问题
 
@@ -419,7 +435,7 @@ def estimate_hand_depth(landmarks: list[Vec3], hand_scale: float) -> float:
 - **第一级策略是记录检测点速度**，并合理进行坐标外推（extrapolation）。每帧检测成功时，系统记录腕部坐标点在图像像素坐标系中的位移和帧间时间差，推算速度向量。检测失败时，用上一帧速度乘以帧间时间估算腕部新像素坐标，再将整组关键点（食指尖、拇指尖等）按同样位移平移。这种方法在短时检测失败时能够保持位置的连续性和稳定性，但如果持续时间过长，预测误差会逐渐积累。
 - **第二级策略是使用 OpenCV 中的经典模板匹配算法**（`cv2.matchTemplate`）在检测失败时进行局部搜索。具体原理是，在检测成功时，系统在腕部周围裁取一块 40×40 像素的灰度 patch 保存；检测失败时，以上一级策略中速度预测的新腕部坐标为中心，在半径 28 像素的搜索框内用 `cv2.matchTemplate` 算法做滑动窗口搜索，找到与存档 patch 相关系数最高的位置作为新腕部坐标。匹配分数归一化后作为 `appearance_match_score` 输出，供后续 pinch 判定使用。
 
-先尝试模板匹配，若 `cv2.matchTemplate` 返回的最大相关系数（经 `(max_val + 1) * 0.5` 归一化到 [0, 1]）超过 0.45，则采用匹配位置（`source = "fallback"`）；否则退回速度预测（`source = "predicted"`）。连续 fallback 超过 2 帧后不再接受纯速度预测，超过 8 帧后整个链路终止，输出切换为 `not_detected`。
+系统首先根据上一帧腕部速度预测当前腕部像素坐标，再以此预测位置为中心、在半径 28 像素的搜索框内用 `cv2.matchTemplate` 做模板匹配。若匹配相关系数（经 `(max_val + 1) * 0.5` 归一化到 [0, 1]）超过 0.45，则采用匹配位置（`source = "fallback"`）；否则退回速度预测（`source = "predicted"`）。当连续 fallback 超过 2 帧且模板匹配仍未通过阈值时，不再接受纯速度预测，直接返回 `None`；整体 fallback 上限为 8 帧，超时后检测链路终止，输出切换为 `not_detected`。
 
 ```python
 if not result.hand_landmarks:
@@ -468,7 +484,7 @@ release_allowed = self._allow_release(
 ### 旋转模式与双手缩放
 
 在单目视觉输入下，直接实现旋转交互虽然能够使交互体验更加自然，但由于旋转操作对输入稳定性要求更高，且考虑到在手背朝摄像头时的跟踪丢失问题，本项目并没有通过“捏合并旋转手部”实现旋转，而是设计了一个独立的"旋转模式"。
-旋转模式由“五指捏合”这一特定手势触发；在该模式下，捏合点的拖拽位移不再驱动对象位置移动，而是经由 Bridge 层转化为物体姿态参数，设置物体旋转模式。
+旋转模式由“握拳后张开手掌”这一特定手势序列触发：先保持手部握拳（指尖聚拢）数帧，再张开手掌，即可切换旋转模式。在该模式下，捏合点的拖拽位移不再驱动对象位置移动，而是经由 Bridge 层转化为物体姿态参数，设置物体旋转模式。
 
 注：对于缩放手势的实现，本项目选择不在 Gesture 层进行特殊处理；Gesture 模块只负责同时输出主手和副手两路 `GesturePacket`。当两只手都处于 `pinched` 状态时，Bridge 层检测双手间距变化并将其转化为缩放命令。
 
@@ -529,9 +545,7 @@ Rendering 模块实现了一套完整的多视图 UI 系统，所有视图均基
 
 ### 自定义模型导入
 
-**此部分后续根据具体实现完善**
-
-渲染模块支持在运行时导入外部 3D 模型文件，作为可交互场景对象使用。用户可以将自定义模型放置于指定目录，系统会在初始化时自动发现并注册，与内置几何体一样参与场景管理和手势交互。这使得系统不局限于固定的演示场景，具备面向不同应用场景的扩展能力。
+渲染模块支持在运行时导入外部 3D 模型文件（`.glb`、`.egg`、`.bam` 等格式），作为可交互场景对象使用。用户可以将自定义模型放置于 `assets/custom_models/` 目录，系统初始化时会自动扫描并注册，与内置几何体一样参与场景管理和手势交互。当前场景配置中已包含自定义 `teapot` 与 `pyramid` 模型示例。
 
 ## App 主循环
 
@@ -725,7 +739,7 @@ AeroInteract3D/
 │   ├── gesture/                # 手势模块
 │   │   ├── service.py          # GestureServiceImpl（主类）
 │   │   ├── runtime.py          # CaptureRuntime、HandLandmarkerRuntime
-│   │   ├── temproal.py         # TemporalReducer（时序归约与 pinch 状态机）
+│   │   ├── temporal.py         # TemporalReducer（时序归约与 pinch 状态机）
 │   │   ├── constants.py
 │   │   └── debug/              # 实时预览工具
 │   ├── bridge/                 # 语义桥接模块
