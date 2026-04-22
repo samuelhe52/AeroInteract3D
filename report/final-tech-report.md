@@ -615,12 +615,21 @@ Rendering 模块的处理链路如图 \ref{fig:rendering-pipeline} 所示。每�
 
 Rendering 模块实现了一套完整的多视图 UI 系统，所有视图均基于指尖锚点进行手势驱动交互，无需键盘鼠标：
 
-| 视图             | 源文件                  | 内容                                                                                            |
-| ---------------- | ----------------------- | ----------------------------------------------------------------------------------------------- |
-| Home 视图        | `home_view.py`          | 启动主页，含 table、setting 两个导航按钮                                                        |
-| Table 视图       | `table_overlay_view.py` | 桌面场景叠加层，含 resume table、table options、return home 按钮及亮度/音量两个滑块             |
-| Setting 视图     | `setting_view.py`       | 全局设置页，含光标缩放、光标透明度、亮度、音量四个滑块                                          |
-| Calibration 视图 | `calibration_view.py`   | 光标标定页，支持对 cursor scale x/y 和 cursor offset x/y 四项参数的键盘精调，并实时预览标定效果 |
+```{=latex}
+\noindent\begin{tabularx}{\linewidth}{@{}
+  >{\raggedright\arraybackslash}p{3.25cm}
+  >{\raggedright\arraybackslash}p{4.65cm}
+  >{\raggedright\arraybackslash}X@{}}
+\toprule
+视图 & 源文件 & 内容 \\
+\midrule
+Home 视图 & \path{home_view.py} & 启动主页，含 table、setting 两个导航按钮 \\
+Table 视图 & \path{table_overlay_view.py} & 桌面场景叠加层，含 resume table、table options、return home 按钮及亮度/音量两个滑块 \\
+Setting 视图 & \path{setting_view.py} & 全局设置页，含光标缩放、光标透明度、亮度、音量四个滑块 \\
+Calibration 视图 & \path{calibration_view.py} & 光标标定页，支持对 cursor scale x/y 和 cursor offset x/y 四项参数的键盘精调，并实时预览标定效果 \\
+\bottomrule
+\end{tabularx}
+```
 
 其中，`table` 代表桌面的真实交互场景；所有可交互控件（按钮、滑块）均实现了三态视觉样式（idle / hover / pressed 或 idle / hover / active）提供视觉反馈。
 
