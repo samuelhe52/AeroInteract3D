@@ -1,0 +1,232 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{ctreport}[2026/04/22 AeroInteract3D report template]
+
+\newif\ifctreportannotated
+\ctreportannotatedfalse
+\DeclareOption{annotated}{\ctreportannotatedtrue}
+\DeclareOption{clean}{\ctreportannotatedfalse}
+\ProcessOptions\relax
+
+\RequirePackage{fontspec}
+\RequirePackage{geometry}
+\RequirePackage{indentfirst}
+\RequirePackage{setspace}
+\RequirePackage{xcolor}
+\RequirePackage{titlesec}
+\RequirePackage{fancyhdr}
+\RequirePackage{array}
+\RequirePackage{booktabs}
+\setlength{\heavyrulewidth}{1.5pt}
+\setlength{\lightrulewidth}{0.75pt}
+\setlength{\cmidrulewidth}{0.75pt}
+\RequirePackage{tabularx}
+\RequirePackage{longtable}
+\RequirePackage{calc}
+\RequirePackage{tikz}
+\RequirePackage{pgfplots}
+\RequirePackage{enumitem}
+\RequirePackage{needspace}
+\RequirePackage{caption}
+\RequirePackage{etoolbox}
+\RequirePackage{amsmath,amssymb}
+\RequirePackage{gbt7714}
+\RequirePackage[hidelinks,unicode]{hyperref}
+
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{arrows.meta,fit,backgrounds}
+
+\geometry{
+  left=3.17cm,
+  right=3.17cm,
+  top=2.54cm,
+  bottom=2.54cm,
+  headsep=0.45cm,
+  footskip=0.8cm
+}
+
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0pt}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.12}
+\clubpenalty=10000
+\widowpenalty=10000
+\displaywidowpenalty=10000
+\raggedbottom
+
+\setCJKmainfont[
+  Path=/Users/samuelhe/Library/Fonts/
+  ,AutoFakeBold=3
+]{SimSun.ttf}
+\setCJKsansfont[
+  Path=/Users/samuelhe/Library/Fonts/
+]{黑体.ttf}
+\setCJKmonofont[
+  Path=/Users/samuelhe/Library/Fonts/
+  ,Scale=0.92
+]{SimSun.ttf}
+\IfFontExistsTF{Times New Roman}{\setmainfont{Times New Roman}}{\setmainfont{TeX Gyre Termes}}
+\IfFontExistsTF{JetBrains Mono}{\setmonofont[Scale=0.92,BoldFont=JetBrains Mono]{JetBrains Mono}}{\setmonofont[Scale=0.92,BoldFont=TeX Gyre Cursor]{TeX Gyre Cursor}}
+
+\newCJKfontfamily\SongStyle[
+  Path=/Users/samuelhe/Library/Fonts/
+  ,AutoFakeBold=2.5
+]{SimSun.ttf}
+\newCJKfontfamily\HeiStyle[
+  Path=/Users/samuelhe/Library/Fonts/
+  ,BoldFont=黑体.ttf
+]{黑体.ttf}
+\newCJKfontfamily\KaiStyle[
+  Path=/Users/samuelhe/Library/Fonts/
+]{楷体.ttf}
+\newCJKfontfamily\FangStyle[
+  Path=/Users/samuelhe/Library/Fonts/
+]{FangSong.ttf}
+
+\DeclareCaptionFont{reportcaptionfont}{\SongStyle\zihao{5}}
+\captionsetup{
+  font=reportcaptionfont,
+  labelfont=reportcaptionfont,
+  textfont=reportcaptionfont,
+  format=plain,
+  justification=centering,
+  singlelinecheck=true
+}
+\captionsetup[figure]{position=bottom}
+\captionsetup[table]{position=top}
+\BeforeBeginEnvironment{figure}{\setlength{\abovecaptionskip}{6pt}\setlength{\belowcaptionskip}{12pt}}
+\BeforeBeginEnvironment{table}{\setlength{\abovecaptionskip}{12pt}\setlength{\belowcaptionskip}{6pt}}
+\BeforeBeginEnvironment{longtable}{\setlength{\abovecaptionskip}{12pt}\setlength{\belowcaptionskip}{6pt}}
+
+\AtBeginEnvironment{tabular}{\SongStyle\zihao{5}\renewcommand{\arraystretch}{1.45}}
+\AtBeginEnvironment{tabularx}{\SongStyle\zihao{5}\renewcommand{\arraystretch}{1.45}}
+\AtBeginEnvironment{longtable}{\SongStyle\zihao{5}\renewcommand{\arraystretch}{1.45}}
+\AtBeginEnvironment{Shaded}{\footnotesize}
+\AtBeginEnvironment{Verbatim}{\footnotesize}
+\AtBeginEnvironment{Highlighting}{\footnotesize}
+
+\newcommand{\specnote}[1]{%
+  \ifctreportannotated
+    {\color{red}\HeiStyle\zihao{5} #1}%
+  \fi
+}
+
+\newcommand{\ReportHeaderText}{计算机视觉项目课结题报告}
+\newcommand{\ReportTitle}{未命名报告}
+\newcommand{\ReportAuthors}{作者一，作者二，作者三}
+\newcommand{\ReportAffiliation}{第十组}
+\newcommand{\ReportAbstract}{请在此处填写摘要。}
+\newcommand{\ReportKeywords}{关键词1；关键词2；关键词3}
+\newcommand{\ReportAuthorNotice}{各分组请按贡献程度排名，第一名为答辩主讲人}
+
+\newcommand{\CitationNotice}{本刊正文中参考文献采用顺序编码制，在引文处按引用文献在论文中出现的先后顺序连续编码，不能遗漏或颠倒。序号置于方括号内，排列在文中相应位置右上角；同一文献在文中被反复引用者，均用第一次出现的序号标示。}
+\newcommand{\ForeignRefNotice}{外文文献一律姓前名后，作者不超过三位时全部列出，超过三位列前三位，后加 et al.}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[C]{\SongStyle\zihao{5} \ReportHeaderText}
+\fancyfoot[C]{\SongStyle\zihao{-5} \thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+\setlength{\headheight}{17pt}
+
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{3}
+
+\renewcommand{\thesection}{\zhnum{section}}
+\renewcommand{\thesubsection}{\arabic{section}.\arabic{subsection}}
+\renewcommand{\thesubsubsection}{\arabic{section}.\arabic{subsection}.\arabic{subsubsection}}
+\renewcommand{\thefigure}{\arabic{figure}}
+\renewcommand{\thetable}{\arabic{table}}
+\renewcommand{\theequation}{\arabic{equation}}
+
+\titleformat{\section}[block]
+  {\Needspace{4\baselineskip}\centering\HeiStyle\zihao{-3}}
+  {\thesection、}
+  {0.5em}
+  {}
+\titleformat{\subsection}[block]
+  {\Needspace{3\baselineskip}\HeiStyle\zihao{4}}
+  {\thesubsection}
+  {0.5em}
+  {}
+\titleformat{\subsubsection}[block]
+  {\Needspace{3\baselineskip}\HeiStyle\zihao{-4}}
+  {\thesubsubsection}
+  {0.5em}
+  {}
+
+\titlespacing*{\section}{0pt}{24pt}{18pt}
+\titlespacing*{\subsection}{0pt}{18pt}{6pt}
+\titlespacing*{\subsubsection}{0pt}{12pt}{6pt}
+
+\makeatletter
+\def\bibsection{%
+  \begin{center}
+    {\HeiStyle\zihao{-4} 参考文献\par}
+  \end{center}
+}
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+
+\AtBeginDocument{%
+  \zihao{-4}\SongStyle
+  \setstretch{1.67}
+  \pagestyle{fancy}
+  \thispagestyle{fancy}
+}
+
+\pdfstringdefDisableCommands{%
+  \def\specnote#1{}%
+  \def\Needspace#1{}%
+  \def\HeiStyle{}%
+  \def\KaiStyle{}%
+  \def\FangStyle{}%
+  \def\SongStyle{}%
+  \def\zihao#1{}%
+  \def\zhnum#1{}%
+}
+
+\newcommand{\makecomputingreporttitle}{%
+  \begingroup
+  \setstretch{1.15}
+  \begin{center}
+    {\HeiStyle\zihao{-3} \ReportTitle \par}
+    \vspace{0.65\baselineskip}
+    {\FangStyle\zihao{4} \ReportAuthors \par}
+    \vspace{0.30\baselineskip}
+    {\KaiStyle\zihao{5} （\ReportAffiliation） \par}
+  \end{center}
+  \endgroup
+
+  \vspace{0.2\baselineskip}
+  \noindent{\HeiStyle\zihao{-4} 摘要：}{\SongStyle\zihao{-4} \ReportAbstract}\par
+  \noindent{\HeiStyle\zihao{-4} 关键词：}{\SongStyle\zihao{-4} \ReportKeywords}\par
+  \vspace{0.6\baselineskip}
+}
+
+\newcommand{\reportblankline}{%
+  \ifctreportannotated
+    \begin{center}
+      \specnote{（空一行）}
+    \end{center}
+  \fi
+}
+
+\newcommand{\reportcitationnotice}{%
+  \ifctreportannotated
+    \vspace{1.1\baselineskip}
+    \noindent{\HeiStyle\zihao{5}\color{red} 特别注意：\CitationNotice}
+  \fi
+}
+
+\newcommand{\reportbibliography}[1]{%
+  {\zihao{5}\SongStyle
+  \bibliographystyle{gbt7714-numerical}
+  \bibliography{#1}
+  }
+
+  \ifctreportannotated
+    \vspace{1.2\baselineskip}
+    \noindent{\HeiStyle\zihao{5}\color{red} 特别注意：\ForeignRefNotice}
+  \fi
+}

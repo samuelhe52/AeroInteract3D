@@ -1,46 +1,25 @@
 ---
-papersize: a4
-fontsize: 12pt
-linestretch: 1.3
-geometry: margin=2cm
 lang: zh-CN
 numbersections: true
-colorlinks: true
-linkcolor: blue
-urlcolor: blue
-mainfont: "Source Han Serif SC"
-CJKmainfont: "Source Han Serif SC"
+toc: true
+toc-depth: 3
+title: AeroInteract3D：基于普通摄像头的 3D 手势交互系统
+author:
+  - 何子谦
+  - 徐逸博
+  - 陈金龙
+  - 夏凡程
+affiliation: 第十组
+abstract: >
+  AeroInteract3D 是一个基于普通单目摄像头的实时三维手势交互原型系统，无需深度相机或专用穿戴设备即可实现桌面场景下的自然手势操控。针对单目视觉手势交互中检测抖动、深度信息缺失、短时遮挡及模块耦合等核心难点，系统设计了分层鲁棒性策略：在视觉感知层，融合手掌尺度与局部深度线索实现无深度传感器的三维定位，并引入基于模糊感知的动态坐标平滑、速度外推与模板匹配相结合的短时遮挡 fallback、以及概率式 pinch 状态机，将不稳定的视觉观测转化为可靠的交互信号；在语义层，通过坐标映射与对象状态管理实现抓取、平移、旋转及双手缩放等完整交互语义；在渲染层，构建多视图手势驱动 UI 与三维场景，提供实时的虚拟手视觉反馈。系统在 1080p 输入下达到 25–30 FPS 的流畅运行帧率，并已在 macOS 与 Windows 多平台上完成功能验证。整体形成了一套可运行、可测试、可扩展的计算机视觉课程设计原型，验证了基于低成本视觉输入驱动实时三维交互的可行性。
+keywords:
+  - 3D 手势交互
+  - MediaPipe
+  - Panda3D
+  - 实时系统
+  - 计算机视觉
+reportheader: 计算机视觉项目式课程结题报告
 ---
-
-\pagenumbering{gobble}
-\begin{titlepage}
-\centering
-\vspace*{\fill}
-{\LARGE \textbf{AeroInteract3D：}\\\textbf{基于普通摄像头的 3D 手势交互系统}\par}
-\vspace{0.25cm}
-{\large 第十组\par}
-\vspace{0.10cm}
-{\large 何子谦、徐逸博、陈金龙、夏凡程\par}
-\vspace{0.15cm}
-{\large 日期：\today\par}
-\vspace*{\fill}
-\end{titlepage}
-
-\clearpage
-\tableofcontents
-
-\clearpage
-\pagenumbering{arabic}
-\counterwithin{figure}{section}
-\counterwithin{table}{section}
-
-# 摘要
-
-AeroInteract3D 是一个基于单目摄像头的实时 3D 手势交互原型系统，无需深度相机等专用设备，即可完成"手部视觉感知 → 交互语义解释 → 三维场景响应"的完整链路，实现桌面场景下的抓取、移动、旋转与可视化反馈。
-
-系统以 Python 开发，用 MediaPipe Hand Landmarker 做手部关键点检测，用 Panda3D 做渲染，通过 `GesturePacket` 与 `SceneCommand` 两个共享契约将 gesture、bridge、rendering 三个模块解耦。系统支持主手与副手双槽位输入，已实现主手优先的双手实时感知链路。
-
-核心成果包括：时序稳定与 pinch 概率状态机（解决检测抖动和短时遮挡问题）、交互语义收敛与坐标映射（Bridge 层）、幂等命令消费（Rendering 层）。整个系统已形成可运行、可测试、可扩展的课程设计原型。
 
 # 项目背景与意义
 
@@ -88,7 +67,7 @@ AeroInteract3D 是一个基于单目摄像头的实时 3D 手势交互原型系�
 系统采用"检测驱动、契约传输、命令消费"的三段式流水线，三个核心模块通过共享契约 `GesturePacket` 与 `SceneCommand` 解耦，如图 \ref{fig:system-arch} 所示。
 
 ```{=latex}
-\begin{figure}[htbp]
+\noindent\begin{minipage}{\linewidth}
 \centering
 \begin{tikzpicture}[
   >=Stealth,
@@ -162,9 +141,9 @@ AeroInteract3D 是一个基于单目摄像头的实时 3D 手势交互原型系�
 \draw[arr] (rs.south)   -- (p3d.north);
 
 \end{tikzpicture}
-\caption{系统总体架构与数据流}
+\captionof{figure}{系统总体架构与数据流}
 \label{fig:system-arch}
-\end{figure}
+\end{minipage}
 ```
 
 ## 共享契约
