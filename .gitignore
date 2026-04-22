@@ -33,3 +33,4 @@ __pycache__/
 
 # Local report/runtime scratch space
 tmp/
+.DS_Store
