@@ -182,102 +182,6 @@ reportheader: 计算机视觉项目式课程结题报告
 
 通过共享契约，模块之间实现了松耦合：Gesture 只需保证输出满足 `GesturePacket` 的字段要求，Bridge 只需保证输出满足 `SceneCommand` 的字段要求，渲染模块则只需根据命令类型和 payload 结构进行处理，而不需要关心上游的具体实现细节。
 
-## Bridge 模块
-
-### 模块职责
-
-Bridge 模块是系统的语义转换层，负责把 Gesture 模块输出的 `GesturePacket` 转化为渲染模块可消费的 `SceneCommand`。其核心职责包括：
-
-- 校验 `GesturePacket` 合法性并过滤异常输入
-- 维护一张对象交互表，对每个对象记录交互状态（`idle`、`pending_grab`、`grabbed`、`rotating`）
-- 将 `camera_norm` 输入映射到 `world_norm` 场景坐标
-- 输出有序 `SceneCommand` 序列
-
-Gesture 只负责给出稳定的手势状态，Bridge 决定对象是否应该被悬停、抓取、旋转或缩放。
-
-### 交互规则
-
-Bridge 的交互规则设计如下：
-
-- 手必须先进入对象附近区域（`pending_grab`），pinch 后才会进入抓取状态，避免误触。
-- 单独设置旋转模式，只有在旋转模式激活时才输出设置物体姿态的命令，避免物体移动和旋转命令冲突。
-- 画面中有两只手时，可以实现缩放物体效果：当两只手同时悬停在同一对象上并进入`pinched` 状态时，双手的移动会被转换为对物体的缩放命令。
-
-### 坐标映射与场景约束
-
-Bridge 模块负责把 Gesture 模块输出的 `camera_norm` 坐标映射到渲染模块使用的 `world_norm` 坐标。映射过程中会进行：
-
-- 方向修正：根据输入视频是否镜像，对画面做横向翻转；相机深度方向转场景深度方向。
-- 尺度约束和场景边界控制：输出限制在 `[-1, 1]` world_norm 范围内。
-
-以下代码片段展示了坐标映射的核心逻辑：
-
-```python
-unclipped_world_x = -x if self._input_mirrored else x  # 镜像输入横向翻转
-unclipped_world_y = y
-unclipped_world_z = -z  # 相机深度转场景深度方向
-
-final_x = max(-1.0, min(1.0, unclipped_world_x))
-final_y = max(-1.0, min(1.0, unclipped_world_y))
-final_z = max(-1.0, min(1.0, unclipped_world_z))
-```
-
-在拖拽对象时还会结合桌面高度和平面约束，避免对象穿透桌面：使用 `_constrain_object_to_table` 把对象中心的 y 坐标限定在桌面以上，赋予物体真实的物理性质。
-
-```python
-def _constrain_object_to_table(self, world_position, object_state):
-    minimum_center_y = TABLE_SURFACE_Y + object_state.half_height
-    if world_position.y >= minimum_center_y:
-        return world_position, False
-    return Vec3(world_position.x, minimum_center_y, world_position.z), True
-```
-
-### 生成 `SceneCommand`
-
-| 命令类型            | 用途                                                              |
-| ------------------- | ----------------------------------------------------------------- |
-| `init_scene`        | 初始化场景                                                        |
-| `set_hand_pose`     | 同步虚拟手姿态                                                    |
-| `set_object_state`  | 切换对象交互状态（`idle`、`pending_grab`、`grabbed`、`rotating`） |
-| `set_object_pose`   | 更新对象的位置、姿态或缩放状态                                    |
-| `reset_interaction` | 输入无效或 Gesture 模块异常情况下重置物体状态                     |
-
-Bridge 还内置了桌面场景对象管理能力，支持导入 3D 模型，可以对多对象场景进行组织和管理。Bridge 同时承担输入包过滤与异常兜底职责：对于重复包、过期帧、契约不合法数据或持续跟踪丢失情况，模块不会继续发出不安全的姿态命令，而是根据情况忽略、拒绝或下发 `reset_interaction`。
-
-### 手部可视化命令
-
-Bridge 不仅负责对象控制，还负责输出手部可视化命令。当 `GesturePacket` 中的 `tracking_state` 是 `tracked` 且 `confidence` 超过设定阈值时，Bridge 会把食指尖、拇指尖、腕部和交互锚点的坐标转换为世界坐标，并通过 `set_hand_pose` 命令发送给渲染模块，供其在场景中渲染虚拟手，使用户能够看到手部位置和 pinch 状态的实时反馈。
-
-```python
-if packet.tracking_state == "tracked" and packet.confidence >= BRIDGE_MIN_TRACKING_CONFIDENCE:
-    index_tip_world = self._camera_to_world_position(packet.index_tip)
-    thumb_tip_world = self._camera_to_world_position(packet.thumb_tip)
-    wrist_world = self._camera_to_world_position(packet.wrist)
-    anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
-    thumb_base_world, index_base_world = self._finger_base_points(
-        wrist_world, anchor_world, thumb_tip_world, index_tip_world
-    )
-    payload["visible"] = True
-    payload["points"] = {
-        "wrist": vec3_payload(wrist_world),
-        "thumb_tip": vec3_payload(thumb_tip_world),
-        "index_tip": vec3_payload(index_tip_world),
-        "anchor": vec3_payload(anchor_world),
-        "thumb_base": vec3_payload(thumb_base_world),
-        "index_base": vec3_payload(index_base_world),
-    }
-```
-
-### 双手缩放
-
-当主手和副手同时处于 `pinched` 状态且至少有一只手悬停在可交互对象上时，Bridge 层基于两只手的捏合锚点间距变化，计算缩放比例，并通过 `set_object_pose` 命令更新对象的 `scale` 字段，实现跟手的缩放效果。缩放操作期间，对象平移与旋转被暂停，以避免命令冲突。
-
-### 典型工程问题
-
-**旋转和平移冲突**：抓取、旋转和平移可能被同一帧输入同时触发，导致对象既被拖动又被旋转的冲突行为。Bridge 层通过设置不同模式，将两类交互分开处理，旋转模式只输出姿态命令，平移模式只输出位置命令。
-
-**过期命令与状态残留**：手已离开视野但对象仍停留在抓取状态，或上一帧命令延迟到达后覆盖当前状态。渲染端通过命令去重、过期帧忽略和 `reset_interaction` 恢复机制，把这类问题控制在安全范围内。
-
 ## Gesture 模块
 
 ### 模块职责
@@ -476,6 +380,160 @@ release_allowed = self._allow_release(
 - **短时跟踪丢失 fallback**：检测中断时用上一帧速度外推位置，按缺失帧数逐步衰减
 - **pinch 状态机**：pinch 四态状态机，进入和退出有独立确认条件，消除状态抖动
 
+## Bridge 模块
+
+### 模块职责
+
+Bridge 模块是系统的语义转换层，负责把 Gesture 模块输出的 `GesturePacket` 转化为渲染模块可消费的 `SceneCommand`。其核心职责包括：
+
+- 校验 `GesturePacket` 合法性并过滤异常输入
+- 维护一张对象交互表，对每个对象记录交互状态（`idle`、`pending_grab`、`grabbed`、`rotating`）
+- 将 `camera_norm` 输入映射到 `world_norm` 场景坐标
+- 输出有序 `SceneCommand` 序列
+
+Gesture 只负责给出稳定的手势状态，Bridge 决定对象是否应该被悬停、抓取、旋转或缩放。
+
+### 核心处理链路
+
+```{=latex}
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  >=Stealth,
+  every node/.style={font=\small},
+  pipeblock/.style={
+    draw, rounded corners=3pt,
+    minimum width=3.0cm, minimum height=1.0cm,
+    text width=2.7cm, align=center, inner sep=4pt,
+    fill=teal!20, draw=teal!70!black
+  },
+  fallblock/.style={
+    draw, dashed, rounded corners=3pt,
+    minimum width=3.0cm, minimum height=1.0cm,
+    text width=2.7cm, align=center, inner sep=4pt,
+    fill=teal!10, draw=teal!50!black
+  },
+  outputblock/.style={
+    draw, rounded corners=3pt,
+    minimum width=3.0cm, minimum height=1.0cm,
+    text width=2.7cm, align=center, inner sep=4pt,
+    fill=orange!20, draw=orange!70!black
+  },
+  lbl/.style={font=\tiny\itshape},
+  arr/.style={->, thick},
+]
+
+\node[pipeblock] (input)    at (0,   0)    {接收\\GesturePacket};
+\node[pipeblock] (validate) at (3.8, 0)    {数据包校验\\（重复·过期·契约）};
+\node[fallblock] (reject)   at (7.8,-2.2)  {拒绝/返回空};
+
+\node[pipeblock]   (handcmd) at (0,   -4.8) {生成手部姿态命令\\（set\_hand\_pose）};
+\node[pipeblock]   (fsm)     at (3.8, -4.8) {状态机推进\\（悬停·抓取·旋转）};
+\node[pipeblock]   (map)     at (7.6, -4.8) {坐标映射\\与场景约束};
+\node[outputblock] (output)  at (11.4,-4.8) {SceneCommand\\序列输出};
+
+\draw[arr] (input)   -- (validate);
+\draw[arr] (handcmd) -- (fsm);
+\draw[arr] (fsm)     -- (map);
+\draw[arr] (map)     -- (output);
+
+\draw[arr] (validate.south) -- ++(0,-0.45) -| (handcmd.north);
+\draw[arr] (validate.south) -- ++(0,-0.45) -| (reject.north);
+
+\node[lbl, above] at (2.0, -1.0) {有效};
+\node[lbl, above] at (5.9, -1.0) {无效};
+
+\end{tikzpicture}
+\caption{Bridge 模块核心处理链路}
+\label{fig:bridge-pipeline}
+\end{figure}
+```
+
+Bridge 模块的处理链路如图 \ref{fig:bridge-pipeline} 所示。每帧接收到 `GesturePacket` 后，先进行合法性校验；校验通过后生成手部可视化命令，再进入状态机处理交互语义，最终输出有序的 `SceneCommand` 序列。
+
+### 交互规则
+
+Bridge 的交互规则设计如下：
+
+- 手必须先进入对象附近区域（`pending_grab`），pinch 后才会进入抓取状态，避免误触。
+- 单独设置旋转模式，只有在旋转模式激活时才输出设置物体姿态的命令，避免物体移动和旋转命令冲突。
+- 画面中有两只手时，可以实现缩放物体效果：当两只手同时悬停在同一对象上并进入`pinched` 状态时，双手的移动会被转换为对物体的缩放命令。
+
+### 坐标映射与场景约束
+
+Bridge 模块负责把 Gesture 模块输出的 `camera_norm` 坐标映射到渲染模块使用的 `world_norm` 坐标。映射过程中会进行：
+
+- 方向修正：根据输入视频是否镜像，对画面做横向翻转；相机深度方向转场景深度方向。
+- 尺度约束和场景边界控制：输出限制在 `[-1, 1]` world_norm 范围内。
+
+以下代码片段展示了坐标映射的核心逻辑：
+
+```python
+unclipped_world_x = -x if self._input_mirrored else x  # 镜像输入横向翻转
+unclipped_world_y = y
+unclipped_world_z = -z  # 相机深度转场景深度方向
+
+final_x = max(-1.0, min(1.0, unclipped_world_x))
+final_y = max(-1.0, min(1.0, unclipped_world_y))
+final_z = max(-1.0, min(1.0, unclipped_world_z))
+```
+
+在拖拽对象时还会结合桌面高度和平面约束，避免对象穿透桌面：使用 `_constrain_object_to_table` 把对象中心的 y 坐标限定在桌面以上，赋予物体真实的物理性质。
+
+```python
+def _constrain_object_to_table(self, world_position, object_state):
+    minimum_center_y = TABLE_SURFACE_Y + object_state.half_height
+    if world_position.y >= minimum_center_y:
+        return world_position, False
+    return Vec3(world_position.x, minimum_center_y, world_position.z), True
+```
+
+### 生成 `SceneCommand`
+
+| 命令类型            | 用途                                                              |
+| ------------------- | ----------------------------------------------------------------- |
+| `init_scene`        | 初始化场景                                                        |
+| `set_hand_pose`     | 同步虚拟手姿态                                                    |
+| `set_object_state`  | 切换对象交互状态（`idle`、`pending_grab`、`grabbed`、`rotating`） |
+| `set_object_pose`   | 更新对象的位置、姿态或缩放状态                                    |
+| `reset_interaction` | 输入无效或 Gesture 模块异常情况下重置物体状态                     |
+
+Bridge 还内置了桌面场景对象管理能力，支持导入 3D 模型，可以对多对象场景进行组织和管理。Bridge 同时承担输入包过滤与异常兜底职责：对于重复包、过期帧、契约不合法数据或持续跟踪丢失情况，模块不会继续发出不安全的姿态命令，而是根据情况忽略、拒绝或下发 `reset_interaction`。
+
+### 手部可视化命令
+
+Bridge 不仅负责对象控制，还负责输出手部可视化命令。当 `GesturePacket` 中的 `tracking_state` 是 `tracked` 且 `confidence` 超过设定阈值时，Bridge 会把食指尖、拇指尖、腕部和交互锚点的坐标转换为世界坐标，并通过 `set_hand_pose` 命令发送给渲染模块，供其在场景中渲染虚拟手，使用户能够看到手部位置和 pinch 状态的实时反馈。
+
+```python
+if packet.tracking_state == "tracked" and packet.confidence >= BRIDGE_MIN_TRACKING_CONFIDENCE:
+    index_tip_world = self._camera_to_world_position(packet.index_tip)
+    thumb_tip_world = self._camera_to_world_position(packet.thumb_tip)
+    wrist_world = self._camera_to_world_position(packet.wrist)
+    anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
+    thumb_base_world, index_base_world = self._finger_base_points(
+        wrist_world, anchor_world, thumb_tip_world, index_tip_world
+    )
+    payload["visible"] = True
+    payload["points"] = {
+        "wrist": vec3_payload(wrist_world),
+        "thumb_tip": vec3_payload(thumb_tip_world),
+        "index_tip": vec3_payload(index_tip_world),
+        "anchor": vec3_payload(anchor_world),
+        "thumb_base": vec3_payload(thumb_base_world),
+        "index_base": vec3_payload(index_base_world),
+    }
+```
+
+### 双手缩放
+
+当主手和副手同时处于 `pinched` 状态且至少有一只手悬停在可交互对象上时，Bridge 层基于两只手的捏合锚点间距变化，计算缩放比例，并通过 `set_object_pose` 命令更新对象的 `scale` 字段，实现跟手的缩放效果。缩放操作期间，对象平移与旋转被暂停，以避免命令冲突。
+
+### 典型工程问题
+
+**旋转和平移冲突**：抓取、旋转和平移可能被同一帧输入同时触发，导致对象既被拖动又被旋转的冲突行为。Bridge 层通过设置不同模式，将两类交互分开处理，旋转模式只输出姿态命令，平移模式只输出位置命令。
+
+**过期命令与状态残留**：手已离开视野但对象仍停留在抓取状态，或上一帧命令延迟到达后覆盖当前状态。渲染端通过命令去重、过期帧忽略和 `reset_interaction` 恢复机制，把这类问题控制在安全范围内。
+
 ## Rendering 模块
 
 ### 模块职责
@@ -488,6 +546,64 @@ Rendering 模块是系统的输出端，负责把 Bridge 模块输出的 `SceneC
 - 实现手部可视化，提供视觉反馈
 - 提供调试数据面板、摄像头预览
 - 实现基本 UI 交互元素，验证可行性
+
+### 核心渲染链路
+
+```{=latex}
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  >=Stealth,
+  every node/.style={font=\small},
+  pipeblock/.style={
+    draw, rounded corners=3pt,
+    minimum width=3.0cm, minimum height=1.0cm,
+    text width=2.7cm, align=center, inner sep=4pt,
+    fill=teal!20, draw=teal!70!black
+  },
+  fallblock/.style={
+    draw, dashed, rounded corners=3pt,
+    minimum width=3.0cm, minimum height=1.0cm,
+    text width=2.7cm, align=center, inner sep=4pt,
+    fill=teal!10, draw=teal!50!black
+  },
+  outputblock/.style={
+    draw, rounded corners=3pt,
+    minimum width=3.0cm, minimum height=1.0cm,
+    text width=2.7cm, align=center, inner sep=4pt,
+    fill=orange!20, draw=orange!70!black
+  },
+  lbl/.style={font=\tiny\itshape},
+  arr/.style={->, thick},
+]
+
+\node[pipeblock] (input)    at (0,   0)    {接收\\SceneCommand};
+\node[pipeblock] (validate) at (3.8, 0)    {命令校验\\（重复·过期·契约）};
+\node[fallblock] (reject)   at (7.8,-2.2)  {拒绝/跳过};
+
+\node[pipeblock]   (dispatch) at (0,   -4.8) {命令分发\\（按类型路由）};
+\node[pipeblock]   (scene)    at (3.8, -4.8) {场景对象与虚拟手\\姿态更新};
+\node[pipeblock]   (ui)       at (7.6, -4.8) {UI 视图与调试面板\\状态更新};
+\node[outputblock] (output)   at (11.4,-4.8) {可视化输出\\（窗口/场景）};
+
+\draw[arr] (input)    -- (validate);
+\draw[arr] (dispatch) -- (scene);
+\draw[arr] (scene)    -- (ui);
+\draw[arr] (ui)       -- (output);
+
+\draw[arr] (validate.south) -- ++(0,-0.45) -| (dispatch.north);
+\draw[arr] (validate.south) -- ++(0,-0.45) -| (reject.north);
+
+\node[lbl, above] at (2.0, -1.0) {有效};
+\node[lbl, above] at (5.9, -1.0) {无效};
+
+\end{tikzpicture}
+\caption{Rendering 模块核心渲染链路}
+\label{fig:rendering-pipeline}
+\end{figure}
+```
+
+Rendering 模块的处理链路如图 \ref{fig:rendering-pipeline} 所示。每帧接收到 `SceneCommand` 后，先进行合法性校验与命令去重；校验通过后根据命令类型分发到独立处理入口，更新 Panda3D 场景、UI 视图与调试面板，最终输出可视化结果。
 
 ### 命令消费与场景管理
 
