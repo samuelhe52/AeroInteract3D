@@ -8,9 +8,10 @@ import pytest
 
 from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.rendering.debug.data_panel import DataPanelManager
-from src.rendering.rendering_core import RenderingCoreManager
+from src.rendering.rendering_core import RenderingCoreManager, TABLE_BACKGROUND_COLOR
 from src.rendering import service as rendering_service
 from src.rendering.service import ObjectInitialState, RenderingServiceImpl
+from src.rendering.ui.home_view import HomeUIView
 from src.rendering.ui.input_adapter import UIGestureInputAdapter
 from src.rendering.ui.interaction import UIButtonBounds, UIButtonInteractionController
 from src.rendering.ui.state import UIInputState, UISettingsState
@@ -415,6 +416,8 @@ class FakeHomeView:
         self.cursor_state = None
         self.last_pinch_state = None
         self.last_settings = None
+        self.animation_updates = 0
+        self.last_animation_time = None
 
     def set_visible(self, visible: bool) -> None:
         self.visible = visible
@@ -427,6 +430,10 @@ class FakeHomeView:
     def update_cursor(self, state, pinch_state=None) -> None:
         self.cursor_state = state
         self.last_pinch_state = pinch_state
+
+    def update_animation(self, current_time=None) -> None:
+        self.animation_updates += 1
+        self.last_animation_time = current_time
 
     def set_ui_settings(self, settings) -> None:
         self.last_settings = (settings.cursor_scale, settings.cursor_opacity)
@@ -1591,6 +1598,7 @@ def test_rendering_step_updates_home_view_layout_for_window_size_changes(monkeyp
 
     assert service._home_view.last_window_size == (1280, 720)
     assert service._home_view.layout_updates >= 1
+    assert service._home_view.animation_updates >= 1
 
 
 def test_ui_gesture_input_adapter_maps_midpoint_to_pixels() -> None:
@@ -1864,6 +1872,37 @@ def test_rendering_menu_opens_despite_cached_grabbed_object_state(monkeypatch) -
     assert service.active_table_overlay == "menu"
 
 
+def test_rendering_menu_hold_progress_survives_cursor_drift(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    class FakeMenuHoldPanel(FakeVisibilityController):
+        def __init__(self) -> None:
+            super().__init__()
+            self.progress_updates: list[tuple[int, bool, bool]] = []
+
+        def update_menu_hold_progress(self, hold_ms: int, *, candidate_active: bool, overlay_active: bool) -> None:
+            self.progress_updates.append((hold_ms, candidate_active, overlay_active))
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+    service.set_active_view("table")
+    service._data_panel = FakeMenuHoldPanel()
+
+    service.update_gesture_data(
+        make_packet_with_menu_candidate(frame_id=1, timestamp_ms=1_000, cursor=(0.24, 0.18), mode_active=True)
+    )
+    service.update_gesture_data(
+        make_packet_with_menu_candidate(frame_id=2, timestamp_ms=2_500, cursor=(0.78, 0.72), mode_active=True)
+    )
+    service.update_gesture_data(
+        make_packet_with_menu_candidate(frame_id=3, timestamp_ms=4_000, cursor=(0.82, 0.76), mode_active=True)
+    )
+
+    assert service.active_table_overlay == "menu"
+    assert any(hold_ms >= 1_500 and candidate_active for hold_ms, candidate_active, _ in service._data_panel.progress_updates)
+    assert service._data_panel.progress_updates[-1][2] is True
+
+
 def test_rendering_opening_overlay_clears_object_interaction_states(monkeypatch) -> None:
     patch_ui_views(monkeypatch)
 
@@ -2110,7 +2149,7 @@ def test_rendering_setting_view_receives_object_visibility_summary(monkeypatch, 
     assert service._setting_view.object_visibility_summary == (2, 1)
 
 
-def test_rendering_menu_gate_ignores_rotation_mode_active(monkeypatch) -> None:
+def test_rendering_menu_gate_accepts_rotation_mode_flag_when_grab_is_held(monkeypatch) -> None:
     patch_ui_views(monkeypatch)
 
     service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
@@ -2124,7 +2163,7 @@ def test_rendering_menu_gate_ignores_rotation_mode_active(monkeypatch) -> None:
         make_packet_with_menu_candidate(frame_id=2, timestamp_ms=5_000, grab_detected=True, mode_active=True)
     )
 
-    assert service.active_table_overlay == "none"
+    assert service.active_table_overlay == "menu"
 
 
 def test_rendering_menu_gate_respects_reopen_cooldown(monkeypatch) -> None:
@@ -2143,6 +2182,24 @@ def test_rendering_menu_gate_respects_reopen_cooldown(monkeypatch) -> None:
     service.update_gesture_data(make_packet_with_menu_candidate(frame_id=4, timestamp_ms=7_050))
 
     assert service.active_table_overlay == "none"
+
+
+def test_home_view_layout_metrics_keep_title_and_buttons_visible_in_small_window() -> None:
+    metrics = HomeUIView.compute_layout_metrics((480, 270))
+
+    width = metrics["width"]
+    height = metrics["height"]
+    button_height = metrics["button_height"]
+    button_gap = metrics["button_gap"]
+    first_button_top_px = metrics["first_button_top_px"]
+    stack_height = button_height * len(HomeUIView.BUTTON_LABELS) + button_gap * (len(HomeUIView.BUTTON_LABELS) - 1)
+    title_baseline_px = metrics["title_margin_top"] + metrics["title_scale"] * 0.45
+
+    assert 0.0 <= title_baseline_px <= height
+    assert 0.0 <= first_button_top_px <= height - stack_height
+    assert first_button_top_px >= metrics["title_margin_top"] + metrics["title_scale"] * 1.9
+    assert metrics["button_margin_left"] + metrics["button_width"] <= width
+    assert first_button_top_px + stack_height <= height
 
 
 def test_rendering_home_button_callback_switches_view(monkeypatch) -> None:
@@ -2201,7 +2258,14 @@ def test_rendering_brightness_and_volume_apply_to_window_roots(monkeypatch) -> N
 
     assert service._scene_root.color_scale == pytest.approx((0.4, 0.4, 0.4, 1.0))
     assert service._window_adapter.get_base().pixel2d.color_scale == pytest.approx((0.4, 0.4, 0.4, 1.0))
-    assert service._window_adapter.get_base().background_color == pytest.approx((0.4, 0.4, 0.4, 1.0))
+    assert service._window_adapter.get_base().background_color == pytest.approx(
+        (
+            TABLE_BACKGROUND_COLOR[0] * 0.4,
+            TABLE_BACKGROUND_COLOR[1] * 0.4,
+            TABLE_BACKGROUND_COLOR[2] * 0.4,
+            1.0,
+        )
+    )
     assert volume_updates == [50.0, 73.0]
 
 

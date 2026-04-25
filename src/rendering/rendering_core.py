@@ -26,6 +26,7 @@ DEFAULT_WINDOW_SCREEN_SCALE = 0.8
 REFERENCE_WINDOW_SIZE = (1600, 900)
 MIN_WINDOW_SIZE = (800, 450)
 QUIT_SHORTCUT_EVENTS = ("meta-w", "meta-q", "control-w", "control-q")
+TABLE_BACKGROUND_COLOR = (0.88, 0.89, 0.87)
 
 
 class RenderingCoreManager:
@@ -201,9 +202,9 @@ class RenderingCoreManager:
             WindowProperties.setDefault(window_props)
             self._base = ShowBase()
             WindowProperties.clearDefault()
-            # Set window background to white (original logic preserved)
+            # Use a light gray background to reduce glare on the table interface.
             if self._base:
-                self._base.setBackgroundColor(1, 1, 1, 1)
+                self._base.setBackgroundColor(*TABLE_BACKGROUND_COLOR, 1)
                 self._base.render.setAntialias(AntialiasAttrib.MAuto)
                 win: Optional[GraphicsWindow] = self._base.win
                 if win:

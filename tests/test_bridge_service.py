@@ -372,6 +372,87 @@ def test_bridge_emits_rotation_updates_outside_grab_region_when_rotation_mode_is
     assert commands[2].payload["hpr"] == pytest.approx({"h": base_h, "p": base_p, "r": base_r})
 
 
+def test_bridge_rotation_mode_keeps_locked_object_across_transient_open_frames() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    bridge.process(hover_packet(frame_id=2, timestamp_ms=120))
+    first_commands = bridge.process(
+        make_packet(
+            frame_id=3,
+            timestamp_ms=140,
+            pinch_state="pinched",
+            index_tip=Vec3(0.02, 0.01, 0.0),
+            thumb_tip=Vec3(-0.02, -0.01, 0.0),
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 15.0,
+                    "deg_y": -30.0,
+                    "deg_z": 45.0,
+                }
+            },
+        )
+    )
+    locked_object_id = [
+        command.object_id
+        for command in first_commands
+        if command.command_type == "set_object_pose" and "hpr" in command.payload
+    ][-1]
+
+    bun_anchor = world_to_camera_position(scene_object_position("bun_center"))
+    release_commands = bridge.process(
+        make_packet(
+            frame_id=4,
+            timestamp_ms=160,
+            pinch_state="open",
+            index_tip=Vec3(bun_anchor.x + 0.02, bun_anchor.y, bun_anchor.z),
+            thumb_tip=Vec3(bun_anchor.x - 0.02, bun_anchor.y, bun_anchor.z),
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 15.0,
+                    "deg_y": -30.0,
+                    "deg_z": 45.0,
+                }
+            },
+        )
+    )
+
+    assert any(
+        command.command_type == "set_object_state" and command.object_id == locked_object_id
+        for command in release_commands
+    )
+
+    resumed_commands = bridge.process(
+        make_packet(
+            frame_id=5,
+            timestamp_ms=180,
+            pinch_state="pinched",
+            index_tip=Vec3(bun_anchor.x + 0.02, bun_anchor.y, bun_anchor.z),
+            thumb_tip=Vec3(bun_anchor.x - 0.02, bun_anchor.y, bun_anchor.z),
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 25.0,
+                    "deg_y": -10.0,
+                    "deg_z": 60.0,
+                }
+            },
+        )
+    )
+
+    resumed_pose_commands = [
+        command
+        for command in resumed_commands
+        if command.command_type == "set_object_pose" and "hpr" in command.payload
+    ]
+
+    assert resumed_pose_commands
+    assert all(command.object_id == locked_object_id for command in resumed_pose_commands)
+
+
 def test_bridge_rotation_restarts_from_current_object_pose_instead_of_raw_hand_pose() -> None:
     bridge = BridgeServiceImpl()
     bridge.start()

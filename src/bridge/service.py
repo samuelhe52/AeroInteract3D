@@ -203,7 +203,7 @@ TABLE_SCENE_OBJECTS: tuple[dict[str, Any], ...] = (
     {
         "object_id": "desk_frame",
         "init_pos": {"x": -0.84, "y": -0.135 + _tabletop_prop_y_offset(), "z": 0.72},
-        "init_hpr": {"h": -60.0, "p": -12.0, "r": 0.0},
+        "init_hpr": {"h": 60.0, "p": -12.0, "r": 0.0},
         "coordinate_space": "world_norm",
         "interaction_state": INTERACTION_IDLE,
         "shape": "frame",
@@ -624,6 +624,8 @@ class BridgeServiceImpl(BridgeService):
             return commands
 
         rotation_mode_active = self._rotation_mode_active(packet)
+        if not rotation_mode_active and packet.pinch_state == "open":
+            self._rotation_object_id = None
 
         if rotation_mode_active:
             target_object = self._rotation_target_object(hovered_object_id)
@@ -1208,7 +1210,7 @@ class BridgeServiceImpl(BridgeService):
         if packet.pinch_state != "pinched":
             if self._grabbed_object_id == object_state.object_id:
                 self._grabbed_object_id = None
-            self._rotation_object_id = None
+            self._rotation_object_id = object_state.object_id
             next_state = BRIDGE_STATE_PENDING_GRAB if is_hovering else BRIDGE_STATE_IDLE
             object_state.grab_offset_world = None
             object_state.rotation_reference_hpr = None

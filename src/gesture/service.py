@@ -439,20 +439,16 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         observation: RawHandObservation,
     ) -> tuple[RawHandObservation | None, RawHandObservation | None]:
         observation_handedness = self._normalize_handedness(observation.handedness)
-        primary_matches = (
-            observation_handedness is not None
-            and observation_handedness == self._primary_slot_handedness
-        )
-        secondary_matches = (
-            observation_handedness is not None
-            and observation_handedness == self._secondary_slot_handedness
-        )
 
-        if primary_matches and not secondary_matches:
+        if observation_handedness == "right":
             primary, secondary = observation, None
-        elif secondary_matches and not primary_matches:
-            primary, secondary = None, observation
-        elif self._pick_single_observation_slot(observation) == "secondary":
+        elif (
+            observation_handedness == "left"
+            and self._primary_slot_handedness == "right"
+            and self._secondary_slot_handedness == "left"
+        ):
+            # Preserve left-secondary continuity in established two-hand sessions
+            # when right-primary is temporarily missing.
             primary, secondary = None, observation
         else:
             primary, secondary = observation, None
@@ -488,6 +484,14 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
             self._last_secondary_wrist = None
 
     def _pick_primary_observation(self, observations: list[RawHandObservation]) -> RawHandObservation:
+        right_handed = [
+            item
+            for item in observations
+            if self._normalize_handedness(item.handedness) == "right"
+        ]
+        if len(right_handed) == 1:
+            return right_handed[0]
+
         expected_handedness = self._primary_slot_handedness
         if expected_handedness:
             matches = [

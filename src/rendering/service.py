@@ -18,7 +18,7 @@ from src.utils.runtime import (
     build_health, classify_frame, error_entry
 )
 
-from .rendering_core import RenderingCoreManager
+from .rendering_core import RenderingCoreManager, TABLE_BACKGROUND_COLOR
 from .calibration_store import CalibrationSettingsStore
 from .object_visibility_store import ObjectVisibilityStore
 from .debug.auto_scaling import AutoScalingManager
@@ -1087,8 +1087,6 @@ class RenderingServiceImpl(RenderOutputPort):
             return False
         if not bool(rotation_payload.get("grab_detected", False)):
             return False
-        if bool(rotation_payload.get("mode_active", False)):
-            return False
         return True
 
     @staticmethod
@@ -1120,11 +1118,6 @@ class RenderingServiceImpl(RenderOutputPort):
             return
 
         if self._table_menu_hold_started_at_ms is None or self._table_menu_hold_origin_norm is None:
-            self._table_menu_hold_started_at_ms = timestamp_ms
-            self._table_menu_hold_origin_norm = ui_input.cursor_norm
-            return
-
-        if self._cursor_norm_distance(ui_input.cursor_norm, self._table_menu_hold_origin_norm) > TABLE_MENU_MAX_CURSOR_DRIFT_NORM:
             self._table_menu_hold_started_at_ms = timestamp_ms
             self._table_menu_hold_origin_norm = ui_input.cursor_norm
             return
@@ -1251,7 +1244,12 @@ class RenderingServiceImpl(RenderOutputPort):
 
         set_background = getattr(base, "setBackgroundColor", None)
         if callable(set_background):
-            set_background(brightness, brightness, brightness, 1.0)
+            set_background(
+                TABLE_BACKGROUND_COLOR[0] * brightness,
+                TABLE_BACKGROUND_COLOR[1] * brightness,
+                TABLE_BACKGROUND_COLOR[2] * brightness,
+                1.0,
+            )
 
         pixel2d = getattr(base, "pixel2d", None)
         set_color_scale = getattr(pixel2d, "setColorScale", None)
@@ -1299,6 +1297,10 @@ class RenderingServiceImpl(RenderOutputPort):
             self._auto_scaling.update_window_scale()
         if self._home_view:
             self._home_view.update_layout()
+            if self._view_state.active_view == RenderView.HOME:
+                update_animation = getattr(self._home_view, "update_animation", None)
+                if callable(update_animation):
+                    update_animation()
 
         if hasattr(self._rendering_core, "step"):
             self._rendering_core.step()
