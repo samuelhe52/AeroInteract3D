@@ -443,20 +443,18 @@ class TableOverlayUIView:
 
         if self._active_overlay == TableOverlay.MENU:
             self._title.node().setText("pause menu")
-            self._subtitle.node().setText("table scene stays live in the background")
-            self._note.node().setText("resume immediately, return home, or open table options for scene-specific controls")
+            self._subtitle.node().setText("")
+            self._note.node().setText("")
         elif option_active:
             self._title.node().setText("table options")
             self._subtitle.node().setText("shared live scene controls")
-            self._note.node().setText("left side mirrors shared table settings; right side handles object visibility")
+            self._note.node().setText("")
             self._right_title.node().setText("object visibility")
-            self._right_note.node().setText(
-                "hidden objects stop rendering and stop consuming hover, grab, and rotate updates"
-            )
+            self._right_note.node().setText("")
             self._refresh_slider_values()
         else:
             self._title.node().setText("pause menu")
-            self._subtitle.node().setText("table scene stays live in the background")
+            self._subtitle.node().setText("")
             self._note.node().setText("")
 
         for index, button in enumerate(self._buttons):
@@ -578,7 +576,7 @@ class TableOverlayUIView:
             slider_track_width = int(panel_width * 0.74)
             slider_track_height = max(int(panel_height * 0.030), 18)
             slider_left = int(panel_width * 0.13)
-            first_slider_top = -(panel_height * 0.44)
+            first_slider_top = -(panel_height * 0.52)
             slider_row_gap = max(int(panel_height * 0.16), 72)
             for index, key in enumerate(self.SLIDER_KEYS):
                 row_top = int(first_slider_top - index * slider_row_gap)
