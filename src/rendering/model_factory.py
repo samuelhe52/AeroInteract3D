@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import importlib
+import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from panda3d.core import Filename, Loader, Material, NodePath
 
@@ -17,7 +19,9 @@ class ModelTemplate:
 
     shape_id: str
     model_path: str
+    display_name: str | None = None
     center_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    import_hpr: tuple[float, float, float] = (0.0, 0.0, 0.0)
     default_scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
     two_sided: bool = False
     preload: bool = False
@@ -29,6 +33,9 @@ class ModelResourceFactory:
     通用模型资源工厂
     核心能力：注册一次模型，全场景复用，新增模型仅需一行register代码
     """
+
+    _SUPPORTED_CUSTOM_MODEL_FORMATS = (".glb", ".egg", ".bam")
+    _SIDECAR_SUFFIX = ".model.json"
 
     def __init__(self, loader: Loader, auto_scan_dir: str | None = None):
         self._loader = loader
@@ -110,27 +117,167 @@ class ModelResourceFactory:
             logger.warning(f"自动扫描文件夹不存在：{models_dir}，跳过自动注册")
             return
 
-        supported_formats = (".glb", ".egg", ".bam")
         registered_count = 0
+        gltf_checked = False
 
-        for filename in os.listdir(models_dir):
+        for filename in sorted(os.listdir(models_dir)):
             file_path = os.path.join(models_dir, filename)
             if not os.path.isfile(file_path):
                 continue
 
-            if filename.lower().endswith(supported_formats):
-                shape_id = os.path.splitext(filename)[0]
+            file_ext = os.path.splitext(filename)[1].lower()
+            if file_ext in self._SUPPORTED_CUSTOM_MODEL_FORMATS:
+                if file_ext == ".glb" and not gltf_checked:
+                    self._ensure_gltf_loader_available(models_dir)
+                    gltf_checked = True
+
+                shape_id = os.path.splitext(filename)[0].lower()
+                sidecar_config = self._load_sidecar_config(file_path)
                 self.register_template(
                     ModelTemplate(
                         shape_id=shape_id,
                         model_path=file_path,
-                        center_offset=(0.0, 0.0, 0.0),
-                        use_builtin_materials=False,
+                        display_name=sidecar_config.get("display_name"),
+                        center_offset=sidecar_config.get("center_offset", (0.0, 0.0, 0.0)),
+                        import_hpr=sidecar_config.get("import_hpr", (0.0, 0.0, 0.0)),
+                        default_scale=sidecar_config.get("default_scale", (1.0, 1.0, 1.0)),
+                        two_sided=sidecar_config.get("two_sided", False),
+                        use_builtin_materials=sidecar_config.get("use_builtin_materials", False),
                     )
                 )
                 registered_count += 1
 
         logger.info(f"自动扫描完成，共注册 {registered_count} 个自定义模型")
+
+    @staticmethod
+    def _ensure_gltf_loader_available(models_dir: str) -> None:
+        try:
+            importlib.import_module("gltf")
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "GLB custom models require the 'panda3d-gltf' package. "
+                f"Detected .glb assets under {models_dir}, but Panda3D would otherwise fall back "
+                "to an implicit loader path with inconsistent import orientation. Install project "
+                "dependencies with 'uv sync'."
+            ) from exc
+
+    @classmethod
+    def _sidecar_path_for_model(cls, model_file_path: str) -> str:
+        model_root, _ = os.path.splitext(model_file_path)
+        return f"{model_root}{cls._SIDECAR_SUFFIX}"
+
+    @staticmethod
+    def _parse_optional_vec3(
+        value: Any,
+        *,
+        field_name: str,
+        model_file_path: str,
+    ) -> tuple[float, float, float] | None:
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            logger.warning("Ignoring invalid %s for custom model %s: %r", field_name, model_file_path, value)
+            return None
+        try:
+            return (float(value[0]), float(value[1]), float(value[2]))
+        except (TypeError, ValueError):
+            logger.warning("Ignoring invalid %s for custom model %s: %r", field_name, model_file_path, value)
+            return None
+
+    @classmethod
+    def _parse_optional_positive_vec3(
+        cls,
+        value: Any,
+        *,
+        field_name: str,
+        model_file_path: str,
+    ) -> tuple[float, float, float] | None:
+        parsed = cls._parse_optional_vec3(value, field_name=field_name, model_file_path=model_file_path)
+        if parsed is None:
+            return None
+        if any(component <= 0.0 for component in parsed):
+            logger.warning("Ignoring invalid %s for custom model %s: %r", field_name, model_file_path, value)
+            return None
+        return parsed
+
+    @staticmethod
+    def _parse_optional_bool(value: Any, *, field_name: str, model_file_path: str) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        logger.warning("Ignoring invalid %s for custom model %s: %r", field_name, model_file_path, value)
+        return None
+
+    @staticmethod
+    def _parse_optional_str(value: Any, *, field_name: str, model_file_path: str) -> str | None:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        logger.warning("Ignoring invalid %s for custom model %s: %r", field_name, model_file_path, value)
+        return None
+
+    def _load_sidecar_config(self, model_file_path: str) -> dict[str, Any]:
+        sidecar_path = self._sidecar_path_for_model(model_file_path)
+        if not os.path.isfile(sidecar_path):
+            return {}
+
+        try:
+            with open(sidecar_path, "r", encoding="utf-8") as file_handle:
+                payload = json.load(file_handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to parse model sidecar for %s: %s", model_file_path, exc)
+            return {}
+
+        if not isinstance(payload, dict):
+            logger.warning("Ignoring non-object model sidecar for %s: %r", model_file_path, payload)
+            return {}
+
+        config: dict[str, Any] = {}
+        if "display_name" in payload:
+            parsed_value = self._parse_optional_str(
+                payload["display_name"],
+                field_name="display_name",
+                model_file_path=model_file_path,
+            )
+            if parsed_value is not None:
+                config["display_name"] = parsed_value
+        if "center_offset" in payload:
+            parsed_value = self._parse_optional_vec3(
+                payload["center_offset"],
+                field_name="center_offset",
+                model_file_path=model_file_path,
+            )
+            if parsed_value is not None:
+                config["center_offset"] = parsed_value
+        if "import_hpr" in payload:
+            parsed_value = self._parse_optional_vec3(
+                payload["import_hpr"],
+                field_name="import_hpr",
+                model_file_path=model_file_path,
+            )
+            if parsed_value is not None:
+                config["import_hpr"] = parsed_value
+        if "default_scale" in payload:
+            parsed_value = self._parse_optional_positive_vec3(
+                payload["default_scale"],
+                field_name="default_scale",
+                model_file_path=model_file_path,
+            )
+            if parsed_value is not None:
+                config["default_scale"] = parsed_value
+        if "two_sided" in payload:
+            parsed_value = self._parse_optional_bool(
+                payload["two_sided"],
+                field_name="two_sided",
+                model_file_path=model_file_path,
+            )
+            if parsed_value is not None:
+                config["two_sided"] = parsed_value
+        if "use_builtin_materials" in payload:
+            parsed_value = self._parse_optional_bool(
+                payload["use_builtin_materials"],
+                field_name="use_builtin_materials",
+                model_file_path=model_file_path,
+            )
+            if parsed_value is not None:
+                config["use_builtin_materials"] = parsed_value
+        return config
 
     def _resolve_template(self, shape_id: str) -> ModelTemplate:
         template = self._template_registry.get(shape_id)
@@ -195,6 +342,15 @@ class ModelResourceFactory:
     def uses_builtin_materials(self, shape_id: str) -> bool:
         return self._resolve_template(shape_id).use_builtin_materials
 
+    def get_display_name(self, shape_id: str) -> str | None:
+        display_name = self._resolve_template(shape_id).display_name
+        if isinstance(display_name, str) and display_name.strip():
+            return display_name.strip()
+        return None
+
+    def get_template_default_scale(self, shape_id: str) -> tuple[float, float, float]:
+        return self._resolve_template(shape_id).default_scale
+
     def create_instance(
         self,
         shape_id: str,
@@ -214,12 +370,15 @@ class ModelResourceFactory:
 
         object_np = parent.attachNewNode(object_id)
         visual_np = object_np.attachNewNode(f"{object_id}_visual")
+        visual_np.setHpr(*template.import_hpr)
 
         template_model.copyTo(visual_np)
 
-        object_np.setScale(*scale)
+        effective_scale = tuple(component * default for component, default in zip(scale, template.default_scale))
+        object_np.setScale(*effective_scale)
         object_np.setColorScale(*color)
-        object_np.setTransparency(1)
+        if color[3] < 1.0:
+            object_np.setTransparency(1)
 
         if template.use_builtin_materials and self._material_cache and "idle" in self._material_cache:
             object_np.setMaterial(self._material_cache["idle"], 1)

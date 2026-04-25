@@ -26,6 +26,7 @@ DEFAULT_WINDOW_SCREEN_SCALE = 0.8
 REFERENCE_WINDOW_SIZE = (1600, 900)
 MIN_WINDOW_SIZE = (800, 450)
 QUIT_SHORTCUT_EVENTS = ("meta-w", "meta-q", "control-w", "control-q")
+TABLE_BACKGROUND_COLOR = (0.88, 0.89, 0.87)
 
 
 class RenderingCoreManager:
@@ -201,9 +202,9 @@ class RenderingCoreManager:
             WindowProperties.setDefault(window_props)
             self._base = ShowBase()
             WindowProperties.clearDefault()
-            # Set window background to white (original logic preserved)
+            # Keep the table surface softer than pure white to reduce glare.
             if self._base:
-                self._base.setBackgroundColor(1, 1, 1, 1)
+                self._base.setBackgroundColor(*TABLE_BACKGROUND_COLOR, 1)
                 self._base.render.setAntialias(AntialiasAttrib.MAuto)
                 win: Optional[GraphicsWindow] = self._base.win
                 if win:
@@ -251,17 +252,20 @@ class RenderingCoreManager:
         if not self._is_initialized:
             raise RuntimeError("Window is not initialized; cannot create lights")
         try:
-            # Ambient light.
-            amb_light = AmbientLight("ambient_light")
-            amb_light.setColor((0.2, 0.2, 0.2, 1.0))
+            amb_light = AmbientLight("table_ambient_light")
+            amb_light.setColor((0.34, 0.34, 0.34, 1.0))
             amb_light_np = self._base.render.attachNewNode(amb_light)
             self._base.render.setLight(amb_light_np)
-            # Directional light.
-            dir_light = DirectionalLight("directional_light")
-            dir_light.setColor((0.8, 0.8, 0.8, 1.0))
+            dir_light = DirectionalLight("table_key_light")
+            dir_light.setColor((0.82, 0.82, 0.82, 1.0))
             dir_light_np = self._base.render.attachNewNode(dir_light)
-            dir_light_np.setHpr(45, -45, 0)
+            dir_light_np.setHpr(35, -55, 0)
             self._base.render.setLight(dir_light_np)
+            fill_light = DirectionalLight("table_fill_light")
+            fill_light.setColor((0.48, 0.48, 0.52, 1.0))
+            fill_light_np = self._base.render.attachNewNode(fill_light)
+            fill_light_np.setHpr(180, -18, 0)
+            self._base.render.setLight(fill_light_np)
             logger.info("Basic lights created successfully")
         except Exception as e:
             logger.error(f"Light creation failed: {str(e)}")

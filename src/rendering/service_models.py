@@ -8,6 +8,7 @@ class ObjectInitialState:
     pos: tuple[float, float, float]
     hpr: tuple[float, float, float]
     scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    template_default_scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
     state: str = "idle"
 
 

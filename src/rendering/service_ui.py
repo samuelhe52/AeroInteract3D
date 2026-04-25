@@ -318,10 +318,24 @@ class RenderingServiceUIMixin:
     def _table_object_visibility_items(self) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
         for object_id in self._object_cache:
+            display_label = None
+            object_node = self._object_cache.get(object_id)
+            model_factory = getattr(self, "_model_factory", None)
+            if object_node is not None and model_factory is not None:
+                shape_id = ""
+                get_tag = getattr(object_node, "getTag", None)
+                if callable(get_tag):
+                    shape_id = str(get_tag("shape") or "").strip().lower()
+                elif isinstance(getattr(object_node, "tags", None), dict):
+                    shape_id = str(object_node.tags.get("shape", "")).strip().lower()
+                if shape_id:
+                    get_display_name = getattr(model_factory, "get_display_name", None)
+                    if callable(get_display_name):
+                        display_label = get_display_name(shape_id)
             items.append(
                 {
                     "object_id": object_id,
-                    "label": object_id.replace("_", " "),
+                    "label": display_label or object_id.replace("_", " "),
                     "visible": self._is_object_visible(object_id),
                 }
             )

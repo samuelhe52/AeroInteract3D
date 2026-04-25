@@ -955,7 +955,12 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
             if hpr_float is not None:
                 obj_np.setHpr(*clipped_hpr)
             if scale is not None and all(v > 0.0 for v in scale):
-                scene_scale = self._world_norm_to_scene_scale(scale)
+                initial_state = self._object_initial_states.get(object_id)
+                template_default_scale = (
+                    initial_state.template_default_scale if initial_state is not None else (1.0, 1.0, 1.0)
+                )
+                effective_scale = tuple(component * default for component, default in zip(scale, template_default_scale))
+                scene_scale = self._world_norm_to_scene_scale(effective_scale)
                 obj_np.setScale(*scene_scale)
             self._metrics.pose_updates += 1
             self._metrics.commands_applied += 1
@@ -1274,10 +1279,15 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
                 )
                 effective_state = descriptor.interaction_state if descriptor.interaction_state in self._material_cache else "idle"
                 self._apply_object_visual_state(descriptor.object_id, effective_state)
+                template_default_scale = self._model_factory.get_template_default_scale(descriptor.shape)
+                effective_init_scale = self._world_norm_to_scene_scale(
+                    tuple(component * default for component, default in zip(descriptor.scale, template_default_scale))
+                )
                 self._object_initial_states[descriptor.object_id] = ObjectInitialState(
                     pos=scene_init_pos,
                     hpr=descriptor.init_hpr,
-                    scale=self._world_norm_to_scene_scale(descriptor.scale),
+                    scale=effective_init_scale,
+                    template_default_scale=template_default_scale,
                     state=descriptor.interaction_state if descriptor.interactable else "idle",
                 )
                 self._object_interaction_states[descriptor.object_id] = effective_state

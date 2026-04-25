@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import importlib
+import json
 import logging
 import sys
 
 import pytest
 
 from src.contracts import GesturePacket, SceneCommand, Vec3
+from src.rendering import model_factory as model_factory_module
 from src.rendering.debug.data_panel import DataPanelManager
 from src.rendering.rendering_core import RenderingCoreManager
 from src.rendering import service as rendering_service
@@ -327,6 +330,11 @@ class FakeNodePath:
         if not hasattr(self, "tags"):
             self.tags = {}
         self.tags[key] = value
+
+    def getTag(self, key: str) -> str:
+        if not hasattr(self, "tags"):
+            return ""
+        return str(self.tags.get(key, ""))
 
     def isEmpty(self) -> bool:
         return False
@@ -1053,6 +1061,22 @@ def test_auto_scanned_custom_models_preserve_authored_materials(tmp_path) -> Non
     assert factory.uses_builtin_materials("teapot") is False
 
 
+def test_glb_custom_models_require_panda3d_gltf(monkeypatch, tmp_path) -> None:
+    (tmp_path / "apple.glb").write_text("placeholder", encoding="utf-8")
+
+    real_import_module = importlib.import_module
+
+    def fake_import_module(name: str, package=None):
+        if name == "gltf":
+            raise ModuleNotFoundError("No module named 'gltf'")
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(model_factory_module.importlib, "import_module", fake_import_module)
+
+    with pytest.raises(RuntimeError, match="panda3d-gltf"):
+        rendering_service.ModelResourceFactory(loader=None, auto_scan_dir=str(tmp_path))
+
+
 def test_model_factory_applies_scene_scale_to_object_root() -> None:
     factory = rendering_service.ModelResourceFactory(loader=FakeLoader())
     parent = FakeNodePath("scene_root")
@@ -1068,6 +1092,52 @@ def test_model_factory_applies_scene_scale_to_object_root() -> None:
 
     assert object_np.scale == pytest.approx((0.22, 0.22, 0.22))
     assert object_np.children[0].scale is None
+
+
+def test_model_factory_applies_template_default_scale_to_object_root(tmp_path) -> None:
+    (tmp_path / "teapot.egg").write_text("placeholder", encoding="utf-8")
+    (tmp_path / "teapot.model.json").write_text(
+        json.dumps({"default_scale": [2.0, 3.0, 4.0]}),
+        encoding="utf-8",
+    )
+
+    factory = rendering_service.ModelResourceFactory(loader=FakeLoader(), auto_scan_dir=str(tmp_path))
+    parent = FakeNodePath("scene_root")
+
+    object_np = factory.create_instance(
+        shape_id="teapot",
+        parent=parent,
+        object_id="custom_teapot",
+        scale=(0.1, 0.2, 0.3),
+        color=(1.0, 1.0, 1.0, 1.0),
+        interactable=True,
+    )
+
+    assert object_np.scale == pytest.approx((0.2, 0.6, 1.2))
+
+
+def test_model_factory_applies_import_hpr_to_visual_root(tmp_path) -> None:
+    (tmp_path / "teapot.egg").write_text("placeholder", encoding="utf-8")
+    (tmp_path / "teapot.model.json").write_text(
+        json.dumps({"import_hpr": [0.0, -90.0, 0.0]}),
+        encoding="utf-8",
+    )
+
+    factory = rendering_service.ModelResourceFactory(loader=FakeLoader(), auto_scan_dir=str(tmp_path))
+    parent = FakeNodePath("scene_root")
+
+    object_np = factory.create_instance(
+        shape_id="teapot",
+        parent=parent,
+        object_id="custom_teapot",
+        scale=(0.1, 0.2, 0.3),
+        color=(1.0, 1.0, 1.0, 1.0),
+        interactable=True,
+    )
+
+    visual_np = object_np.children[0]
+    assert getattr(object_np, "hpr", None) is None
+    assert visual_np.hpr == pytest.approx((0.0, -90.0, 0.0))
 
 
 def test_rendering_uses_color_scale_for_custom_model_states() -> None:
@@ -1219,12 +1289,44 @@ def test_rendering_reset_restores_cached_scene_pose() -> None:
     service._object_initial_states["primary_cube"] = ObjectInitialState(
         pos=(0.1, -0.2, 0.4),
         hpr=(1.0, 2.0, 3.0),
+        scale=(1.8, 1.8, 1.8),
+        template_default_scale=(10.0, 10.0, 10.0),
     )
 
     service.push(make_command(command_id="reset-1", frame_id=1, command_type="reset_interaction"))
 
     assert obj.pos == (0.1, -0.2, 0.4)
     assert obj.hpr == (1.0, 2.0, 3.0)
+    assert obj.scale == (1.8, 1.8, 1.8)
+
+
+def test_rendering_applies_template_default_scale_when_scale_update_starts() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+    obj = FakeObjectNode()
+    service._object_cache["apple_model"] = obj
+    service._object_initial_states["apple_model"] = ObjectInitialState(
+        pos=(0.0, -0.08, 0.18),
+        hpr=(0.0, 0.0, 0.0),
+        scale=(1.8, 1.8, 1.8),
+        template_default_scale=(10.0, 10.0, 10.0),
+    )
+
+    service.push(
+        make_command(
+            command_id="scale-1",
+            frame_id=1,
+            command_type="set_object_pose",
+            object_id="apple_model",
+            payload={
+                "coordinate_space": "world_norm",
+                "position": {"x": 0.0, "y": -0.08, "z": 0.18},
+                "scale": {"x": 0.18, "y": 0.18, "z": 0.18},
+            },
+        )
+    )
+
+    assert obj.scale == pytest.approx((1.8, 1.8, 1.8))
 
 
 def test_rendering_step_advances_panda3d_task_manager(monkeypatch) -> None:
