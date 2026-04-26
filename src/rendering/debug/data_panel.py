@@ -242,28 +242,38 @@ class DataPanelManager:
     @staticmethod
     def _dual_hand_lines(packet: Optional[GesturePacket]) -> tuple[str, ...]:
         if packet is None:
-            return ("--- Dual Hand ---", "hands: 0 | both_pinched: NO", "2nd: n/a | pinch: n/a")
+            return (
+                "--- Dual Hand ---",
+                "1st: present NO | pinched NO",
+                "2nd: present NO | pinched NO",
+            )
         debug_payload = getattr(packet, "debug", None)
         if not isinstance(debug_payload, dict):
             return ()
         dual_hand = debug_payload.get("dual_hand")
         if not isinstance(dual_hand, dict):
             return ()
-        active_hand_count = int(dual_hand.get("active_hand_count", 1))
-        both_pinched = bool(dual_hand.get("both_pinched", False))
+        primary = dual_hand.get("primary_hand")
         secondary = dual_hand.get("secondary_hand")
-        if isinstance(secondary, dict):
-            sec_tracking = str(secondary.get("tracking_state", "n/a"))
-            sec_pinch = str(secondary.get("pinch_state", "n/a"))
-        else:
-            sec_tracking = "n/a"
-            sec_pinch = "n/a"
         return (
             "--- Dual Hand ---",
-            f"hands: {active_hand_count} | both_pinched: {'YES' if both_pinched else 'NO'}",
-            f"2nd: {sec_tracking} | pinch: {sec_pinch}",
+            DataPanelManager._hand_status_line("1st", primary),
+            DataPanelManager._hand_status_line("2nd", secondary),
         )
-    
+
+    @staticmethod
+    def _hand_status_line(label: str, hand: object) -> str:
+        if not isinstance(hand, dict):
+            return f"{label}: present NO | pinched NO"
+
+        tracking_state = str(hand.get("tracking_state", "not_detected"))
+        pinch_state = str(hand.get("pinch_state", "open"))
+        present = tracking_state != "not_detected"
+        pinched = present and pinch_state == "pinched"
+        present_label = "YES" if present else "NO"
+        pinched_label = "YES" if pinched else "NO"
+        return f"{label}: present {present_label} | pinched {pinched_label}"
+
     def update_coordinate_data(self, world_norm_pos: tuple, scene_pos: tuple) -> None:
         """Update coordinate data for display"""
         self._last_world_norm_pos = world_norm_pos
@@ -286,6 +296,7 @@ class DataPanelManager:
         off_color = (0.30, 0.30, 0.33, 0.95)
         for index, lamp in enumerate(self._menu_hold_lamps):
             lamp["frameColor"] = lamp_colors[index] if index < lit_count else off_color
+
     def update_scale_status(self, *, scale_ratio: float, scaling_active: bool) -> None:
         self._scale_ratio = float(scale_ratio)
         self._scaling_active = bool(scaling_active)

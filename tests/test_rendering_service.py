@@ -127,6 +127,35 @@ def make_packet_with_menu_candidate(
     )
 
 
+def make_packet_with_dual_hand_debug() -> GesturePacket:
+    return GesturePacket(
+        contract_version="2.0.0",
+        frame_id=12,
+        timestamp_ms=130,
+        hand_id="hand-right",
+        tracking_state="tracked",
+        confidence=0.95,
+        pinch_state="pinched",
+        index_tip=Vec3(0.4, 0.2, 0.1),
+        thumb_tip=Vec3(0.3, 0.2, 0.1),
+        wrist=Vec3(0.2, 0.1, 0.0),
+        coordinate_space="camera_norm",
+        pinch_distance=0.021,
+        debug={
+            "dual_hand": {
+                "primary_hand": {
+                    "tracking_state": "tracked",
+                    "pinch_state": "open",
+                },
+                "secondary_hand": {
+                    "tracking_state": "temporarily_lost",
+                    "pinch_state": "pinched",
+                },
+            }
+        },
+    )
+
+
 class FakeTaskManager:
     def __init__(self) -> None:
         self.stopped = False
@@ -797,6 +826,18 @@ def test_data_panel_formats_rotation_lines_from_packet_debug() -> None:
     assert lines == (
         "rot: ROTATE_ENABLED rot/live g03",
         "xyz: +40.0 +60.0 +80.0",
+    )
+
+
+def test_data_panel_formats_dual_hand_lines_symmetrically() -> None:
+    packet = make_packet_with_dual_hand_debug()
+
+    lines = DataPanelManager._dual_hand_lines(packet)
+
+    assert lines == (
+        "--- Dual Hand ---",
+        "1st: present YES | pinched NO",
+        "2nd: present YES | pinched YES",
     )
 
 
