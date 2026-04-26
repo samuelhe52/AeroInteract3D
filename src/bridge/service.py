@@ -270,6 +270,7 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id: str | None = None
         self._grabbed_object_id: str | None = None
         self._rotation_object_id: str | None = None
+        self._last_interacted_object_id: str | None = None
         self._dual_scale_active = False
         self._dual_scale_object_id: str | None = None
         self._dual_scale_baseline_distance_xy: float | None = None
@@ -293,6 +294,7 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id = None
         self._grabbed_object_id = None
         self._rotation_object_id = None
+        self._last_interacted_object_id = None
         self._dual_scale_active = False
         self._dual_scale_object_id = None
         self._dual_scale_baseline_distance_xy = None
@@ -411,6 +413,7 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id = None
         self._grabbed_object_id = None
         self._rotation_object_id = None
+        self._last_interacted_object_id = None
         self._dual_scale_active = False
         self._dual_scale_object_id = None
         self._dual_scale_baseline_distance_xy = None
@@ -457,6 +460,7 @@ class BridgeServiceImpl(BridgeService):
             secondary_available
             and secondary_pinched
             and (not primary_available or not primary_dual_scale_pinched)
+            and not self._dual_scale_active
         )
         if controls_from_secondary and secondary_anchor_world is not None:
             hand_anchor_world = secondary_anchor_world
@@ -527,6 +531,7 @@ class BridgeServiceImpl(BridgeService):
                 released_object = self._object_state(self._grabbed_object_id)
                 self._grabbed_object_id = None
                 self._pinch_capture_lock_object_id = None
+                self._last_interacted_object_id = None
                 commands.extend(self._set_object_interaction_state(packet, released_object, BRIDGE_STATE_IDLE))
                 self._hovered_object_id = None
                 commands.extend(self._sync_hover_state(packet, hovered_object_id))
@@ -619,6 +624,7 @@ class BridgeServiceImpl(BridgeService):
         self._pinch_capture_lock_object_id = grabbed_object.object_id
         if packet.pinch_state == "open":
             self._grabbed_object_id = None
+            self._last_interacted_object_id = None
             commands.extend(self._set_object_interaction_state(packet, grabbed_object, BRIDGE_STATE_IDLE))
             self._hovered_object_id = None
             commands.extend(self._sync_hover_state(packet, hovered_object_id))
@@ -628,6 +634,7 @@ class BridgeServiceImpl(BridgeService):
         if blocked_by_table and self._distance(hand_anchor_world, constrained_position) >= GRAB_RELEASE_DISTANCE_THRESHOLD:
             self._grabbed_object_id = None
             grabbed_object.grab_offset_world = None
+            self._last_interacted_object_id = None
             commands.extend(self._set_object_interaction_state(packet, grabbed_object, BRIDGE_STATE_IDLE))
             self._hovered_object_id = None
             commands.extend(self._sync_hover_state(packet, hovered_object_id))
@@ -652,6 +659,7 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id = None
         self._grabbed_object_id = None
         self._rotation_object_id = None
+        self._last_interacted_object_id = None
         self._pinch_capture_lock_object_id = None
         self._dual_scale_rotation_blocked_until_open = False
         self._stop_dual_scale_mode()
@@ -670,6 +678,7 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id = None
         self._grabbed_object_id = None
         self._rotation_object_id = None
+        self._last_interacted_object_id = None
         self._pinch_capture_lock_object_id = None
         self._dual_scale_rotation_blocked_until_open = False
         self._stop_dual_scale_mode()
@@ -681,6 +690,7 @@ class BridgeServiceImpl(BridgeService):
         self._hovered_object_id = None
         self._grabbed_object_id = None
         self._rotation_object_id = None
+        self._last_interacted_object_id = None
         self._pinch_capture_lock_object_id = None
         self._dual_scale_rotation_blocked_until_open = False
         self._stop_dual_scale_mode()
@@ -1072,8 +1082,11 @@ class BridgeServiceImpl(BridgeService):
         if secondary_hand.tracking_state != "tracked" or secondary_hand.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE:
             return None
 
-        # Enter dual-scale when at least one hand hovers an object.
-        # Prefer the primary-hovered object when both hands hover different objects.
+        # Prefer the last object the user actually interacted with, then fall
+        # back to the current hover target when no sticky interaction target exists.
+        if self._last_interacted_object_id is not None:
+            return self._object_state(self._last_interacted_object_id)
+
         target_id = hovered_object_id or secondary_hovered_object_id
         if target_id is None:
             return None
@@ -1110,6 +1123,7 @@ class BridgeServiceImpl(BridgeService):
             self._dual_scale_object_id = object_state.object_id
             self._dual_scale_baseline_distance_xy = max(distance_xy, 1e-4)
             self._dual_scale_baseline_scale = object_state.world_scale
+            self._last_interacted_object_id = object_state.object_id
 
         baseline_distance = max(self._dual_scale_baseline_distance_xy or 1e-4, 1e-4)
         baseline_scale = self._dual_scale_baseline_scale or object_state.world_scale
@@ -1459,6 +1473,8 @@ class BridgeServiceImpl(BridgeService):
             return []
 
         object_state.interaction_state = bridge_state
+        if bridge_state in {BRIDGE_STATE_GRABBING, BRIDGE_STATE_ROTATING}:
+            self._last_interacted_object_id = object_state.object_id
         if bridge_state != BRIDGE_STATE_GRABBING:
             object_state.grab_offset_world = None
         if bridge_state != BRIDGE_STATE_ROTATING:

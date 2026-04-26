@@ -970,6 +970,39 @@ def test_bridge_dual_scale_activates_when_only_secondary_hovers_object() -> None
     )
 
 
+def test_bridge_dual_scale_binds_to_last_interacted_object() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+
+    # Interact with the default object first so it becomes the sticky scale target
+    # for the current interaction session.
+    bridge.process(hover_packet(frame_id=2, timestamp_ms=120))
+    bridge.process(hover_packet(frame_id=3, timestamp_ms=140, pinch_state="pinched"))
+
+    commands = bridge.process(
+        with_secondary_hand(
+            make_packet(
+                frame_id=4,
+                timestamp_ms=160,
+                pinch_state="pinched",
+                index_tip=object_camera_point(0.02, object_id=alternate_test_object_id()),
+                thumb_tip=object_camera_point(-0.02, object_id=alternate_test_object_id()),
+            ),
+            pinch_state="pinched",
+            object_id=alternate_test_object_id(),
+        )
+    )
+
+    scale_pose = [
+        command
+        for command in commands
+        if command.command_type == "set_object_pose" and "scale" in command.payload
+    ][-1]
+    assert scale_pose.object_id == default_test_object_id()
+
+
 def test_bridge_two_hand_detected_does_not_block_primary_translation_without_dual_pinch() -> None:
     bridge = BridgeServiceImpl()
     bridge.start()
