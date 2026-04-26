@@ -633,6 +633,8 @@ Calibration 视图 & \path{calibration_view.py} & 光标标定页，支持对 cu
 
 其中，`table` 代表桌面的真实交互场景；所有可交互控件（按钮、滑块）均实现了三态视觉样式（idle / hover / pressed 或 idle / hover / active）提供视觉反馈。
 
+这套 UI 视图系统验证了在纯手势交互条件下实现多层级菜单和参数调节的可行性，并提供了一个便捷的设置入口，用户可以在其中调整系统参数以适应不同的使用环境和个人偏好。
+
 ### 支持的交互能力
 
 系统当前支持的完整手势交互功能如下：
@@ -647,9 +649,9 @@ Calibration 视图 & \path{calibration_view.py} & 光标标定页，支持对 cu
 | 对象旋转   | 抓取中切换旋转模式    | 激活旋转模式后，捏合拖拽转化为对对象姿态的控制      |
 | 虚拟手显示 | 检测到手部            | 在场景中渲染虚拟手，实现视觉反馈                    |
 
-### 自定义模型导入
+### 自定义模型支持
 
-渲染模块支持在运行时导入外部 3D 模型文件（`.glb`、`.egg`、`.bam` 等格式），作为可交互场景对象使用。用户可以将自定义模型放置于 `assets/custom_models/` 目录，系统初始化时会自动扫描并注册，与内置几何体一样参与场景管理和手势交互。当前场景配置中已包含自定义 `teapot` 与 `pyramid` 模型示例。
+渲染模块支持在运行时导入外部 3D 模型文件（`.glb`、`.egg`、`.bam` 等格式），作为可交互场景对象使用。用户可以将自定义模型放置于 `assets/custom_models/` 目录，系统初始化时会自动扫描并注册，与内置几何体一样参与场景管理和手势交互。当前 `assets/custom_models/` 目录中已包含 `apple`、`lemon`、`croissant`、`potted_plant`、`wooden_table` 等多个自定义模型。
 
 ## App 主循环
 
@@ -690,7 +692,7 @@ def run(self) -> None:
 
 ## 已完成的 UI 页面
 
-本次展示中，桌面 UI 的四张截图已经整理完成并复制到 `assets/`。它们分别对应主页、设置页、桌面场景中的 table 视图和光标标定页，可以直接用于报告排版。
+图 \ref{fig:system-ui-showcase} 展示了系统当前可直接演示的四个 UI 页面，分别对应主页、设置页、桌面场景中的 Table 视图和光标标定页。
 
 ```{=latex}
 \begin{figure}[htbp]
@@ -735,88 +737,66 @@ def run(self) -> None:
 \end{figure}
 ```
 
-## 桌面场景占位
+## 桌面场景演示
 
-实际桌面 table 场景仍在迭代中，因此这里先按最终演示顺序预留占位。建议补拍的最小闭环是 `初始态 → 悬停高亮 → 抓取拖拽 → 旋转 → 双手缩放`，这样可以完整覆盖报告中已经实现的对象交互主链路。
+图 \ref{fig:system-scene-placeholder} 按交互演示顺序展示了系统在实际桌面场景中的五个关键状态：初始态、悬停高亮、抓取拖拽、旋转模式与双手缩放。
 
 ```{=latex}
 \begin{figure}[htbp]
 \centering
 \noindent\makebox[\textwidth][c]{%
-\begin{minipage}[t]{0.42\textwidth}
+\begin{minipage}[t]{0.48\textwidth}
 \centering
-\fcolorbox{gray!55}{gray!10}{%
-\begin{minipage}[c][3.35cm][c]{0.98\linewidth}
-\centering
-{\large \textbf{桌面场景}}\\[0.25em]
-{\footnotesize 待补拍}
-\end{minipage}}
+\includegraphics[width=\linewidth]{assets/system-scene-table.jpg}
 \par\vspace{0.35em}
 {\small \textbf{初始态}}
+\par{\footnotesize table overview / object list}
 \end{minipage}
 \hspace{0.03\textwidth}%
-\begin{minipage}[t]{0.42\textwidth}
+\begin{minipage}[t]{0.48\textwidth}
 \centering
-\fcolorbox{gray!55}{gray!10}{%
-\begin{minipage}[c][3.35cm][c]{0.98\linewidth}
-\centering
-{\large \textbf{桌面场景}}\\[0.25em]
-{\footnotesize 待补拍}
-\end{minipage}}
+\includegraphics[width=\linewidth]{assets/system-scene-hover.jpg}
 \par\vspace{0.35em}
 {\small \textbf{悬停高亮}}
+\par{\footnotesize open hand / tracked}
 \end{minipage}
 }
 
 \vspace{0.55em}
 
 \noindent\makebox[\textwidth][c]{%
-\begin{minipage}[t]{0.42\textwidth}
+\begin{minipage}[t]{0.48\textwidth}
 \centering
-\fcolorbox{gray!55}{gray!10}{%
-\begin{minipage}[c][3.35cm][c]{0.98\linewidth}
-\centering
-{\large \textbf{桌面场景}}\\[0.25em]
-{\footnotesize 待补拍}
-\end{minipage}}
+\includegraphics[width=\linewidth]{assets/system-scene-grab.jpg}
 \par\vspace{0.35em}
 {\small \textbf{抓取拖拽}}
+\par{\footnotesize pinch / move}
 \end{minipage}
 \hspace{0.03\textwidth}%
-\begin{minipage}[t]{0.42\textwidth}
+\begin{minipage}[t]{0.48\textwidth}
 \centering
-\fcolorbox{gray!55}{gray!10}{%
-\begin{minipage}[c][3.35cm][c]{0.98\linewidth}
-\centering
-{\large \textbf{桌面场景}}\\[0.25em]
-{\footnotesize 待补拍}
-\end{minipage}}
+\includegraphics[width=\linewidth]{assets/system-scene-rotate.jpg}
 \par\vspace{0.35em}
 {\small \textbf{旋转}}
+\par{\footnotesize rotate enabled}
 \end{minipage}
 }
 
 \vspace{0.55em}
 
 \noindent\makebox[\textwidth][c]{%
-\begin{minipage}[t]{0.42\textwidth}
+\begin{minipage}[t]{0.48\textwidth}
 \centering
-\fcolorbox{gray!55}{gray!10}{%
-\begin{minipage}[c][3.35cm][c]{0.98\linewidth}
-\centering
-{\large \textbf{桌面场景}}\\[0.25em]
-{\footnotesize 待补拍}
-\end{minipage}}
+\includegraphics[width=\linewidth]{assets/system-scene-scale.jpg}
 \par\vspace{0.35em}
 {\small \textbf{双手缩放}}
+\par{\footnotesize dual-hand pinch / scale}
 \end{minipage}
 }
-\caption{桌面场景演示占位，后续按同序补拍后替换}
+\caption{桌面场景演示截图，按最终演示顺序整理}
 \label{fig:system-scene-placeholder}
 \end{figure}
 ```
-
-如果后续还想额外强调虚拟手或调试信息，可以再补一张叠加视图，但它不属于当前最小必需集。
 
 # 总结
 
