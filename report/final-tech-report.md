@@ -690,21 +690,21 @@ def run(self) -> None:
 
 ## 已完成的 UI 页面
 
-本次展示中，桌面 UI 的三张截图已经整理完成并复制到 `assets/`。它们分别对应主页、设置页和光标标定页，可以直接用于报告排版。
+本次展示中，桌面 UI 的四张截图已经整理完成并复制到 `assets/`。它们分别对应主页、设置页、桌面场景中的 table 视图和光标标定页，可以直接用于报告排版。
 
 ```{=latex}
 \begin{figure}[htbp]
 \centering
 \noindent\makebox[\textwidth][c]{%
-\begin{minipage}[t]{0.40\textwidth}
+\begin{minipage}[t]{0.48\textwidth}
 \centering
 \includegraphics[width=\linewidth]{assets/system-ui-home.jpg}
 \par\vspace{0.35em}
 {\small \textbf{主页}}
 \par{\footnotesize table / setting 两个入口}
 \end{minipage}
-\hspace{0.05\textwidth}%
-\begin{minipage}[t]{0.40\textwidth}
+\hspace{0.03\textwidth}%
+\begin{minipage}[t]{0.48\textwidth}
 \centering
 \includegraphics[width=\linewidth]{assets/system-ui-settings.jpg}
 \par\vspace{0.35em}
@@ -712,9 +712,17 @@ def run(self) -> None:
 \par{\footnotesize 全局参数与预览面板}
 \end{minipage}
 }
-\par\vspace{0.95em}
+\par\vspace{0.85em}
 \noindent\makebox[\textwidth][c]{%
-\begin{minipage}[t]{0.40\textwidth}
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\includegraphics[width=\linewidth]{assets/system-ui-table.jpg}
+\par\vspace{0.35em}
+{\small \textbf{Table 视图}}
+\par{\footnotesize table options / object visibility}
+\end{minipage}
+\hspace{0.03\textwidth}%
+\begin{minipage}[t]{0.48\textwidth}
 \centering
 \includegraphics[width=\linewidth]{assets/system-ui-calibration.jpg}
 \par\vspace{0.35em}
