@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import time
 from collections.abc import Callable
 from typing import Optional
@@ -30,11 +29,8 @@ class HomeUIView:
     PRIMARY_FINGER_COLOR = (0.86, 0.29, 0.23, 1.0)
     SECONDARY_FINGER_COLOR = (0.27, 0.46, 0.74, 1.0)
     FINGER_HALF_SIZE = 4.5
-    ROTATE_FINGER_HALF_SIZE = 3.0
     PINCH_OVERLAP_GAP = 1.8
     HOME_DEMO_CYCLE_SECONDS = 2.6
-    UPPER_ROTATE_CYCLE_SECONDS = 2.6
-    LOWER_ROTATE_CYCLE_SECONDS = 4.8
     BUTTON_STYLES = {
         "idle": {
             "frameColor": (0.18, 0.22, 0.28, 1.0),
@@ -143,7 +139,13 @@ class HomeUIView:
                 )
                 rotate_stage = None
                 rotate_fingers: list[DirectFrame] = []
+                controlled = None
+                primary_finger_a = None
+                primary_finger_b = None
+                secondary_finger_a = None
+                secondary_finger_b = None
                 if key == "rotate":
+                    stage.hide()
                     rotate_stage = DirectFrame(
                         parent=card,
                         pos=(0, 0, 0),
@@ -152,71 +154,56 @@ class HomeUIView:
                         relief=1,
                         borderWidth=(1, 1),
                     )
-                    for finger_index in range(5):
-                        finger = DirectFrame(
-                            parent=rotate_stage,
-                            pos=(0, 0, 0),
-                            frameSize=(
-                                -self.ROTATE_FINGER_HALF_SIZE,
-                                self.ROTATE_FINGER_HALF_SIZE,
-                                -self.ROTATE_FINGER_HALF_SIZE,
-                                self.ROTATE_FINGER_HALF_SIZE,
-                            ),
-                            frameColor=self.PRIMARY_FINGER_COLOR,
-                            relief=1,
-                            borderWidth=(1, 1),
-                        )
-                        rotate_fingers.append(finger)
                     rotate_mode_label = self._create_text_node(
                         rotate_stage,
                         node_name=f"home_demo_rotate_mode_{key}",
-                        text="move",
+                        text="1. Pinch five fingers together to switch\n2. Pinch and drag to rotate",
                         align=TextNode.ACenter,
                         color=(0.18, 0.20, 0.24, 1.0),
                     )
                 else:
                     rotate_mode_label = None
-
-                controlled = DirectFrame(
-                    parent=stage,
-                    pos=(0, 0, 0),
-                    frameSize=(-16, 16, -16, 16),
-                    frameColor=self.CONTROL_OBJECT_COLOR,
-                    relief=1,
-                    borderWidth=(1, 1),
-                )
-                primary_finger_a = DirectFrame(
-                    parent=stage,
-                    pos=(0, 0, 0),
-                    frameSize=(-self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE, -self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE),
-                    frameColor=self.PRIMARY_FINGER_COLOR,
-                    relief=1,
-                    borderWidth=(1, 1),
-                )
-                primary_finger_b = DirectFrame(
-                    parent=stage,
-                    pos=(0, 0, 0),
-                    frameSize=(-self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE, -self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE),
-                    frameColor=self.PRIMARY_FINGER_COLOR,
-                    relief=1,
-                    borderWidth=(1, 1),
-                )
-                secondary_finger_a = DirectFrame(
-                    parent=stage,
-                    pos=(0, 0, 0),
-                    frameSize=(-self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE, -self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE),
-                    frameColor=self.SECONDARY_FINGER_COLOR,
-                    relief=1,
-                    borderWidth=(1, 1),
-                )
-                secondary_finger_b = DirectFrame(
-                    parent=stage,
-                    pos=(0, 0, 0),
-                    frameSize=(-self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE, -self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE),
-                    frameColor=self.SECONDARY_FINGER_COLOR,
-                    relief=1,
-                    borderWidth=(1, 1),
-                )
+                if key != "rotate":
+                    controlled = DirectFrame(
+                        parent=stage,
+                        pos=(0, 0, 0),
+                        frameSize=(-16, 16, -16, 16),
+                        frameColor=self.CONTROL_OBJECT_COLOR,
+                        relief=1,
+                        borderWidth=(1, 1),
+                    )
+                    primary_finger_a = DirectFrame(
+                        parent=stage,
+                        pos=(0, 0, 0),
+                        frameSize=(-self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE, -self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE),
+                        frameColor=self.PRIMARY_FINGER_COLOR,
+                        relief=1,
+                        borderWidth=(1, 1),
+                    )
+                    primary_finger_b = DirectFrame(
+                        parent=stage,
+                        pos=(0, 0, 0),
+                        frameSize=(-self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE, -self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE),
+                        frameColor=self.PRIMARY_FINGER_COLOR,
+                        relief=1,
+                        borderWidth=(1, 1),
+                    )
+                    secondary_finger_a = DirectFrame(
+                        parent=stage,
+                        pos=(0, 0, 0),
+                        frameSize=(-self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE, -self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE),
+                        frameColor=self.SECONDARY_FINGER_COLOR,
+                        relief=1,
+                        borderWidth=(1, 1),
+                    )
+                    secondary_finger_b = DirectFrame(
+                        parent=stage,
+                        pos=(0, 0, 0),
+                        frameSize=(-self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE, -self.FINGER_HALF_SIZE, self.FINGER_HALF_SIZE),
+                        frameColor=self.SECONDARY_FINGER_COLOR,
+                        relief=1,
+                        borderWidth=(1, 1),
+                    )
                 self._demo_cards.append(
                     {
                         "key": key,
@@ -368,34 +355,37 @@ class HomeUIView:
             stage_width = int(card_width * 0.84)
             if str(demo["key"]) == "rotate":
                 rotate_stage = demo.get("rotate_stage")
-                rotate_stage_top = int(card_height * 0.56)
-                rotate_stage_height = int(card_height * 0.26)
-                stage_top = int(card_height * 0.82)
-                stage_height = int(card_height * 0.16)
                 if isinstance(rotate_stage, DirectFrame):
+                    rotate_stage_top = int(card_height * 0.48)
+                    rotate_stage_height = int(card_height * 0.32)
                     rotate_stage.setPos(stage_left, 0, -rotate_stage_top)
                     rotate_stage["frameSize"] = (0, stage_width, -rotate_stage_height, 0)
                     rotate_stage.show()
                     rotate_mode_label = demo.get("rotate_mode_label")
                     if isinstance(rotate_mode_label, NodePath):
-                        rotate_mode_label.setPos(stage_width * 0.50, 0, -(rotate_stage_height * 0.40))
-                        rotate_mode_label.setScale(max(rotate_stage_height * 0.18, 10))
+                        rotate_mode_label.setPos(stage_width * 0.50, 0, -(rotate_stage_height * 0.50))
+                        rotate_mode_label.setScale(max(rotate_stage_height * 0.16, 11))
+                stage.hide()
+                stage_top = 0.0
+                stage_height = 0.0
             else:
                 rotate_stage = demo.get("rotate_stage")
                 if isinstance(rotate_stage, DirectFrame):
                     rotate_stage.hide()
+                stage.show()
                 stage_top = int(card_height * 0.46)
                 stage_height = int(card_height * 0.42)
 
-            stage.setPos(stage_left, 0, -stage_top)
-            stage["frameSize"] = (0, stage_width, -stage_height, 0)
+            if str(demo["key"]) != "rotate":
+                stage.setPos(stage_left, 0, -stage_top)
+                stage["frameSize"] = (0, stage_width, -stage_height, 0)
             demo["layout"] = {
                 "stage_width": float(stage_width),
                 "stage_height": float(stage_height),
                 "controlled_y": float(-stage_height * 0.56),
                 "finger_y": float(-stage_height * 0.30),
                 "rotate_stage_width": float(stage_width),
-                "rotate_stage_height": float(int(card_height * 0.26) if str(demo["key"]) == "rotate" else 0.0),
+                "rotate_stage_height": float(int(card_height * 0.32) if str(demo["key"]) == "rotate" else 0.0),
             }
 
     def update_animation(self, current_time: float | None = None) -> None:
@@ -417,6 +407,9 @@ class HomeUIView:
             secondary_a = demo["secondary_a"]
             secondary_b = demo["secondary_b"]
             key = str(demo["key"])
+            if key == "rotate":
+                continue
+
             center_x = stage_width * 0.50
             phase = (animation_time / self.HOME_DEMO_CYCLE_SECONDS) % 1.0
             start_gap = 20.0
@@ -479,57 +472,6 @@ class HomeUIView:
                 controlled.setR(0.0)
                 set_pair(secondary_a, secondary_b, center_x - hand_spread, finger_y, gap)
                 set_pair(primary_a, primary_b, center_x + hand_spread, finger_y, gap)
-            else:
-                primary_a.show()
-                primary_b.show()
-                secondary_a.hide()
-                secondary_b.hide()
-                rotate_phase = (animation_time / self.LOWER_ROTATE_CYCLE_SECONDS) % 1.0
-                if rotate_phase < 0.18:
-                    ratio = rotate_phase / 0.18
-                    orbit_angle = 0.0
-                    gap = start_gap + (pinch_gap - start_gap) * ratio
-                    pair_center_radius = stage_width * 0.18 * (1.0 - ratio)
-                else:
-                    ratio = (rotate_phase - 0.18) / 0.82
-                    orbit_angle = ratio * 2.0 * math.pi * 3.2
-                    gap = pinch_gap
-                    pair_center_radius = stage_width * 0.06
-
-                angle = math.degrees(orbit_angle) % 360.0
-                controlled.setPos(center_x, 0, controlled_y)
-                controlled.setScale(1.0)
-                controlled.setR(angle)
-                primary_center_x = center_x + math.cos(orbit_angle) * pair_center_radius
-                primary_center_y = finger_y + math.sin(orbit_angle) * stage_height * 0.14
-                set_pair(primary_a, primary_b, primary_center_x, primary_center_y, gap)
-
-                rotate_fingers = demo.get("rotate_fingers")
-                rotate_mode_label = demo.get("rotate_mode_label")
-                rotate_stage_width = float(layout.get("rotate_stage_width", 0.0))
-                rotate_stage_height = float(layout.get("rotate_stage_height", 0.0))
-                if isinstance(rotate_fingers, list) and rotate_fingers and rotate_stage_width > 0.0 and rotate_stage_height > 0.0:
-                    five_phase = (animation_time / self.UPPER_ROTATE_CYCLE_SECONDS) % 1.0
-                    finger_center_x = rotate_stage_width * 0.50
-                    finger_center_y = -rotate_stage_height * 0.55
-                    if isinstance(rotate_mode_label, NodePath):
-                        rotate_mode_label.node().setText(
-                            "move" if five_phase < (0.34 + 0.3 / self.UPPER_ROTATE_CYCLE_SECONDS) else "rotate"
-                        )
-                    for finger_index, finger in enumerate(rotate_fingers):
-                        if not isinstance(finger, DirectFrame):
-                            continue
-                        base_offset = (finger_index - 2) * rotate_stage_width * 0.12
-                        hold_end = 0.34 + 0.3 / self.UPPER_ROTATE_CYCLE_SECONDS
-                        if five_phase < 0.34:
-                            ratio = five_phase / 0.34
-                            offset = base_offset * (1.0 - ratio)
-                        elif five_phase < hold_end:
-                            offset = 0.0
-                        else:
-                            ratio = (five_phase - hold_end) / max(1.0 - hold_end, 1e-6)
-                            offset = base_offset * ratio
-                        finger.setPos(finger_center_x + offset, 0, finger_center_y)
 
     def _apply_cursor_style(self) -> None:
         if self._cursor is None:

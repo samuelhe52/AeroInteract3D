@@ -21,8 +21,10 @@ class DataPanelManager:
     PANEL_HEIGHT = 400
     PANEL_MARGIN = 12
     PANEL_GAP = 12
+    CAMERA_PREVIEW_HEIGHT = 216
     MENU_HOLD_INDICATOR_HEIGHT = 34
     MENU_HOLD_INDICATOR_GAP = 10
+    STATUS_PANEL_TOP_MARGIN = PANEL_MARGIN + MENU_HOLD_INDICATOR_HEIGHT + MENU_HOLD_INDICATOR_GAP + CAMERA_PREVIEW_HEIGHT + PANEL_GAP
     MENU_HOLD_LAMP_SIZE = 18
     MENU_HOLD_LAMP_GAP = 14
     MENU_HOLD_LABEL_OFFSET_X = 18
@@ -66,10 +68,6 @@ class DataPanelManager:
     @classmethod
     def panel_top_margin(cls) -> int:
         return cls.PANEL_MARGIN + cls.MENU_HOLD_INDICATOR_HEIGHT + cls.MENU_HOLD_INDICATOR_GAP
-
-    @classmethod
-    def camera_preview_top_margin(cls) -> int:
-        return cls.panel_top_margin() + cls.PANEL_HEIGHT + cls.PANEL_GAP
     
     def init_panel(self) -> None:
         """Initialize data panel (original logic preserved)"""
@@ -77,7 +75,7 @@ class DataPanelManager:
             # Create status frame
             self._status_frame = DirectFrame(
                 parent=self._pixel2d,
-                pos=(self.PANEL_MARGIN * self._ui_scale, 0, -self.panel_top_margin() * self._ui_scale),
+                pos=(self.PANEL_MARGIN * self._ui_scale, 0, -self.STATUS_PANEL_TOP_MARGIN * self._ui_scale),
                 frameSize=(0, self.PANEL_WIDTH * self._ui_scale, -self.PANEL_HEIGHT * self._ui_scale, 0),
                 frameColor=(0.0, 0.0, 0.0, 0.9),  # Black semi-transparent background (original logic preserved)
                 relief=1,
@@ -119,7 +117,7 @@ class DataPanelManager:
             # Create status text panel
             self._status_panel = OnscreenText(
                 parent=self._pixel2d,
-                pos=(self.TEXT_OFFSET_X * self._ui_scale, -(self.panel_top_margin() + self.TEXT_OFFSET_Y) * self._ui_scale),
+                pos=(self.TEXT_OFFSET_X * self._ui_scale, -(self.STATUS_PANEL_TOP_MARGIN + self.TEXT_OFFSET_Y) * self._ui_scale),
                 align=TextNode.ALeft,
                 scale=self.TEXT_SCALE * self._ui_scale,
                 fg=(1.0, 1.0, 1.0, 1.0),  # White text (original logic preserved)
@@ -346,7 +344,7 @@ class DataPanelManager:
         # Scale data panel
         if self._status_frame:
             # Original position and size
-            original_pos = (self.PANEL_MARGIN, 0, -self.panel_top_margin())
+            original_pos = (self.PANEL_MARGIN, 0, -self.STATUS_PANEL_TOP_MARGIN)
             original_size = (0, self.PANEL_WIDTH, -self.PANEL_HEIGHT, 0)
             # Calculate new position and size
             new_pos = (original_pos[0] * scale, original_pos[1], original_pos[2] * scale)
@@ -364,7 +362,7 @@ class DataPanelManager:
         
         # Scale data text
         if self._status_panel:
-            original_pos = (self.TEXT_OFFSET_X, -(self.panel_top_margin() + self.TEXT_OFFSET_Y))
+            original_pos = (self.TEXT_OFFSET_X, -(self.STATUS_PANEL_TOP_MARGIN + self.TEXT_OFFSET_Y))
             original_scale = self.TEXT_SCALE
             new_pos = (original_pos[0] * scale, original_pos[1] * scale)
             new_scale = original_scale * scale

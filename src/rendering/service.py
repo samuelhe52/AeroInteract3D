@@ -470,7 +470,7 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
                 self._camera_preview = CameraPreviewManager(
                     self._auto_scaling,
                     top_margin=(
-                        DataPanelManager.camera_preview_top_margin()
+                        DataPanelManager.panel_top_margin()
                         if self._debug_stats_enabled
                         else CameraPreviewManager.PREVIEW_MARGIN
                     ),
