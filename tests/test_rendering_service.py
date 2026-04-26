@@ -11,7 +11,7 @@ import pytest
 from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.rendering import model_factory as model_factory_module
 from src.rendering.debug.data_panel import DataPanelManager
-from src.rendering.rendering_core import RenderingCoreManager
+from src.rendering.rendering_core import MAIN_MENU_BACKGROUND_COLOR, RenderingCoreManager
 from src.rendering import service as rendering_service
 from src.rendering.service import ObjectInitialState, RenderingServiceImpl
 from src.rendering.ui.input_adapter import UIGestureInputAdapter
@@ -2297,7 +2297,7 @@ def test_rendering_brightness_and_volume_apply_to_window_roots(monkeypatch) -> N
 
     assert service._scene_root.color_scale == pytest.approx((0.4, 0.4, 0.4, 1.0))
     assert service._window_adapter.get_base().pixel2d.color_scale == pytest.approx((0.4, 0.4, 0.4, 1.0))
-    assert service._window_adapter.get_base().background_color == pytest.approx((0.4, 0.4, 0.4, 1.0))
+    assert service._window_adapter.get_base().background_color == pytest.approx((*MAIN_MENU_BACKGROUND_COLOR, 1.0))
     assert volume_updates == [50.0, 73.0]
 
 

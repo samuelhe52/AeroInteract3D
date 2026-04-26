@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .rendering_core import MAIN_MENU_BACKGROUND_COLOR
 from .ui import RenderView, TableOverlay
 from .ui.display_metrics import clamp_display_scale, logical_size_from_physical
 
@@ -561,7 +562,7 @@ class RenderingServiceUIMixin:
 
         set_background = getattr(base, "setBackgroundColor", None)
         if callable(set_background):
-            set_background(brightness, brightness, brightness, 1.0)
+            set_background(*MAIN_MENU_BACKGROUND_COLOR, 1.0)
 
         pixel2d = getattr(base, "pixel2d", None)
         set_color_scale = getattr(pixel2d, "setColorScale", None)

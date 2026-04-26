@@ -26,7 +26,7 @@ DEFAULT_WINDOW_SCREEN_SCALE = 0.8
 REFERENCE_WINDOW_SIZE = (1600, 900)
 MIN_WINDOW_SIZE = (800, 450)
 QUIT_SHORTCUT_EVENTS = ("meta-w", "meta-q", "control-w", "control-q")
-TABLE_BACKGROUND_COLOR = (0.88, 0.89, 0.87)
+MAIN_MENU_BACKGROUND_COLOR = (0.94, 0.93, 0.90)
 
 
 class RenderingCoreManager:
@@ -202,9 +202,9 @@ class RenderingCoreManager:
             WindowProperties.setDefault(window_props)
             self._base = ShowBase()
             WindowProperties.clearDefault()
-            # Keep the table surface softer than pure white to reduce glare.
+            # Match the main menu backdrop so the scene feels visually consistent.
             if self._base:
-                self._base.setBackgroundColor(*TABLE_BACKGROUND_COLOR, 1)
+                self._base.setBackgroundColor(*MAIN_MENU_BACKGROUND_COLOR, 1)
                 self._base.render.setAntialias(AntialiasAttrib.MAuto)
                 win: Optional[GraphicsWindow] = self._base.win
                 if win:
@@ -253,16 +253,16 @@ class RenderingCoreManager:
             raise RuntimeError("Window is not initialized; cannot create lights")
         try:
             amb_light = AmbientLight("table_ambient_light")
-            amb_light.setColor((0.34, 0.34, 0.34, 1.0))
+            amb_light.setColor((0.40, 0.40, 0.40, 1.0))
             amb_light_np = self._base.render.attachNewNode(amb_light)
             self._base.render.setLight(amb_light_np)
             dir_light = DirectionalLight("table_key_light")
-            dir_light.setColor((0.82, 0.82, 0.82, 1.0))
+            dir_light.setColor((0.92, 0.92, 0.92, 1.0))
             dir_light_np = self._base.render.attachNewNode(dir_light)
             dir_light_np.setHpr(35, -55, 0)
             self._base.render.setLight(dir_light_np)
             fill_light = DirectionalLight("table_fill_light")
-            fill_light.setColor((0.48, 0.48, 0.52, 1.0))
+            fill_light.setColor((0.60, 0.60, 0.64, 1.0))
             fill_light_np = self._base.render.attachNewNode(fill_light)
             fill_light_np.setHpr(180, -18, 0)
             self._base.render.setLight(fill_light_np)
