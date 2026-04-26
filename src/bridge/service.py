@@ -1242,7 +1242,8 @@ class BridgeServiceImpl(BridgeService):
             heading_delta *= -1.0
         next_hpr = (
             base_h + (heading_delta * self._rotation_sensitivity),
-            base_p + ((cur_p - ref_p) * self._rotation_sensitivity),
+            # Flip pitch so positive gesture Y deltas rotate the object in the expected world direction.
+            base_p - ((cur_p - ref_p) * self._rotation_sensitivity),
             base_r + ((cur_r - ref_r) * self._rotation_sensitivity),
         )
         object_state.world_hpr = next_hpr

@@ -296,7 +296,7 @@ def test_bridge_emits_hpr_only_in_rotation_mode() -> None:
     )
 
     assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_pose"]
-    assert commands[1].payload["hpr"] == pytest.approx({"h": 2.0, "p": 28.0, "r": 15.0})
+    assert commands[1].payload["hpr"] == pytest.approx({"h": 2.0, "p": -12.0, "r": 15.0})
 
 
 def test_bridge_rotation_mode_does_not_enter_grabbed_state() -> None:
@@ -438,7 +438,7 @@ def test_bridge_rotation_restarts_from_current_object_pose_instead_of_raw_hand_p
     )
 
     assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_state", "set_object_pose"]
-    assert commands[2].payload["hpr"] == pytest.approx({"h": -13.0, "p": 38.0, "r": 40.0})
+    assert commands[2].payload["hpr"] == pytest.approx({"h": -13.0, "p": -22.0, "r": 40.0})
 
 
 def test_bridge_rotation_sensitivity_scales_rotation_delta() -> None:
@@ -478,7 +478,7 @@ def test_bridge_rotation_sensitivity_scales_rotation_delta() -> None:
         )
     )
 
-    assert commands[1].payload["hpr"] == pytest.approx({"h": -8.0, "p": 18.0, "r": 20.0})
+    assert commands[1].payload["hpr"] == pytest.approx({"h": -8.0, "p": -2.0, "r": 20.0})
 
 
 def test_bridge_resets_when_tracking_is_lost_during_grab() -> None:
