@@ -396,6 +396,7 @@ def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(m
     assert captured_gesture_kwargs["motion_preset"] == "medium"
     assert captured_gesture_kwargs["aggressive_release_guard"] is False
     assert captured_bridge_kwargs["input_mirrored"] is True
+    assert captured_bridge_kwargs["position_sensitivity"] == 1.35
     assert captured_bridge_kwargs["rotation_sensitivity"] == 1.5
     assert captured_render_kwargs["debug_stats_enabled"] is True
     assert captured_render_kwargs["position_sensitivity"] == 1.35

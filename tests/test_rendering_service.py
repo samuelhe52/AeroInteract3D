@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+from pathlib import Path
 import sys
 
 import pytest
@@ -165,15 +166,20 @@ class FakeRenderRoot:
     def __init__(self) -> None:
         self.children: list[object] = []
 
-    def attachNewNode(self, node) -> "FakeNodePath":
-        child = FakeNodePath(getattr(node, "name", "child"))
+    def attachNewNode(self, node, *args) -> "FakeNodePath":
+        node_name = node if isinstance(node, str) else getattr(node, "name", "child")
+        child = FakeNodePath(node_name)
         child.parent = self
         self.children.append(child)
         return child
 
 
 class FakeLoader:
-    def loadModel(self, model_path):
+    def __init__(self) -> None:
+        self.last_load_kwargs: dict[str, object] = {}
+
+    def loadModel(self, model_path, **kwargs):
+        self.last_load_kwargs = dict(kwargs)
         return FakeLoadedModel(model_path)
 
 
@@ -286,8 +292,9 @@ class FakeNodePath:
     def reparentTo(self, parent: object) -> None:
         self.parent = parent
 
-    def attachNewNode(self, node) -> "FakeNodePath":
-        child = FakeNodePath(getattr(node, "name", "child"))
+    def attachNewNode(self, node, *args) -> "FakeNodePath":
+        node_name = node if isinstance(node, str) else getattr(node, "name", "child")
+        child = FakeNodePath(node_name)
         child.parent = self
         self.children.append(child)
         return child
@@ -1014,7 +1021,7 @@ def test_rendering_preserves_hpr_for_position_only_pose_updates() -> None:
     assert obj.hpr == (4.0, 5.0, 6.0)
 
 
-def test_rendering_applies_position_sensitivity_to_pose_updates() -> None:
+def test_rendering_does_not_scale_absolute_pose_updates() -> None:
     service = RenderingServiceImpl(position_sensitivity=1.5)
     service._status = LIFECYCLE_RUNNING
     obj = FakeObjectNode()
@@ -1030,7 +1037,7 @@ def test_rendering_applies_position_sensitivity_to_pose_updates() -> None:
         )
     )
 
-    assert obj.pos == (0.30000000000000004, -0.44999999999999996, 1.0499999999999998)
+    assert obj.pos == (0.2, -0.3, 0.7)
 
 
 def test_rendering_applies_pending_grab_material_state() -> None:
@@ -1075,6 +1082,77 @@ def test_glb_custom_models_require_panda3d_gltf(monkeypatch, tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="panda3d-gltf"):
         rendering_service.ModelResourceFactory(loader=None, auto_scan_dir=str(tmp_path))
+
+
+def test_auto_scanned_custom_model_sidecar_applies_template_fields(tmp_path) -> None:
+    custom_model = tmp_path / "teapot.egg"
+    custom_model.write_text("placeholder", encoding="utf-8")
+    sidecar = tmp_path / "teapot.model.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "display_name": "Tea Pot",
+                "default_scale": [2.0, 3.0, 4.0],
+                "center_offset": [0.1, 0.2, -0.3],
+                "import_hpr": [0.0, -90.0, 0.0],
+                "two_sided": True,
+                "use_builtin_materials": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    factory = rendering_service.ModelResourceFactory(loader=FakeLoader(), auto_scan_dir=str(tmp_path))
+
+    template = factory._template_registry["teapot"]
+    assert template.display_name == "Tea Pot"
+    assert factory.get_display_name("teapot") == "Tea Pot"
+    assert template.default_scale == pytest.approx((2.0, 3.0, 4.0))
+    assert template.center_offset == pytest.approx((0.1, 0.2, -0.3))
+    assert template.import_hpr == pytest.approx((0.0, -90.0, 0.0))
+    assert template.two_sided is True
+    assert template.use_builtin_materials is True
+
+    loaded_model = factory._load_model_template("teapot")
+    assert loaded_model.pos == pytest.approx((0.1, 0.2, -0.3))
+    assert loaded_model.two_sided is True
+
+
+def test_bundled_custom_model_sidecars_preserve_basis_correction() -> None:
+    custom_model_dir = Path(__file__).resolve().parents[1] / "assets" / "custom_models"
+    expected_models = {
+        "apple",
+        "burger_bun01",
+        "burger_bun02",
+        "burger_bun03",
+        "croissant",
+        "frame",
+        "lemon",
+        "potted_plant",
+        "wooden_table",
+    }
+
+    for shape_id in expected_models:
+        sidecar_path = custom_model_dir / f"{shape_id}.model.json"
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        assert payload.get("import_hpr") == pytest.approx([0.0, -90.0, 0.0])
+
+
+def test_auto_scanned_custom_models_bypass_panda3d_cache(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    custom_model = tmp_path / "apple.glb"
+    custom_model.write_text("placeholder", encoding="utf-8")
+
+    loader = FakeLoader()
+    monkeypatch.setattr(
+        model_factory_module.ModelResourceFactory,
+        "_ensure_gltf_loader_available",
+        staticmethod(lambda _models_dir: None),
+    )
+    factory = rendering_service.ModelResourceFactory(loader=loader, auto_scan_dir=str(tmp_path))
+
+    factory._load_model_template("apple")
+
+    assert loader.last_load_kwargs.get("noCache") is True
 
 
 def test_model_factory_applies_scene_scale_to_object_root() -> None:
@@ -1844,6 +1922,38 @@ def test_rendering_option_overlay_toggles_object_visibility(monkeypatch, tmp_pat
     assert service._object_cache["primary_cube"].hidden is True
     assert service.health()["stats"]["object_visibility"] == {"primary_cube": False}
     assert service._table_overlay_view.last_object_items[0]["visible"] is False
+
+
+def test_rendering_preserves_table_model_placement(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter, position_sensitivity=2.0)
+    service.start()
+
+    service.push(
+        make_command(
+            command_id="init-scene-table-align-1",
+            command_type="init_scene",
+            object_id="scene",
+            payload={
+                "objects": [
+                    {
+                        "object_id": "table_plane",
+                        "init_pos": {"x": 0.0, "y": -1.94, "z": 0.18},
+                        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
+                        "shape": "wooden_table",
+                        "scale": {"x": 2.2919410217835164, "y": 2.3640589645458817, "z": 2.436176907308247},
+                        "collision_surface_y": -0.05,
+                        "interactable": False,
+                    }
+                ]
+            },
+        )
+    )
+
+    object_np = service._object_cache["table_plane"]
+
+    assert object_np.pos == pytest.approx((0.0, 0.18, -1.94))
+    assert service._object_initial_states["table_plane"].pos == pytest.approx((0.0, 0.18, -1.94))
 
 
 def test_rendering_hidden_object_ignores_pose_and_state_updates(monkeypatch, tmp_path) -> None:

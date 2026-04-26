@@ -20,7 +20,6 @@ from src.constants import (
     INTERACTION_PENDING_GRAB,
     INTERACTION_ROTATING,
     MAX_ERROR_HISTORY,
-    PRIMARY_OBJECT_ID,
 )
 from src.contracts import GesturePacket, SceneCommand, Vec3
 from src.ports import BridgeService
@@ -43,106 +42,160 @@ logger = logging.getLogger("bridge.service")
 coordinate_logger = logging.getLogger("bridge.coordinate_transformation")
 
 INITIAL_OBJECT_POSITION = Vec3(0.0, 0.0, 0.0)
+BRIDGE_SCENE_OBJECT_ID = "scene"
+CURRENT_TABLE_SURFACE_Y = -0.05
+
+
+_TABLETOP_PROP_Y_BY_SHAPE = {
+    "apple": 0.032,
+    "burger_bun01": -0.05,
+    "burger_bun02": -0.05,
+    "burger_bun03": -0.05,
+    "croissant": -0.048,
+    "lemon": 0.041,
+    "frame": -0.05,
+    "potted_plant": -0.05,
+}
+
+
+def _tabletop_prop_y(shape: str) -> float:
+    return _TABLETOP_PROP_Y_BY_SHAPE.get(shape, CURRENT_TABLE_SURFACE_Y)
+
+
+def _tabletop_collision_half_height(init_y: float) -> float:
+    return max(init_y - CURRENT_TABLE_SURFACE_Y, 0.0)
+
+
+def _scene_collision_surface_y(descriptor: dict[str, Any]) -> float:
+    explicit_surface_y = descriptor.get("collision_surface_y")
+    if isinstance(explicit_surface_y, int | float):
+        return float(explicit_surface_y)
+    return float(descriptor["init_pos"]["y"]) + (float(descriptor["scale"]["y"]) * 0.5)
+
+
 TABLE_SCENE_OBJECTS: tuple[dict[str, Any], ...] = (
     {
         "object_id": "table_plane",
-        "init_pos": {"x": 0.0, "y": -0.34, "z": 0.18},
+        "init_pos": {"x": 0.0, "y": -1.94, "z": 0.18},
         "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
         "coordinate_space": "world_norm",
         "interaction_state": INTERACTION_IDLE,
-        "shape": "plane",
-        "scale": {"x": 2.2, "y": 0.10, "z": 1.42},
-        "color": {"r": 0.68, "g": 0.64, "b": 0.58, "a": 1.0},
+        "shape": "wooden_table",
+        "scale": {
+            "x": 2.2919410217835164,
+            "y": 2.3640589645458817,
+            "z": 2.436176907308247,
+        },
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "collision_surface_y": CURRENT_TABLE_SURFACE_Y,
         "interactable": False,
     },
     {
-        "object_id": PRIMARY_OBJECT_ID,
-        "init_pos": {"x": 0.0, "y": -0.08, "z": 0.18},
+        "object_id": "apple_model",
+        "init_pos": {"x": 0.0, "y": _tabletop_prop_y("apple"), "z": 0.18},
         "init_hpr": {"h": 12.0, "p": 8.0, "r": 0.0},
         "coordinate_space": "world_norm",
         "interaction_state": INTERACTION_IDLE,
-        "shape": "cube",
-        "scale": {"x": 0.22, "y": 0.22, "z": 0.22},
-        "color": {"r": 0.86, "g": 0.48, "b": 0.26, "a": 1.0},
-        "interactable": True,
-        "interaction_radius": 0.18,
-    },
-    {
-        "object_id": "tile_left",
-        "init_pos": {"x": -0.48, "y": -0.14, "z": 0.02},
-        "init_hpr": {"h": -8.0, "p": 0.0, "r": 0.0},
-        "coordinate_space": "world_norm",
-        "interaction_state": INTERACTION_IDLE,
-        "shape": "tile",
-        "scale": {"x": 0.28, "y": 0.06, "z": 0.22},
-        "color": {"r": 0.31, "g": 0.55, "b": 0.82, "a": 1.0},
-        "interactable": True,
-        "interaction_radius": 0.16,
-    },
-    {
-        "object_id": "pillar_left",
-        "init_pos": {"x": -0.24, "y": -0.06, "z": 0.32},
-        "init_hpr": {"h": 18.0, "p": 0.0, "r": 0.0},
-        "coordinate_space": "world_norm",
-        "interaction_state": INTERACTION_IDLE,
-        "shape": "pillar",
-        "scale": {"x": 0.14, "y": 0.32, "z": 0.14},
-        "color": {"r": 0.90, "g": 0.79, "b": 0.34, "a": 1.0},
-        "interactable": True,
-        "interaction_radius": 0.18,
-    },
-    {
-        "object_id": "cube_right",
-        "init_pos": {"x": 0.34, "y": -0.10, "z": -0.04},
-        "init_hpr": {"h": -14.0, "p": 6.0, "r": 0.0},
-        "coordinate_space": "world_norm",
-        "interaction_state": INTERACTION_IDLE,
-        "shape": "cube",
+        "shape": "apple",
         "scale": {"x": 0.18, "y": 0.18, "z": 0.18},
-        "color": {"r": 0.35, "g": 0.75, "b": 0.60, "a": 1.0},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
         "interactable": True,
-        "interaction_radius": 0.16,
+        "collision_half_height": _tabletop_collision_half_height(_tabletop_prop_y("apple")),
+        "interaction_radius": 0.18,
     },
     {
-        "object_id": "tile_right",
-        "init_pos": {"x": 0.54, "y": -0.16, "z": 0.30},
-        "init_hpr": {"h": 10.0, "p": 0.0, "r": 0.0},
+        "object_id": "bun_left",
+        "init_pos": {"x": -0.30, "y": _tabletop_prop_y("burger_bun01"), "z": 0.42},
+        "init_hpr": {"h": -12.0, "p": 0.0, "r": 0.0},
         "coordinate_space": "world_norm",
         "interaction_state": INTERACTION_IDLE,
-        "shape": "tile",
-        "scale": {"x": 0.32, "y": 0.05, "z": 0.20},
-        "color": {"r": 0.72, "g": 0.41, "b": 0.65, "a": 1.0},
-        "interactable": True,
-        "interaction_radius": 0.16,
-    },
-        # 新增自定义模型配置，和原有格式完全一致
-    {
-        "object_id": "my_teapot",
-        "init_pos": {"x": 0.5, "y": -0.08, "z": 0.18},
-        "init_hpr": {"h": 0.0, "p": 0.0, "r": 0.0},
-        "coordinate_space": "world_norm",
-        "interaction_state": "idle",
-        "shape": "teapot",  # 和Rendering侧注册的shape_id完全一致
-        "scale": {"x": 0.2, "y": 0.2, "z": 0.2},
-        "color": {"r": 0.2, "g": 0.6, "b": 0.9, "a": 1.0},
-        "interactable": True,
-        "interaction_radius": 0.18,
-    },
-        # 新增测试用金字塔模型
-    {
-        "object_id": "test_pyramid",
-        "init_pos": {"x": 0.0, "y": -0.08, "z": 0.3},  # 放在主立方体上方
-        "init_hpr": {"h": 45.0, "p": 0.0, "r": 0.0},     # 初始旋转45度
-        "coordinate_space": "world_norm",
-        "interaction_state": "idle",
-        "shape": "pyramid",  # 直接填文件名（不含后缀）
+        "shape": "burger_bun01",
         "scale": {"x": 0.15, "y": 0.15, "z": 0.15},
-        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},  # 纯白，显示模型自带的橙色
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
         "interactable": True,
+        "collision_half_height": _tabletop_collision_half_height(_tabletop_prop_y("burger_bun01")),
+        "interaction_radius": 0.14,
+    },
+    {
+        "object_id": "bun_center",
+        "init_pos": {"x": 0.0, "y": _tabletop_prop_y("burger_bun02"), "z": 0.48},
+        "init_hpr": {"h": 6.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "burger_bun02",
+        "scale": {"x": 0.15, "y": 0.15, "z": 0.15},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "collision_half_height": _tabletop_collision_half_height(_tabletop_prop_y("burger_bun02")),
+        "interaction_radius": 0.14,
+    },
+    {
+        "object_id": "bun_right",
+        "init_pos": {"x": 0.30, "y": _tabletop_prop_y("burger_bun03"), "z": 0.42},
+        "init_hpr": {"h": 16.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "burger_bun03",
+        "scale": {"x": 0.15, "y": 0.15, "z": 0.15},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "collision_half_height": _tabletop_collision_half_height(_tabletop_prop_y("burger_bun03")),
+        "interaction_radius": 0.14,
+    },
+    {
+        "object_id": "croissant_left",
+        "init_pos": {"x": -0.12, "y": _tabletop_prop_y("croissant"), "z": 0.18},
+        "init_hpr": {"h": -38.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "croissant",
+        "scale": {"x": 0.45, "y": 0.45, "z": 0.45},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "collision_half_height": _tabletop_collision_half_height(_tabletop_prop_y("croissant")),
+        "interaction_radius": 0.22,
+    },
+    {
+        "object_id": "lemon_right",
+        "init_pos": {"x": 0.22, "y": _tabletop_prop_y("lemon"), "z": 0.20},
+        "init_hpr": {"h": 34.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "lemon",
+        "scale": {"x": 0.165, "y": 0.165, "z": 0.165},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "collision_half_height": _tabletop_collision_half_height(_tabletop_prop_y("lemon")),
+        "interaction_radius": 0.15,
+    },
+    {
+        "object_id": "desk_frame",
+        "init_pos": {"x": -0.48, "y": _tabletop_prop_y("frame"), "z": 0.54},
+        "init_hpr": {"h": 22.0, "p": -12.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "frame",
+        "scale": {"x": 0.24, "y": 0.24, "z": 0.24},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "collision_half_height": _tabletop_collision_half_height(_tabletop_prop_y("frame")),
         "interaction_radius": 0.18,
+    },
+    {
+        "object_id": "plant_back_left",
+        "init_pos": {"x": 0.46, "y": _tabletop_prop_y("potted_plant"), "z": 0.58},
+        "init_hpr": {"h": 24.0, "p": 0.0, "r": 0.0},
+        "coordinate_space": "world_norm",
+        "interaction_state": INTERACTION_IDLE,
+        "shape": "potted_plant",
+        "scale": {"x": 0.36, "y": 0.36, "z": 0.36},
+        "color": {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0},
+        "interactable": True,
+        "collision_half_height": _tabletop_collision_half_height(_tabletop_prop_y("potted_plant")),
+        "interaction_radius": 0.20,
     },
 )
-TABLE_SURFACE_Y = float(TABLE_SCENE_OBJECTS[0]["init_pos"]["y"]) + (float(TABLE_SCENE_OBJECTS[0]["scale"]["y"]) * 0.5)
+TABLE_SURFACE_Y = _scene_collision_surface_y(TABLE_SCENE_OBJECTS[0])
 DEFAULT_INTERACTABLE_OBJECT_SCALE = (0.22, 0.22, 0.22)
 
 
@@ -195,10 +248,17 @@ SECONDARY_PINCH_FALLBACK_RELEASE_DISTANCE = 0.24
 
 
 class BridgeServiceImpl(BridgeService):
-    def __init__(self, *, input_mirrored: bool = True, rotation_sensitivity: float = 1.0) -> None:
+    def __init__(
+        self,
+        *,
+        input_mirrored: bool = True,
+        position_sensitivity: float = 1.0,
+        rotation_sensitivity: float = 1.0,
+    ) -> None:
         self.lifecycle_state = LIFECYCLE_STOPPED
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
         self._input_mirrored = bool(input_mirrored)
+        self._position_sensitivity = max(float(position_sensitivity), 0.001)
         self._rotation_sensitivity = max(float(rotation_sensitivity), 0.001)
         self._interaction_state = BRIDGE_STATE_IDLE
         self._last_frame_id: int | None = None
@@ -240,15 +300,6 @@ class BridgeServiceImpl(BridgeService):
         self._dual_scale_ratio = 1.0
         self._pinch_capture_lock_object_id = None
         self._dual_scale_rotation_blocked_until_open = False
-        self._ensure_object_state(
-            PRIMARY_OBJECT_ID,
-            world_position=INITIAL_OBJECT_POSITION,
-            interaction_radius=HOVER_DISTANCE_THRESHOLD,
-            half_height=0.1,
-            world_scale=DEFAULT_INTERACTABLE_OBJECT_SCALE,
-            interaction_state=BRIDGE_STATE_IDLE,
-            initialized=False,
-        )
         self.lifecycle_state = LIFECYCLE_RUNNING
         return None
 
@@ -390,12 +441,12 @@ class BridgeServiceImpl(BridgeService):
             self._stop_dual_scale_mode()
             return commands
 
-        hand_anchor_world = self._camera_to_world_position(self._interaction_anchor(packet)) if primary_available else Vec3(0.0, 0.0, 0.0)
+        hand_anchor_world = self._camera_to_world_control_position(self._interaction_anchor(packet)) if primary_available else Vec3(0.0, 0.0, 0.0)
         hovered_object = self._select_hovered_object(hand_anchor_world) if primary_available else None
         hovered_object_id = hovered_object.object_id if hovered_object is not None else None
         secondary_anchor_world = None
         if secondary_hand is not None:
-            secondary_anchor_world = self._camera_to_world_position(
+            secondary_anchor_world = self._camera_to_world_control_position(
                 self._anchor_from_tips(secondary_hand.index_tip, secondary_hand.thumb_tip)
             )
         secondary_hovered_object_id = self._secondary_hovered_object_id(secondary_hand) if secondary_available else None
@@ -644,7 +695,7 @@ class BridgeServiceImpl(BridgeService):
                     z=float(descriptor["init_pos"]["z"]),
                 ),
                 interaction_radius=float(descriptor.get("interaction_radius", HOVER_DISTANCE_THRESHOLD)),
-                half_height=float(descriptor["scale"]["y"]) * 0.5,
+                half_height=float(descriptor.get("collision_half_height", float(descriptor["scale"]["y"]) * 0.5)),
                 world_scale=(
                     float(descriptor["scale"]["x"]),
                     float(descriptor["scale"]["y"]),
@@ -669,7 +720,7 @@ class BridgeServiceImpl(BridgeService):
             frame_id=packet.frame_id,
             timestamp_ms=packet.timestamp_ms,
             command_type="init_scene",
-            object_id=PRIMARY_OBJECT_ID,
+            object_id=BRIDGE_SCENE_OBJECT_ID,
             payload={"objects": [dict(scene_object) for scene_object in TABLE_SCENE_OBJECTS]},
         )
 
@@ -713,10 +764,24 @@ class BridgeServiceImpl(BridgeService):
             "visible": False,
         }
         if packet.tracking_state == "tracked" and packet.confidence >= BRIDGE_MIN_TRACKING_CONFIDENCE:
-            index_tip_world = self._camera_to_world_position(packet.index_tip)
-            thumb_tip_world = self._camera_to_world_position(packet.thumb_tip)
-            wrist_world = self._camera_to_world_position(packet.wrist)
             anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
+            sensitivity_offset = self._subtract_vec3(
+                self._camera_to_world_control_position(self._interaction_anchor(packet)),
+                anchor_world,
+            )
+            index_tip_world = self._translate_world_position(
+                self._camera_to_world_position(packet.index_tip),
+                sensitivity_offset,
+            )
+            thumb_tip_world = self._translate_world_position(
+                self._camera_to_world_position(packet.thumb_tip),
+                sensitivity_offset,
+            )
+            wrist_world = self._translate_world_position(
+                self._camera_to_world_position(packet.wrist),
+                sensitivity_offset,
+            )
+            anchor_world = self._translate_world_position(anchor_world, sensitivity_offset)
             thumb_base_world, index_base_world = self._finger_base_points(
                 wrist_world,
                 anchor_world,
@@ -756,10 +821,26 @@ class BridgeServiceImpl(BridgeService):
             secondary_hand.tracking_state == "tracked"
             and secondary_hand.confidence >= BRIDGE_MIN_TRACKING_CONFIDENCE
         ):
-            index_tip_world = self._camera_to_world_position(secondary_hand.index_tip)
-            thumb_tip_world = self._camera_to_world_position(secondary_hand.thumb_tip)
-            wrist_world = self._camera_to_world_position(secondary_hand.wrist)
             anchor_world = self._camera_to_world_position(self._anchor_from_tips(secondary_hand.index_tip, secondary_hand.thumb_tip))
+            sensitivity_offset = self._subtract_vec3(
+                self._camera_to_world_control_position(
+                    self._anchor_from_tips(secondary_hand.index_tip, secondary_hand.thumb_tip)
+                ),
+                anchor_world,
+            )
+            index_tip_world = self._translate_world_position(
+                self._camera_to_world_position(secondary_hand.index_tip),
+                sensitivity_offset,
+            )
+            thumb_tip_world = self._translate_world_position(
+                self._camera_to_world_position(secondary_hand.thumb_tip),
+                sensitivity_offset,
+            )
+            wrist_world = self._translate_world_position(
+                self._camera_to_world_position(secondary_hand.wrist),
+                sensitivity_offset,
+            )
+            anchor_world = self._translate_world_position(anchor_world, sensitivity_offset)
             thumb_base_world, index_base_world = self._finger_base_points(
                 wrist_world,
                 anchor_world,
@@ -935,7 +1016,7 @@ class BridgeServiceImpl(BridgeService):
             or secondary_hand.confidence < BRIDGE_MIN_TRACKING_CONFIDENCE
         ):
             return None
-        secondary_anchor_world = self._camera_to_world_position(
+        secondary_anchor_world = self._camera_to_world_control_position(
             self._anchor_from_tips(secondary_hand.index_tip, secondary_hand.thumb_tip)
         )
         secondary_hovered = self._select_hovered_object(secondary_anchor_world)
@@ -1019,7 +1100,7 @@ class BridgeServiceImpl(BridgeService):
             self._stop_dual_scale_mode()
             return []
 
-        secondary_anchor_world = self._camera_to_world_position(
+        secondary_anchor_world = self._camera_to_world_control_position(
             self._anchor_from_tips(secondary_hand.index_tip, secondary_hand.thumb_tip)
         )
         distance_xy = self._distance_xy(primary_anchor_world, secondary_anchor_world)
@@ -1171,7 +1252,7 @@ class BridgeServiceImpl(BridgeService):
         hand_anchor_world: Vec3 | None = None,
     ) -> tuple[Vec3, bool]:
         if hand_anchor_world is None:
-            hand_anchor_world = self._camera_to_world_position(self._interaction_anchor(packet))
+            hand_anchor_world = self._camera_to_world_control_position(self._interaction_anchor(packet))
         if object_state.grab_offset_world is None:
             return object_state.world_position, False
         unconstrained_position = self._add_vec3(hand_anchor_world, object_state.grab_offset_world)
@@ -1198,7 +1279,7 @@ class BridgeServiceImpl(BridgeService):
         - +z: out of the screen toward the user
         
         :param position: Original coordinates in camera_norm (Vec3), None is allowed
-        :return: Transformed coordinates in world_norm (Vec3), guaranteed to be within [-1.0, 1.0]
+        :return: Transformed coordinates in world_norm (Vec3)
         '''
         # 1. Null/illegal input fault tolerance
         if position is None:
@@ -1228,42 +1309,18 @@ class BridgeServiceImpl(BridgeService):
         # to preserve user-perceived left/right motion, while unmirrored input
         # should keep x as-is. Positive camera z means "toward camera", which the
         # scene should interpret as moving farther into the screen.
-        def clip(v: float) -> float:
-            return max(-1.0, min(1.0, v))
-        
-        unclipped_world_x = -x if self._input_mirrored else x
-        unclipped_world_y = y
-        unclipped_world_z = -z
+        world_x = -x if self._input_mirrored else x
+        world_y = y
+        world_z = -z
+        return Vec3(world_x, world_y, world_z)
 
-        final_x = clip(unclipped_world_x)
-        final_y = clip(unclipped_world_y)
-        final_z = clip(unclipped_world_z)
-        
-        # 4. Warning log for clipped coordinates (aids debugging)
-        if (final_x, final_y, final_z) != (unclipped_world_x, unclipped_world_y, unclipped_world_z):
-            self._record_error(
-                error_entry(
-                    "bridge.coordinate.clipped",
-                    "Coordinate transformation clipped values into world_norm",
-                    recoverable=True,
-                    hint="Keep bridge output coordinates within the world_norm range [-1.0, 1.0].",
-                    details={
-                        "camera_input": {"x": x, "y": y, "z": z},
-                        "world_unclipped": {
-                            "x": unclipped_world_x,
-                            "y": unclipped_world_y,
-                            "z": unclipped_world_z,
-                        },
-                        "clipped": {"x": final_x, "y": final_y, "z": final_z},
-                    },
-                )
-            )
-            coordinate_logger.warning(
-                f"Coordinate clipped: original({x:.2f},{y:.2f},{z:.2f}) → "
-                f"final({final_x:.2f},{final_y:.2f},{final_z:.2f})"
-            )
-        
-        return Vec3(final_x, final_y, final_z)
+    def _camera_to_world_control_position(self, position: Optional[Vec3]) -> Vec3:
+        base_position = self._camera_to_world_position(position)
+        return Vec3(
+            x=base_position.x * self._position_sensitivity,
+            y=base_position.y * self._position_sensitivity,
+            z=base_position.z * self._position_sensitivity,
+        )
 
 
     def _make_object_state(self, packet: GesturePacket, object_id: str, interaction_state: str) -> SceneCommand:
@@ -1284,7 +1341,7 @@ class BridgeServiceImpl(BridgeService):
             frame_id=packet.frame_id,
             timestamp_ms=packet.timestamp_ms,
             command_type="heartbeat",
-            object_id=PRIMARY_OBJECT_ID,
+            object_id=BRIDGE_SCENE_OBJECT_ID,
             payload={"interaction_state": self._interaction_state},
         )
 
@@ -1295,7 +1352,7 @@ class BridgeServiceImpl(BridgeService):
             frame_id=packet.frame_id,
             timestamp_ms=packet.timestamp_ms,
             command_type="reset_interaction",
-            object_id=PRIMARY_OBJECT_ID,
+            object_id=BRIDGE_SCENE_OBJECT_ID,
             payload={"reason": reason},
         )
 
@@ -1343,15 +1400,7 @@ class BridgeServiceImpl(BridgeService):
         object_state = self._object_states.get(object_id)
         if object_state is not None:
             return object_state
-        return self._ensure_object_state(
-            object_id,
-            world_position=INITIAL_OBJECT_POSITION,
-            interaction_radius=HOVER_DISTANCE_THRESHOLD,
-            half_height=0.1,
-            world_scale=DEFAULT_INTERACTABLE_OBJECT_SCALE,
-            interaction_state=BRIDGE_STATE_IDLE,
-            initialized=False,
-        )
+        raise KeyError(f"Unknown scene object: {object_id}")
 
     def _rotation_target_object(self, hovered_object_id: str | None) -> ObjectInteractionState | None:
         if self._rotation_object_id is not None:
@@ -1454,6 +1503,13 @@ class BridgeServiceImpl(BridgeService):
     @staticmethod
     def _subtract_vec3(a: Vec3, b: Vec3) -> Vec3:
         return Vec3(a.x - b.x, a.y - b.y, a.z - b.z)
+
+    def _translate_world_position(self, position: Vec3, offset: Vec3) -> Vec3:
+        return Vec3(
+            x=position.x + offset.x,
+            y=position.y + offset.y,
+            z=position.z + offset.z,
+        )
 
     @staticmethod
     def _scale_vec3(value: Vec3, factor: float) -> Vec3:

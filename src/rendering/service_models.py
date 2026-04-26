@@ -22,6 +22,7 @@ class SceneObjectDescriptor:
     scale: tuple[float, float, float]
     color: tuple[float, float, float, float]
     interactable: bool
+    collision_surface_y: float | None = None
 
 
 @dataclass(slots=True)

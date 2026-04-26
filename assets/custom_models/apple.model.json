@@ -1,0 +1,20 @@
+{
+    "display_name": "Apple",
+    "default_scale": [
+        10,
+        10,
+        10
+    ],
+    "center_offset": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "import_hpr": [
+        0.0,
+        -90.0,
+        0.0
+    ],
+    "two_sided": false,
+    "use_builtin_materials": false
+}

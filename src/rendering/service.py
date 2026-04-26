@@ -205,7 +205,10 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
         self,
         position: tuple[float, float, float] | list[float],
     ) -> tuple[float, float, float]:
-        return tuple(float(value) * self._position_sensitivity for value in position)
+        # Scene commands carry absolute world_norm positions. Scaling them in
+        # the renderer distorts authored layouts because distant anchors such as
+        # the table root move farther than nearby props.
+        return tuple(float(value) for value in position)
 
     @staticmethod
     def _world_norm_to_scene_scale(scale: tuple[float, float, float] | list[float]) -> tuple[float, float, float]:
@@ -339,6 +342,9 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
 
         interaction_state = str(obj_data.get("interaction_state", "idle"))
         interactable = bool(obj_data.get("interactable", True))
+        collision_surface_y = obj_data.get("collision_surface_y")
+        if not isinstance(collision_surface_y, (int, float)):
+            collision_surface_y = None
         return SceneObjectDescriptor(
             object_id=object_id,
             init_pos=init_pos,
@@ -348,6 +354,7 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
             scale=scale,
             color=color,
             interactable=interactable,
+            collision_surface_y=float(collision_surface_y) if collision_surface_y is not None else None,
         )
 
     def _create_scene_object(self, descriptor: SceneObjectDescriptor) -> NodePath:
@@ -937,17 +944,17 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
             raw_hpr = getattr(obj_np, "hpr", (0.0, 0.0, 0.0))
             current_hpr = list(raw_hpr) if isinstance(raw_hpr, (list, tuple)) and len(raw_hpr) == 3 else [0.0, 0.0, 0.0]
 
-            # 6. Validate coordinate ranges and clip to world_norm [-1.0, 1.0].
-            clipped_pos = list(self._last_world_norm_pos)
+            # 6. Convert absolute world coordinates directly into scene space.
+            next_pos = list(self._last_world_norm_pos)
             scene_pos = current_scene_pos
             if pos_float is not None:
-                clipped_pos = self._clip_coordinate(pos_float)
-                scaled_pos = self._scale_world_norm_position(clipped_pos)
+                next_pos = [float(v) for v in pos_float]
+                scaled_pos = self._scale_world_norm_position(next_pos)
                 scene_pos = self._world_norm_to_scene_pos(scaled_pos)
 
             clipped_hpr = current_hpr
             if hpr_float is not None:
-                clipped_hpr = self._clip_coordinate(hpr_float, rotation=True)  # Rotation is type-checked only and not range-limited.
+                clipped_hpr = [float(v) for v in hpr_float]
 
             # 7. Update the object transform.
             if pos_float is not None:
@@ -967,23 +974,13 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
             
             # Save coordinate data for display
             if self._data_panel and pos_float is not None:
-                self._data_panel.update_coordinate_data(tuple(clipped_pos), scene_pos)
+                self._data_panel.update_coordinate_data(tuple(next_pos), scene_pos)
             if pos_float is not None:
-                self._last_world_norm_pos = tuple(clipped_pos)
+                self._last_world_norm_pos = tuple(next_pos)
                 self._last_scene_pos = scene_pos
             
             # 8. Logging
-            if pos_float is not None and tuple(clipped_pos) != tuple(pos_float):
-                logger.warning(f"Coordinate out of world_norm range, automatically clipped: original{pos_float} → clipped{clipped_pos} (ID: {command.command_id}")
-                error = error_entry(
-                    "rendering.coordinate.out_of_range",
-                    "Coordinate out of range",
-                    recoverable=True,
-                    hint="Ensure coordinates are within the world_norm range [-1.0, 1.0].",
-                    details={"object_id": object_id, "original_coordinate": pos_float, "clipped_coordinate": clipped_pos}
-                )
-                self._record_error(error)
-            self._log_pose_update(command, object_id=object_id, position=clipped_pos, rotation=clipped_hpr)
+            self._log_pose_update(command, object_id=object_id, position=next_pos, rotation=clipped_hpr)
             
         except Exception as e:
             logger.error(f"set_object_pose processing failed (ID: {command.command_id}): {str(e)}")
@@ -1114,10 +1111,9 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
                     float(point["y"]),
                     float(point["z"]),
                 ]
-                clipped = self._clip_coordinate(world_point)
-                scene_point = self._world_norm_to_scene_pos(self._scale_world_norm_position(clipped))
+                scene_point = self._world_norm_to_scene_pos(self._scale_world_norm_position(world_point))
                 scene_points[point_name] = PandaVec3(*scene_point)
-                cached_points[point_name] = tuple(clipped)
+                cached_points[point_name] = tuple(world_point)
 
             for point_name in optional_points:
                 point = points.get(point_name)
@@ -1128,10 +1124,9 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
                     float(point["y"]),
                     float(point["z"]),
                 ]
-                clipped = self._clip_coordinate(world_point)
-                scene_point = self._world_norm_to_scene_pos(self._scale_world_norm_position(clipped))
+                scene_point = self._world_norm_to_scene_pos(self._scale_world_norm_position(world_point))
                 scene_points[point_name] = PandaVec3(*scene_point)
-                cached_points[point_name] = tuple(clipped)
+                cached_points[point_name] = tuple(world_point)
 
             self._last_hand_points_world_by_id[command.object_id] = cached_points
             self._last_hand_points_world = cached_points
@@ -1565,20 +1560,3 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
 
         logger.info(f"Suppressed {self._suppressed_pose_logs} repetitive pose update log entries")
         self._suppressed_pose_logs = 0
-    
-    def _clip_coordinate(self, coord: list[float], rotation: bool = False) -> list[float]:
-        """Clip coordinates automatically when they exceed world_norm [-1.0, 1.0]."""
-        if rotation:
-            # Rotation values are converted to float but not clipped.
-            return [float(v) for v in coord]
-        # Position values are clipped to [-1.0, 1.0].
-        clipped = []
-        for v in coord:
-            val = float(v)
-            if val < -1.0:
-                clipped.append(-1.0)
-            elif val > 1.0:
-                clipped.append(1.0)
-            else:
-                clipped.append(val)
-        return clipped

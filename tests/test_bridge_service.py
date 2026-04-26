@@ -5,10 +5,23 @@ import logging
 import numpy as np
 import pytest
 
-from src.bridge.service import BridgeServiceImpl
+from src.bridge.service import BridgeServiceImpl, TABLE_SCENE_OBJECTS, TABLE_SURFACE_Y
 from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import RawHandObservation
 from src.gesture.service import GestureServiceImpl
+from src.utils.contracts import vec3_payload
+
+
+def interactable_object_ids() -> list[str]:
+    return [str(obj["object_id"]) for obj in TABLE_SCENE_OBJECTS if bool(obj.get("interactable", True))]
+
+
+def default_test_object_id() -> str:
+    return interactable_object_ids()[0]
+
+
+def alternate_test_object_id() -> str:
+    return interactable_object_ids()[1]
 
 
 def make_packet(
@@ -43,6 +56,7 @@ def make_packet(
 def with_secondary_hand(
     packet: GesturePacket,
     *,
+    object_id: str | None = None,
     tracking_state: str = "tracked",
     pinch_state: str = "open",
     pinch_distance: float | None = None,
@@ -52,6 +66,7 @@ def with_secondary_hand(
     wrist: Vec3 | None = None,
     secondary_debug: dict | None = None,
 ) -> GesturePacket:
+    anchor_camera = object_anchor_camera(object_id)
     debug = dict(packet.debug or {})
     debug["secondary_hand"] = {
         "hand_id": "hand-2",
@@ -61,19 +76,19 @@ def with_secondary_hand(
         "pinch_state": pinch_state,
         "pinch_distance": pinch_distance,
         "index_tip": {
-            "x": (index_tip or Vec3(0.06, -0.08, -0.18)).x,
-            "y": (index_tip or Vec3(0.06, -0.08, -0.18)).y,
-            "z": (index_tip or Vec3(0.06, -0.08, -0.18)).z,
+            "x": (index_tip or Vec3(anchor_camera.x + 0.06, anchor_camera.y, anchor_camera.z)).x,
+            "y": (index_tip or Vec3(anchor_camera.x + 0.06, anchor_camera.y, anchor_camera.z)).y,
+            "z": (index_tip or Vec3(anchor_camera.x + 0.06, anchor_camera.y, anchor_camera.z)).z,
         },
         "thumb_tip": {
-            "x": (thumb_tip or Vec3(0.02, -0.08, -0.18)).x,
-            "y": (thumb_tip or Vec3(0.02, -0.08, -0.18)).y,
-            "z": (thumb_tip or Vec3(0.02, -0.08, -0.18)).z,
+            "x": (thumb_tip or Vec3(anchor_camera.x + 0.02, anchor_camera.y, anchor_camera.z)).x,
+            "y": (thumb_tip or Vec3(anchor_camera.x + 0.02, anchor_camera.y, anchor_camera.z)).y,
+            "z": (thumb_tip or Vec3(anchor_camera.x + 0.02, anchor_camera.y, anchor_camera.z)).z,
         },
         "wrist": {
-            "x": (wrist or Vec3(0.04, -0.12, -0.18)).x,
-            "y": (wrist or Vec3(0.04, -0.12, -0.18)).y,
-            "z": (wrist or Vec3(0.04, -0.12, -0.18)).z,
+            "x": (wrist or Vec3(anchor_camera.x + 0.04, anchor_camera.y - 0.04, anchor_camera.z)).x,
+            "y": (wrist or Vec3(anchor_camera.x + 0.04, anchor_camera.y - 0.04, anchor_camera.z)).y,
+            "z": (wrist or Vec3(anchor_camera.x + 0.04, anchor_camera.y - 0.04, anchor_camera.z)).z,
         },
         "debug": {} if secondary_debug is None else secondary_debug,
     }
@@ -81,24 +96,76 @@ def with_secondary_hand(
     return packet
 
 
-def hover_packet(*, frame_id: int, timestamp_ms: int, pinch_state: str = "open") -> GesturePacket:
+def scene_object_position(object_id: str) -> Vec3:
+    descriptor = next(obj for obj in TABLE_SCENE_OBJECTS if obj["object_id"] == object_id)
+    init_pos = descriptor["init_pos"]
+    return Vec3(float(init_pos["x"]), float(init_pos["y"]), float(init_pos["z"]))
+
+
+def scene_object_descriptor(object_id: str) -> dict:
+    return next(obj for obj in TABLE_SCENE_OBJECTS if obj["object_id"] == object_id)
+
+
+def target_object_position(object_id: str | None = None) -> Vec3:
+    return scene_object_position(default_test_object_id() if object_id is None else object_id)
+
+
+def target_object_initial_hpr(object_id: str | None = None) -> tuple[float, float, float]:
+    descriptor = scene_object_descriptor(default_test_object_id() if object_id is None else object_id)
+    init_hpr = descriptor["init_hpr"]
+    return (float(init_hpr["h"]), float(init_hpr["p"]), float(init_hpr["r"]))
+
+
+def target_object_grabbed_y(object_id: str | None = None) -> float:
+    descriptor = scene_object_descriptor(default_test_object_id() if object_id is None else object_id)
+    init_pos_y = float(descriptor["init_pos"]["y"])
+    half_height = float(descriptor.get("collision_half_height", float(descriptor["scale"]["y"]) * 0.5))
+    return max(init_pos_y, TABLE_SURFACE_Y + half_height)
+
+
+def world_to_camera_position(position: Vec3) -> Vec3:
+    return Vec3(-position.x, position.y, -position.z)
+
+
+def object_anchor_camera(object_id: str | None = None) -> Vec3:
+    return world_to_camera_position(target_object_position(object_id))
+
+
+def object_camera_point(dx: float, dy: float = 0.0, dz: float = 0.0, *, object_id: str | None = None) -> Vec3:
+    anchor_camera = object_anchor_camera(object_id)
+    return Vec3(anchor_camera.x + dx, anchor_camera.y + dy, anchor_camera.z + dz)
+
+
+def hover_packet(*, frame_id: int, timestamp_ms: int, pinch_state: str = "open", object_id: str | None = None) -> GesturePacket:
+    anchor_camera = object_anchor_camera(object_id)
     return make_packet(
         frame_id=frame_id,
         timestamp_ms=timestamp_ms,
         pinch_state=pinch_state,
-        index_tip=Vec3(0.02, -0.08, -0.18),
-        thumb_tip=Vec3(-0.02, -0.08, -0.18),
+        index_tip=Vec3(anchor_camera.x + 0.02, anchor_camera.y, anchor_camera.z),
+        thumb_tip=Vec3(anchor_camera.x - 0.02, anchor_camera.y, anchor_camera.z),
     )
 
 
-def offset_hover_packet(*, frame_id: int, timestamp_ms: int, pinch_state: str = "open") -> GesturePacket:
+def offset_hover_packet(*, frame_id: int, timestamp_ms: int, pinch_state: str = "open", object_id: str | None = None) -> GesturePacket:
+    anchor_camera = object_anchor_camera(object_id)
     return make_packet(
         frame_id=frame_id,
         timestamp_ms=timestamp_ms,
         pinch_state=pinch_state,
-        index_tip=Vec3(0.10, -0.08, -0.18),
-        thumb_tip=Vec3(0.06, -0.08, -0.18),
+        index_tip=Vec3(anchor_camera.x + 0.10, anchor_camera.y, anchor_camera.z),
+        thumb_tip=Vec3(anchor_camera.x + 0.06, anchor_camera.y, anchor_camera.z),
     )
+
+
+def test_table_scene_interactable_objects_start_on_collision_surface() -> None:
+    for descriptor in TABLE_SCENE_OBJECTS:
+        if not bool(descriptor.get("interactable", True)):
+            continue
+        init_y = float(descriptor["init_pos"]["y"])
+        half_height = float(descriptor.get("collision_half_height", float(descriptor["scale"]["y"]) * 0.5))
+
+        assert init_y == pytest.approx(TABLE_SURFACE_Y + half_height, abs=0.002)
 
 
 def test_bridge_emits_init_scene_on_first_valid_packet() -> None:
@@ -143,7 +210,8 @@ def test_bridge_enters_grab_from_hover_and_uses_relative_offset() -> None:
 
     assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_state", "set_object_pose"]
     assert commands[1].payload["interaction_state"] == "grabbed"
-    assert commands[2].payload["position"] == pytest.approx({"x": 0.0, "y": -0.08, "z": 0.18})
+    target_position = target_object_position()
+    assert commands[2].payload["position"] == pytest.approx({"x": target_position.x, "y": target_object_grabbed_y(), "z": target_position.z})
     assert commands[2].payload["coordinate_space"] == "world_norm"
 
     commands = bridge.process(
@@ -151,13 +219,13 @@ def test_bridge_enters_grab_from_hover_and_uses_relative_offset() -> None:
             frame_id=4,
             timestamp_ms=160,
             pinch_state="pinched",
-            index_tip=Vec3(0.14, -0.08, -0.18),
-            thumb_tip=Vec3(0.10, -0.08, -0.18),
+            index_tip=object_camera_point(0.14),
+            thumb_tip=object_camera_point(0.10),
         )
     )
 
     assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_pose"]
-    assert commands[1].payload["position"] == pytest.approx({"x": -0.04, "y": -0.08, "z": 0.18})
+    assert commands[1].payload["position"] == pytest.approx({"x": target_position.x - 0.04, "y": target_object_grabbed_y(), "z": target_position.z})
     assert commands[1].payload["coordinate_space"] == "world_norm"
 
 
@@ -205,7 +273,8 @@ def test_bridge_emits_hpr_only_in_rotation_mode() -> None:
     assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_state", "set_object_pose"]
     assert commands[1].payload["interaction_state"] == "rotating"
     assert "position" not in commands[2].payload
-    assert commands[2].payload["hpr"] == pytest.approx({"h": 12.0, "p": 8.0, "r": 0.0})
+    h, p, r = target_object_initial_hpr()
+    assert commands[2].payload["hpr"] == pytest.approx({"h": h, "p": p, "r": r})
     assert commands[2].payload["coordinate_space"] == "world_norm"
 
     commands = bridge.process(
@@ -485,6 +554,42 @@ def test_bridge_does_not_log_coordinate_clipped_for_axis_inversion_only(caplog) 
     assert "Coordinate clipped" not in caplog.text
 
 
+def test_bridge_raw_coordinate_transform_ignores_position_sensitivity() -> None:
+    bridge = BridgeServiceImpl(position_sensitivity=2.0)
+
+    transformed = bridge._camera_to_world_position(Vec3(0.25, 0.2, -0.3))
+
+    assert transformed == Vec3(-0.25, 0.2, 0.3)
+
+
+def test_bridge_position_sensitivity_scales_control_coordinates() -> None:
+    bridge = BridgeServiceImpl(position_sensitivity=2.0)
+
+    transformed = bridge._camera_to_world_control_position(Vec3(0.25, 0.2, -0.3))
+
+    assert transformed == Vec3(-0.5, 0.4, 0.6)
+
+
+def test_bridge_position_sensitivity_moves_hand_without_scaling_geometry() -> None:
+    bridge = BridgeServiceImpl(position_sensitivity=2.0)
+    bridge.start()
+
+    packet = hover_packet(frame_id=1, timestamp_ms=100)
+    commands = bridge.process(packet)
+
+    primary_hand_pose = next(
+        command for command in commands if command.command_type == "set_hand_pose" and command.object_id == "hand-1"
+    )
+    points = primary_hand_pose.payload["points"]
+
+    base_anchor = bridge._camera_to_world_position(bridge._interaction_anchor(packet))
+    scaled_anchor = bridge._camera_to_world_control_position(bridge._interaction_anchor(packet))
+
+    assert points["anchor"] == pytest.approx(vec3_payload(scaled_anchor))
+    assert base_anchor != scaled_anchor
+    assert target_object_position().y == pytest.approx(scene_object_position(default_test_object_id()).y)
+
+
 def test_bridge_emits_secondary_hand_pose_when_secondary_is_present() -> None:
     bridge = BridgeServiceImpl()
     bridge.start()
@@ -553,7 +658,10 @@ def test_bridge_dual_scale_emits_scale_without_hpr_and_freezes_position() -> Non
     scale_payload = pose_commands[-1].payload
     assert "scale" in scale_payload
     assert "hpr" not in scale_payload
-    assert scale_payload["position"] == pytest.approx({"x": 0.0, "y": -0.08, "z": 0.18})
+    target_position = target_object_position()
+    assert scale_payload["position"] == pytest.approx(
+        {"x": target_position.x, "y": target_position.y, "z": target_position.z}
+    )
     assert scale_payload["debug"]["dual_scale"]["active"] is True
 
 
@@ -889,7 +997,7 @@ def test_bridge_open_secondary_can_drive_hover_capture_when_primary_misses() -> 
     bridge.start()
 
     bridge.process(make_packet(frame_id=1, timestamp_ms=100))
-    # Primary hand is away from interactable objects; secondary is near primary_cube.
+    # Primary hand is away from interactable objects; secondary is near the default test object.
     primary_far = make_packet(
         frame_id=2,
         timestamp_ms=120,
@@ -900,9 +1008,7 @@ def test_bridge_open_secondary_can_drive_hover_capture_when_primary_misses() -> 
     packet = with_secondary_hand(
         primary_far,
         pinch_state="open",
-        index_tip=Vec3(0.06, -0.08, -0.18),
-        thumb_tip=Vec3(0.02, -0.08, -0.18),
-        wrist=Vec3(0.04, -0.12, -0.18),
+        object_id=default_test_object_id(),
     )
 
     commands = bridge.process(packet)
@@ -929,9 +1035,7 @@ def test_bridge_secondary_pinched_can_grab_and_move_when_primary_open() -> None:
     packet = with_secondary_hand(
         primary_far,
         pinch_state="pinched",
-        index_tip=Vec3(0.06, -0.08, -0.18),
-        thumb_tip=Vec3(0.02, -0.08, -0.18),
-        wrist=Vec3(0.04, -0.12, -0.18),
+        object_id=default_test_object_id(),
     )
 
     commands = bridge.process(packet)
@@ -961,9 +1065,7 @@ def test_bridge_secondary_release_stops_motion_when_primary_open() -> None:
             thumb_tip=Vec3(0.62, 0.62, 0.20),
         ),
         pinch_state="pinched",
-        index_tip=Vec3(0.06, -0.08, -0.18),
-        thumb_tip=Vec3(0.02, -0.08, -0.18),
-        wrist=Vec3(0.04, -0.12, -0.18),
+        object_id=default_test_object_id(),
     )
     bridge.process(grabbed)
 
@@ -977,9 +1079,7 @@ def test_bridge_secondary_release_stops_motion_when_primary_open() -> None:
         ),
         pinch_state="open",
         pinch_distance=0.30,
-        index_tip=Vec3(0.06, -0.08, -0.18),
-        thumb_tip=Vec3(0.02, -0.08, -0.18),
-        wrist=Vec3(0.04, -0.12, -0.18),
+        object_id=default_test_object_id(),
     )
     commands = bridge.process(released)
 
@@ -1008,9 +1108,7 @@ def test_bridge_secondary_can_enter_rotation_mode_when_primary_open() -> None:
             thumb_tip=Vec3(0.62, 0.62, 0.20),
         ),
         pinch_state="pinched",
-        index_tip=Vec3(0.02, -0.08, -0.18),
-        thumb_tip=Vec3(-0.02, -0.08, -0.18),
-        wrist=Vec3(0.0, -0.12, -0.18),
+        object_id=default_test_object_id(),
         secondary_debug={
             "rotation": {
                 "mode_active": True,
@@ -1076,8 +1174,8 @@ def test_bridge_dual_scale_ratio_is_absolute_against_initial_scale() -> None:
     shrink_packet = with_secondary_hand(
         hover_packet(frame_id=3, timestamp_ms=140, pinch_state="pinched"),
         pinch_state="pinched",
-        index_tip=Vec3(0.03, -0.08, -0.18),
-        thumb_tip=Vec3(0.01, -0.08, -0.18),
+        index_tip=object_camera_point(0.03),
+        thumb_tip=object_camera_point(0.01),
     )
     commands = bridge.process(shrink_packet)
     first_pose = [
@@ -1110,8 +1208,8 @@ def test_bridge_dual_scale_ratio_is_absolute_against_initial_scale() -> None:
     restart_shrink_packet = with_secondary_hand(
         hover_packet(frame_id=6, timestamp_ms=200, pinch_state="pinched"),
         pinch_state="pinched",
-        index_tip=Vec3(0.03, -0.08, -0.18),
-        thumb_tip=Vec3(0.01, -0.08, -0.18),
+        index_tip=object_camera_point(0.03),
+        thumb_tip=object_camera_point(0.01),
     )
     commands = bridge.process(restart_shrink_packet)
     second_pose = [
@@ -1141,8 +1239,8 @@ def test_bridge_dual_scale_ratio_is_not_reused_when_switching_objects() -> None:
         with_secondary_hand(
             hover_packet(frame_id=3, timestamp_ms=140, pinch_state="pinched"),
             pinch_state="pinched",
-            index_tip=Vec3(0.03, -0.08, -0.18),
-            thumb_tip=Vec3(0.01, -0.08, -0.18),
+            index_tip=object_camera_point(0.03),
+            thumb_tip=object_camera_point(0.01),
         )
     )
     ratio_a = [
@@ -1166,15 +1264,13 @@ def test_bridge_dual_scale_ratio_is_not_reused_when_switching_objects() -> None:
         frame_id=5,
         timestamp_ms=180,
         pinch_state="pinched",
-        index_tip=Vec3(-0.44, -0.14, -0.02),
-        thumb_tip=Vec3(-0.52, -0.14, -0.02),
+        index_tip=object_camera_point(0.02, object_id=alternate_test_object_id()),
+        thumb_tip=object_camera_point(-0.02, object_id=alternate_test_object_id()),
     )
     moved_packet = with_secondary_hand(
         moved_primary,
         pinch_state="pinched",
-        index_tip=Vec3(-0.40, -0.14, -0.02),
-        thumb_tip=Vec3(-0.48, -0.14, -0.02),
-        wrist=Vec3(-0.44, -0.18, -0.02),
+        object_id=alternate_test_object_id(),
     )
     commands_b = bridge.process(moved_packet)
     ratio_b = [

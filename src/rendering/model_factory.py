@@ -118,7 +118,8 @@ class ModelResourceFactory:
             return
 
         registered_count = 0
-        gltf_checked = False
+        scanned_files_by_shape: Dict[str, list[str]] = {}
+        has_glb_model = False
 
         for filename in sorted(os.listdir(models_dir)):
             file_path = os.path.join(models_dir, filename)
@@ -126,26 +127,43 @@ class ModelResourceFactory:
                 continue
 
             file_ext = os.path.splitext(filename)[1].lower()
-            if file_ext in self._SUPPORTED_CUSTOM_MODEL_FORMATS:
-                if file_ext == ".glb" and not gltf_checked:
-                    self._ensure_gltf_loader_available(models_dir)
-                    gltf_checked = True
+            if file_ext not in self._SUPPORTED_CUSTOM_MODEL_FORMATS:
+                continue
 
-                shape_id = os.path.splitext(filename)[0].lower()
-                sidecar_config = self._load_sidecar_config(file_path)
-                self.register_template(
-                    ModelTemplate(
-                        shape_id=shape_id,
-                        model_path=file_path,
-                        display_name=sidecar_config.get("display_name"),
-                        center_offset=sidecar_config.get("center_offset", (0.0, 0.0, 0.0)),
-                        import_hpr=sidecar_config.get("import_hpr", (0.0, 0.0, 0.0)),
-                        default_scale=sidecar_config.get("default_scale", (1.0, 1.0, 1.0)),
-                        two_sided=sidecar_config.get("two_sided", False),
-                        use_builtin_materials=sidecar_config.get("use_builtin_materials", False),
-                    )
+            if file_ext == ".glb":
+                has_glb_model = True
+
+            shape_id = self._shape_id_from_model_path(file_path)
+            scanned_files_by_shape.setdefault(shape_id, []).append(file_path)
+
+        if has_glb_model:
+            self._ensure_gltf_loader_available(models_dir)
+
+        conflicting_shape_ids = {
+            shape_id: file_paths
+            for shape_id, file_paths in scanned_files_by_shape.items()
+            if len(file_paths) > 1
+        }
+        for shape_id, file_paths in conflicting_shape_ids.items():
+            logger.error(
+                "Custom model shape_id conflict: %s -> %s. This shape_id will not be registered.",
+                shape_id,
+                file_paths,
+            )
+
+        for shape_id, file_paths in scanned_files_by_shape.items():
+            if shape_id in conflicting_shape_ids:
+                continue
+            if shape_id in self._template_registry:
+                logger.error(
+                    "Custom model shape_id conflict with reserved or existing template: %s -> %s. This shape_id will not be registered.",
+                    shape_id,
+                    file_paths[0],
                 )
-                registered_count += 1
+                continue
+
+            self.register_template(self._build_template_from_scanned_model(file_paths[0]))
+            registered_count += 1
 
         logger.info(f"自动扫描完成，共注册 {registered_count} 个自定义模型")
 
@@ -157,9 +175,14 @@ class ModelResourceFactory:
             raise RuntimeError(
                 "GLB custom models require the 'panda3d-gltf' package. "
                 f"Detected .glb assets under {models_dir}, but Panda3D would otherwise fall back "
-                "to an implicit loader path with inconsistent import orientation. Install project "
-                "dependencies with 'uv sync'."
+                "to the Assimp loader, which uses a different up-axis and causes machine-dependent "
+                "90-degree import rotations. Install project dependencies with 'uv sync' "
+                "(or install 'panda3d-gltf') instead of compensating with sidecar import_hpr flips."
             ) from exc
+
+    @classmethod
+    def _shape_id_from_model_path(cls, model_file_path: str) -> str:
+        return os.path.splitext(os.path.basename(model_file_path))[0].lower()
 
     @classmethod
     def _sidecar_path_for_model(cls, model_file_path: str) -> str:
@@ -277,7 +300,22 @@ class ModelResourceFactory:
             )
             if parsed_value is not None:
                 config["use_builtin_materials"] = parsed_value
+
+        logger.info("Loaded custom model sidecar for %s with fields: %s", model_file_path, sorted(config.keys()))
         return config
+
+    def _build_template_from_scanned_model(self, model_file_path: str) -> ModelTemplate:
+        sidecar_config = self._load_sidecar_config(model_file_path)
+        return ModelTemplate(
+            shape_id=self._shape_id_from_model_path(model_file_path),
+            model_path=model_file_path,
+            display_name=sidecar_config.get("display_name"),
+            center_offset=sidecar_config.get("center_offset", (0.0, 0.0, 0.0)),
+            import_hpr=sidecar_config.get("import_hpr", (0.0, 0.0, 0.0)),
+            default_scale=sidecar_config.get("default_scale", (1.0, 1.0, 1.0)),
+            two_sided=sidecar_config.get("two_sided", False),
+            use_builtin_materials=sidecar_config.get("use_builtin_materials", False),
+        )
 
     def _resolve_template(self, shape_id: str) -> ModelTemplate:
         template = self._template_registry.get(shape_id)
@@ -313,11 +351,11 @@ class ModelResourceFactory:
                 model_filename = Filename.fromOsSpecific(template.model_path)
                 model_filename.makeAbsolute()
                 logger.debug(
-                    "Loading custom model: path=%s exists=%s",
+                    "Loading custom model without Panda3D cache: path=%s exists=%s",
                     model_filename,
                     model_filename.exists(),
                 )
-                model = self._loader.loadModel(model_filename)
+                model = self._loader.loadModel(model_filename, noCache=True)
             else:
                 logger.debug("Loading built-in model: path=%s", template.model_path)
                 model = self._loader.loadModel(template.model_path)

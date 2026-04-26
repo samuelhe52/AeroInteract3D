@@ -395,6 +395,7 @@ def build_app(config: AppConfig) -> App:
     )
     bridge = BridgeServiceImpl(
         input_mirrored=config.flip_camera,
+        position_sensitivity=config.render_position_sensitivity,
         rotation_sensitivity=config.bridge_rotation_sensitivity,
     )
     render_output = RenderingServiceImpl(
