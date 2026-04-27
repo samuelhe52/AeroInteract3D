@@ -1003,6 +1003,105 @@ def test_bridge_dual_scale_binds_to_last_interacted_object() -> None:
     assert scale_pose.object_id == default_test_object_id()
 
 
+def test_bridge_rotation_binds_to_last_interacted_object_when_not_hovering() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    bridge.process(hover_packet(frame_id=2, timestamp_ms=120))
+    bridge.process(hover_packet(frame_id=3, timestamp_ms=140, pinch_state="pinched"))
+
+    far_open = make_packet(
+        frame_id=4,
+        timestamp_ms=160,
+        pinch_state="open",
+        index_tip=Vec3(0.70, 0.70, 0.20),
+        thumb_tip=Vec3(0.62, 0.62, 0.20),
+    )
+    bridge.process(far_open)
+
+    commands = bridge.process(
+        make_packet(
+            frame_id=5,
+            timestamp_ms=180,
+            pinch_state="pinched",
+            index_tip=Vec3(0.72, 0.72, 0.22),
+            thumb_tip=Vec3(0.64, 0.64, 0.22),
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 15.0,
+                    "deg_y": -30.0,
+                    "deg_z": 45.0,
+                }
+            },
+        )
+    )
+
+    state_command = next(
+        command
+        for command in commands
+        if command.command_type == "set_object_state"
+    )
+    pose_command = next(
+        command
+        for command in commands
+        if command.command_type == "set_object_pose"
+    )
+
+    assert state_command.object_id == default_test_object_id()
+    assert state_command.payload["interaction_state"] == "rotating"
+    assert pose_command.object_id == default_test_object_id()
+    assert "hpr" in pose_command.payload
+    assert "position" not in pose_command.payload
+
+
+def test_bridge_rotation_does_not_seed_last_interacted_without_direct_grab() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    bridge.process(hover_packet(frame_id=2, timestamp_ms=120))
+    bridge.process(
+        make_packet(
+            frame_id=3,
+            timestamp_ms=140,
+            pinch_state="pinched",
+            index_tip=object_camera_point(0.02),
+            thumb_tip=object_camera_point(-0.02),
+            debug={
+                "rotation": {
+                    "mode_active": True,
+                    "deg_x": 15.0,
+                    "deg_y": -30.0,
+                    "deg_z": 45.0,
+                }
+            },
+        )
+    )
+
+    commands = bridge.process(
+        with_secondary_hand(
+            make_packet(
+                frame_id=4,
+                timestamp_ms=160,
+                pinch_state="pinched",
+                index_tip=object_camera_point(0.02, object_id=alternate_test_object_id()),
+                thumb_tip=object_camera_point(-0.02, object_id=alternate_test_object_id()),
+            ),
+            pinch_state="pinched",
+            object_id=alternate_test_object_id(),
+        )
+    )
+
+    scale_pose = [
+        command
+        for command in commands
+        if command.command_type == "set_object_pose" and "scale" in command.payload
+    ][-1]
+    assert scale_pose.object_id == alternate_test_object_id()
+
+
 def test_bridge_two_hand_detected_does_not_block_primary_translation_without_dual_pinch() -> None:
     bridge = BridgeServiceImpl()
     bridge.start()

@@ -531,7 +531,6 @@ class BridgeServiceImpl(BridgeService):
                 released_object = self._object_state(self._grabbed_object_id)
                 self._grabbed_object_id = None
                 self._pinch_capture_lock_object_id = None
-                self._last_interacted_object_id = None
                 commands.extend(self._set_object_interaction_state(packet, released_object, BRIDGE_STATE_IDLE))
                 self._hovered_object_id = None
                 commands.extend(self._sync_hover_state(packet, hovered_object_id))
@@ -613,6 +612,7 @@ class BridgeServiceImpl(BridgeService):
                     return commands
                 self._grabbed_object_id = hovered_object.object_id
                 self._hovered_object_id = hovered_object.object_id
+                self._last_interacted_object_id = hovered_object.object_id
                 hovered_object.grab_offset_world = self._subtract_vec3(hovered_object.world_position, hand_anchor_world)
                 commands.extend(
                     self._set_object_interaction_state(packet, hovered_object, BRIDGE_STATE_GRABBING)
@@ -624,7 +624,6 @@ class BridgeServiceImpl(BridgeService):
         self._pinch_capture_lock_object_id = grabbed_object.object_id
         if packet.pinch_state == "open":
             self._grabbed_object_id = None
-            self._last_interacted_object_id = None
             commands.extend(self._set_object_interaction_state(packet, grabbed_object, BRIDGE_STATE_IDLE))
             self._hovered_object_id = None
             commands.extend(self._sync_hover_state(packet, hovered_object_id))
@@ -634,7 +633,6 @@ class BridgeServiceImpl(BridgeService):
         if blocked_by_table and self._distance(hand_anchor_world, constrained_position) >= GRAB_RELEASE_DISTANCE_THRESHOLD:
             self._grabbed_object_id = None
             grabbed_object.grab_offset_world = None
-            self._last_interacted_object_id = None
             commands.extend(self._set_object_interaction_state(packet, grabbed_object, BRIDGE_STATE_IDLE))
             self._hovered_object_id = None
             commands.extend(self._sync_hover_state(packet, hovered_object_id))
@@ -1123,7 +1121,6 @@ class BridgeServiceImpl(BridgeService):
             self._dual_scale_object_id = object_state.object_id
             self._dual_scale_baseline_distance_xy = max(distance_xy, 1e-4)
             self._dual_scale_baseline_scale = object_state.world_scale
-            self._last_interacted_object_id = object_state.object_id
 
         baseline_distance = max(self._dual_scale_baseline_distance_xy or 1e-4, 1e-4)
         baseline_scale = self._dual_scale_baseline_scale or object_state.world_scale
@@ -1425,6 +1422,10 @@ class BridgeServiceImpl(BridgeService):
             self._rotation_object_id = self._grabbed_object_id
             return self._object_state(self._grabbed_object_id)
 
+        if self._last_interacted_object_id is not None:
+            self._rotation_object_id = self._last_interacted_object_id
+            return self._object_state(self._last_interacted_object_id)
+
         if self._hovered_object_id is not None:
             self._rotation_object_id = self._hovered_object_id
             return self._object_state(self._hovered_object_id)
@@ -1474,8 +1475,6 @@ class BridgeServiceImpl(BridgeService):
             return []
 
         object_state.interaction_state = bridge_state
-        if bridge_state in {BRIDGE_STATE_GRABBING, BRIDGE_STATE_ROTATING}:
-            self._last_interacted_object_id = object_state.object_id
         if bridge_state != BRIDGE_STATE_GRABBING:
             object_state.grab_offset_world = None
         if bridge_state != BRIDGE_STATE_ROTATING:
