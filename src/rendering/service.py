@@ -1453,19 +1453,20 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
         *,
         window_size: tuple[int, int],
     ) -> UICalibrationPreviewState:
+        cursor_source = self._ui_input_adapter.cursor_source(packet)
         preview_state = UICalibrationPreviewState(
             mapped_cursor_norm=ui_input.cursor_norm,
             mapped_cursor_pixels=ui_input.cursor_pixels,
             window_size=window_size,
-            pinch_state=getattr(packet, "pinch_state", None),
+            pinch_state=None if cursor_source is None else cursor_source.pinch_state,
             visible=bool(ui_input.visible),
         )
 
-        if packet is None or getattr(packet, "tracking_state", None) != "tracked":
+        if cursor_source is None:
             return preview_state
 
-        midpoint_x = (float(packet.index_tip.x) + float(packet.thumb_tip.x)) * 0.5
-        midpoint_y = (float(packet.index_tip.y) + float(packet.thumb_tip.y)) * 0.5
+        midpoint_x = cursor_source.midpoint_x
+        midpoint_y = cursor_source.midpoint_y
         source_cursor_norm = (
             (1.0 - midpoint_x) * 0.5,
             (1.0 - midpoint_y) * 0.5,
@@ -1492,7 +1493,8 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
         window_size = self._window_size()
         ui_input = self._ui_input_adapter.to_ui_input(packet, window_size=window_size)
         calibration_preview = self._build_calibration_preview_state(packet, ui_input, window_size=window_size)
-        pinch_state = getattr(packet, "pinch_state", None)
+        cursor_source = self._ui_input_adapter.cursor_source(packet)
+        pinch_state = None if cursor_source is None else cursor_source.pinch_state
         self._update_table_menu_hold_gate(packet, ui_input)
         self._sync_table_menu_hold_feedback(packet)
         if self._view_state.active_view == RenderView.HOME and self._home_view:

@@ -1697,6 +1697,30 @@ def test_ui_gesture_input_adapter_hides_cursor_when_tracking_is_lost() -> None:
     assert ui_state.cursor_pixels == pytest.approx((800.0, 450.0))
 
 
+def test_ui_gesture_input_adapter_falls_back_to_secondary_hand_when_primary_is_absent() -> None:
+    adapter = UIGestureInputAdapter()
+    packet = make_packet_with_rotation()
+    packet.tracking_state = "temporarily_lost"
+    packet.pinch_state = "open"
+    packet.debug = {
+        "secondary_hand": {
+            "tracking_state": "tracked",
+            "pinch_state": "pinched",
+            "index_tip": {"x": -0.2, "y": 0.4, "z": 0.1},
+            "thumb_tip": {"x": -0.4, "y": 0.4, "z": 0.1},
+        }
+    }
+
+    ui_state = adapter.to_ui_input(packet, window_size=(1600, 900))
+    cursor_source = adapter.cursor_source(packet)
+
+    assert cursor_source is not None
+    assert cursor_source.pinch_state == "pinched"
+    assert ui_state.visible is True
+    assert ui_state.cursor_norm == pytest.approx((0.65, 0.3))
+    assert ui_state.cursor_pixels == pytest.approx((1040.0, 270.0))
+
+
 def test_ui_button_interaction_controller_activates_on_release_inside() -> None:
     controller = UIButtonInteractionController()
     bounds = [UIButtonBounds(100, 100, 300, 200)]
@@ -2344,6 +2368,32 @@ def test_rendering_routes_calibration_preview_to_calibration_view(monkeypatch) -
     assert preview_state.source_cursor_pixels == pytest.approx((520.0, 360.0))
     assert preview_state.mapped_cursor_norm == pytest.approx((0.325, 0.4))
     assert preview_state.mapped_cursor_pixels == pytest.approx((520.0, 360.0))
+
+
+def test_rendering_uses_secondary_hand_for_home_cursor_when_primary_is_absent(monkeypatch) -> None:
+    patch_ui_views(monkeypatch)
+
+    service = RenderingServiceImpl(window_adapter_factory=FakeWindowAdapter)
+    service.start()
+
+    packet = make_packet_with_rotation()
+    packet.tracking_state = "temporarily_lost"
+    packet.pinch_state = "open"
+    packet.debug = {
+        "secondary_hand": {
+            "tracking_state": "tracked",
+            "pinch_state": "pinched",
+            "index_tip": {"x": -0.2, "y": 0.4, "z": 0.1},
+            "thumb_tip": {"x": -0.4, "y": 0.4, "z": 0.1},
+        }
+    }
+
+    service.update_gesture_data(packet)
+
+    assert service._home_view.cursor_state.visible is True
+    assert service._home_view.cursor_state.cursor_norm == pytest.approx((0.65, 0.3))
+    assert service._home_view.cursor_state.cursor_pixels == pytest.approx((1040.0, 270.0))
+    assert service._home_view.last_pinch_state == "pinched"
 
 
 def test_rendering_calibration_settings_affect_ui_cursor_mapping(monkeypatch) -> None:
