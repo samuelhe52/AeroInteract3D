@@ -2,35 +2,78 @@
 
 [English Version](README.md)
 
-这是一个基于摄像头手势输入的实时 3D 交互原型项目。
+AeroInteract3D 是一款由普通单目摄像头手势驱动的 3D 交互应用。你可以在桌面场景中用手势操控物体。
 
-当前实现快照：
+## 功能概览
 
-- Gesture：`src/gesture/service.py` 中的 `GestureServiceImpl`
-- 共享手势时序归约器：`src/gesture/temporal.py`
-- Bridge：`src/bridge/service.py` 中的 `BridgeServiceImpl`
-- Rendering：`src/rendering/service.py` 中的 `RenderingServiceImpl`
-- 渲染后端：**Python + Panda3D**
+当前版本支持：
 
-Gesture 实时服务与 live preview 现在共用同一套时序逻辑，包括：
+- 单手悬停、拾取、移动和释放物体
+- 双手缩放支持的物体
+- 在包含多个道具的 3D 桌面场景中操作
+- 在应用窗口内查看实时摄像头画面
+- 打开内置设置和校准视图
+- 通过配置文件调整本地运行默认参数
 
-- tracking 状态切换
-- pinch 滞回与确认
-- confidence 修正
-- 坐标平滑
+## 快速上手
 
-live preview 当前显示的是预览主循环实际测得的 FPS，而不是仅显示目标 FPS。
+环境要求：
 
-当前运行默认值：
+- Python `3.12`
+- `uv`
+- 可用的摄像头
+- 与 Panda3D 兼容的 macOS 图形支持
 
-- 目标 FPS 请求：`30`
-- 请求采集分辨率：`1280x960`
+安装依赖：
 
-主应用预览行为：
+```bash
+make setup
+```
 
-- Panda3D 主窗口现在直接承载摄像头预览画面
-- 使用 `--flip-camera` 或 `--no-flip-camera` 控制是否做水平镜像
-- 使用 `--debug-stats` 可显示手势/运行时统计面板
-- 主入口旧的 `--live-preview` 路径已经彻底移除
+运行应用：
 
-开发环境配置请参考：[DEVELOPMENT.md](DEVELOPMENT.md)。
+```bash
+make run
+```
+
+如需使用不同摄像头或修改运行时设置：
+
+```bash
+make run -- --camera-index 1
+```
+
+## 本地配置
+
+如需设置本地持久化默认值，可从模板创建根目录下的 `.run.yaml`：
+
+```bash
+cp .run.example.yaml .run.yaml
+```
+
+该文件用于保存偏好的摄像头索引、画面镜像、分辨率、帧率等运行时选项。
+
+## 主要命令
+
+```bash
+make run
+make preview
+make test
+make lint
+```
+
+`make preview` 启动仅手势实时预览。`make run` 启动完整的 3D 应用。
+
+## 项目结构
+
+- [`main.py`](/Users/samuelhe/projects/AeroInteract3D/main.py)：应用入口
+- [`Makefile`](/Users/samuelhe/projects/AeroInteract3D/Makefile)：常用命令
+- [`DEVELOPMENT.md`](/Users/samuelhe/projects/AeroInteract3D/DEVELOPMENT.md)：开发环境配置
+- [`assets/custom_models/`](/Users/samuelhe/projects/AeroInteract3D/assets/custom_models)：场景模型
+- [`src/`](/Users/samuelhe/projects/AeroInteract3D/src)：应用代码
+- [`tests/`](/Users/samuelhe/projects/AeroInteract3D/tests)：测试
+
+## 注意事项
+
+- 主应用在 Panda3D 窗口内显示摄像头预览。
+- 校准和 UI 设置保存在 `~/.config/AeroInteract3D/calibration_profiles.json`（除非设置了 `XDG_CONFIG_HOME`）。
+- 开发详情请参阅 [DEVELOPMENT.md](DEVELOPMENT.md)。

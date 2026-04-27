@@ -2,39 +2,78 @@
 
 [中文版本 / Chinese Version](README.zh-CN.md)
 
-Early-stage project for real-time webcam-based 3D hand interaction.
+AeroInteract3D is a webcam-driven 3D interaction app. It lets you manipulate objects in a tabletop scene using hand gestures in front of your camera.
 
-Current implementation snapshot:
+## What It Does
 
-- Gesture: `GestureServiceImpl` in `src/gesture/service.py`
-- Shared gesture temporal reducer: `src/gesture/temporal.py`
-- Bridge: `BridgeServiceImpl` in `src/bridge/service.py`
-- Rendering: `RenderingServiceImpl` in `src/rendering/service.py`
-- Rendering backend: **Python + Panda3D**
+In the current build, you can:
 
-The gesture runtime and live preview now share the same temporal logic for:
+- use one hand to hover, grab, move, and release objects
+- use two hands to scale supported objects
+- work inside a 3D tabletop scene with multiple props
+- see the live camera feed inside the app window
+- open the built-in settings and calibration views
+- adjust local run defaults with a simple config file
 
-- tracking-state transitions
-- pinch hysteresis and confirmation
-- confidence shaping
-- coordinate smoothing
+## Quick Start
 
-The live preview also shows measured on-screen FPS from the actual preview loop, not just the configured target FPS.
+Requirements:
 
-Current runtime defaults:
+- Python `3.12`
+- `uv`
+- a working webcam
+- macOS graphics support compatible with Panda3D
 
-- target FPS request: `30`
-- requested capture resolution: `1280x960`
+Install dependencies:
 
-Main app preview behavior:
+```bash
+make setup
+```
 
-- the Panda3D window now owns the camera preview feed
-- use `--flip-camera` or `--no-flip-camera` to control horizontal mirroring
-- use `--debug-stats` to show the gesture/runtime statistics panel
-- the old main-entry `--live-preview` path is removed completely
-- use `--render-position-sensitivity` to make rendered object translation more or less sensitive
+Run the app:
 
-Local machine run defaults can be stored in `.run.yaml` at the repository root. A committed
-template is available in `.run.example.yaml`, while the real `.run.yaml` stays untracked.
+```bash
+make run
+```
 
-Developer environment setup: see [DEVELOPMENT.md](DEVELOPMENT.md).
+To use a different camera or change runtime settings for one launch:
+
+```bash
+make run -- --camera-index 1
+```
+
+## Local Configuration
+
+If you want persistent machine-local defaults, create a root-level `.run.yaml` from the template:
+
+```bash
+cp .run.example.yaml .run.yaml
+```
+
+This file is the right place to keep your preferred camera index, mirroring, frame size, FPS, and related runtime options.
+
+## Main Commands
+
+```bash
+make run
+make preview
+make test
+make lint
+```
+
+`make preview` starts the gesture-only live preview. `make run` starts the full 3D application.
+
+## Project Layout
+
+- [`main.py`](/Users/samuelhe/projects/AeroInteract3D/main.py): app entrypoint
+- [`Makefile`](/Users/samuelhe/projects/AeroInteract3D/Makefile): common commands
+- [`DEVELOPMENT.md`](/Users/samuelhe/projects/AeroInteract3D/DEVELOPMENT.md): developer setup
+- [`assets/custom_models/`](/Users/samuelhe/projects/AeroInteract3D/assets/custom_models): scene models
+- [`src/`](/Users/samuelhe/projects/AeroInteract3D/src): application code
+- [`tests/`](/Users/samuelhe/projects/AeroInteract3D/tests): tests
+
+## Notes
+
+- The main app shows the camera preview inside the Panda3D window.
+- Calibration and UI settings are stored per machine under `~/.config/AeroInteract3D/calibration_profiles.json` unless `XDG_CONFIG_HOME` is set.
+- For development details, see [DEVELOPMENT.md](DEVELOPMENT.md).
