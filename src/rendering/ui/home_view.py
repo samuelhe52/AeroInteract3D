@@ -398,7 +398,6 @@ class HomeUIView:
             if not isinstance(layout, dict) or not layout:
                 continue
             stage_width = float(layout["stage_width"])
-            stage_height = float(layout["stage_height"])
             controlled_y = float(layout["controlled_y"])
             finger_y = float(layout["finger_y"])
             controlled = demo["controlled"]

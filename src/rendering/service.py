@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import time
+from collections import deque
 import logging
+import time
 from typing import List, Dict, Optional, Set, Any, Callable
 
 from panda3d.core import (
@@ -39,6 +40,7 @@ VALID_PAYLOAD_KEYS = {
     "heartbeat": {"interaction_state"},
 }
 TABLE_INTERACTION_LOCKED_COMMAND_TYPES = frozenset({"set_object_pose", "set_object_state", "reset_interaction"})
+MAX_EXECUTED_COMMAND_HISTORY = 4096
 
 
 class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
@@ -93,6 +95,7 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
         self._object_initial_states: Dict[str, ObjectInitialState] = {}
         self._object_interaction_states: Dict[str, str] = {}
         self._executed_command_ids: Set[str] = set()
+        self._executed_command_id_order: deque[str] = deque()
         self._latest_frame_id: Optional[int] = None
         self._pending_commands: List[SceneCommand] = []
         self._is_resetting: bool = False
@@ -111,7 +114,7 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
         self._dual_scale_active: bool = False
         self._last_fps = 0.0
         # FPS calculation related
-        self._frame_times = []
+        self._frame_times: deque[float] = deque()
         self._frame_time_window = 1.0  # 1-second window
         # Camera preview related
         self._last_camera_update_time = 0
@@ -642,10 +645,10 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
             return
 
         # Calculate FPS
-        current_time = time.time()
+        current_time = time.perf_counter()
         self._frame_times.append(current_time)
-        # Remove times older than 1 second
-        self._frame_times = [t for t in self._frame_times if current_time - t < self._frame_time_window]
+        while self._frame_times and current_time - self._frame_times[0] >= self._frame_time_window:
+            self._frame_times.popleft()
         if len(self._frame_times) > 1:
             self._last_fps = (len(self._frame_times) - 1) / (current_time - self._frame_times[0])
         else:
@@ -1180,6 +1183,7 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
             
             # 4. Clear command cache (deduplication/outdated frames)
             self._executed_command_ids.clear()
+            self._executed_command_id_order.clear()
             self._latest_frame_id = None
             logger.info("Cleared command_id/frame_id cache, reset completed")
             
@@ -1363,11 +1367,20 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
                 command.frame_id,
             )
 
-        self._executed_command_ids.add(command.command_id)
+        self._remember_executed_command_id(command.command_id)
         self._latest_frame_id = command.frame_id
         logger.debug(f"Updated latest frame_id: {self._latest_frame_id} (command ID: {command.command_id})")
         
         return True
+
+    def _remember_executed_command_id(self, command_id: str) -> None:
+        """Retain enough command IDs for replay protection without unbounded growth."""
+        self._executed_command_ids.add(command_id)
+        self._executed_command_id_order.append(command_id)
+        if len(self._executed_command_id_order) <= MAX_EXECUTED_COMMAND_HISTORY:
+            return
+        expired_id = self._executed_command_id_order.popleft()
+        self._executed_command_ids.discard(expired_id)
 
     def _validate_command(self, command: SceneCommand) -> bool:
         errors = validate_scene_command(command, expected_version=self._expected_contract_version)
@@ -1391,6 +1404,7 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
         self._object_initial_states.clear()
         self._object_interaction_states.clear()
         self._executed_command_ids.clear()
+        self._executed_command_id_order.clear()
         self._latest_frame_id = None
         self._pending_commands.clear()
         self._is_resetting = False
@@ -1402,7 +1416,7 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
         self._dual_scale_ratio = 1.0
         self._dual_scale_active = False
         self._last_fps = 0.0
-        self._frame_times = []
+        self._frame_times.clear()
         self._last_world_norm_pos = (0.0, 0.0, 0.0)
         self._last_scene_pos = (0.0, 0.0, 0.0)
         self._reset_table_overlay_runtime_state(clear_cooldown=True)

@@ -13,7 +13,11 @@ from src.rendering import model_factory as model_factory_module
 from src.rendering.debug.data_panel import DataPanelManager
 from src.rendering.rendering_core import MAIN_MENU_BACKGROUND_COLOR, RenderingCoreManager
 from src.rendering import service as rendering_service
-from src.rendering.service import ObjectInitialState, RenderingServiceImpl
+from src.rendering.service import (
+    MAX_EXECUTED_COMMAND_HISTORY,
+    ObjectInitialState,
+    RenderingServiceImpl,
+)
 from src.rendering.ui.input_adapter import UIGestureInputAdapter
 from src.rendering.ui.interaction import UIButtonBounds, UIButtonInteractionController
 from src.rendering.ui.state import UIInputState, UISettingsState
@@ -980,6 +984,25 @@ def test_rendering_health_exposes_structured_metrics() -> None:
     assert stats["rejected_commands"] == 1
 
 
+def test_rendering_command_history_is_bounded() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+
+    for frame_id in range(MAX_EXECUTED_COMMAND_HISTORY + 10):
+        service.push(
+            make_command(
+                command_id=f"heartbeat-{frame_id}",
+                frame_id=frame_id,
+                command_type="heartbeat",
+            )
+        )
+
+    assert len(service._executed_command_ids) == MAX_EXECUTED_COMMAND_HISTORY
+    assert len(service._executed_command_id_order) == MAX_EXECUTED_COMMAND_HISTORY
+    assert "heartbeat-0" not in service._executed_command_ids
+    assert f"heartbeat-{MAX_EXECUTED_COMMAND_HISTORY + 9}" in service._executed_command_ids
+
+
 def test_rendering_heartbeat_logging_is_debug_only(caplog) -> None:
     service = RenderingServiceImpl()
     service._status = LIFECYCLE_RUNNING
@@ -1061,8 +1084,8 @@ def test_rendering_maps_contract_world_norm_axes_to_panda_axes() -> None:
 def test_rendering_core_world_norm_camera_pose_uses_front_view() -> None:
     camera_pos, look_at = RenderingCoreManager.camera_pose_for_world_norm()
 
-    assert camera_pos == pytest.approx((0.0, 5.0, 1.34))
-    assert look_at == (0.0, 0.0, 0.0)
+    assert camera_pos == pytest.approx((0.0, 4.6, 1.85))
+    assert look_at == (0.0, 0.18, 0.0)
 
 
 def test_rendering_centers_box_model_under_transform_pivot() -> None:

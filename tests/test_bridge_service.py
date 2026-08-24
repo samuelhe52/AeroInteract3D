@@ -686,11 +686,13 @@ def test_bridge_secondary_pinch_distance_fallback_triggers_dual_scale() -> None:
 
 
 def test_bridge_dual_scale_accepts_primary_pinch_candidate_from_gesture_service() -> None:
+    target = object_anchor_camera()
+
     def make_observation(*, wrist_x: float, handedness: str) -> RawHandObservation:
         return RawHandObservation(
-            index_tip=Vec3(wrist_x + 0.04, -0.08, -0.18),
-            thumb_tip=Vec3(wrist_x, -0.08, -0.18),
-            wrist=Vec3(wrist_x, -0.12, -0.18),
+            index_tip=Vec3(target.x + wrist_x + 0.04, target.y, target.z),
+            thumb_tip=Vec3(target.x + wrist_x, target.y, target.z),
+            wrist=Vec3(target.x + wrist_x, target.y - 0.04, target.z),
             confidence=0.95,
             raw_pinch_distance=0.04,
             hand_scale=0.30,
@@ -762,17 +764,17 @@ def test_bridge_dual_scale_tracks_distance_during_primary_pinch_candidate_frames
         frame_id=2,
         timestamp_ms=120,
         pinch_state="pinch_candidate",
-        index_tip=Vec3(0.02, -0.08, -0.18),
-        thumb_tip=Vec3(-0.02, -0.08, -0.18),
+        index_tip=object_camera_point(0.02),
+        thumb_tip=object_camera_point(-0.02),
     )
     first_packet.pinch_distance = 0.04
     first_packet = with_secondary_hand(
         first_packet,
         pinch_state="open",
         pinch_distance=0.05,
-        index_tip=Vec3(0.06, -0.08, -0.18),
-        thumb_tip=Vec3(0.02, -0.08, -0.18),
-        wrist=Vec3(0.04, -0.12, -0.18),
+        index_tip=object_camera_point(0.06),
+        thumb_tip=object_camera_point(0.02),
+        wrist=object_camera_point(0.04, -0.04),
     )
 
     first_commands = bridge.process(first_packet)
@@ -789,17 +791,17 @@ def test_bridge_dual_scale_tracks_distance_during_primary_pinch_candidate_frames
         frame_id=3,
         timestamp_ms=140,
         pinch_state="pinch_candidate",
-        index_tip=Vec3(0.00, -0.08, -0.18),
-        thumb_tip=Vec3(-0.04, -0.08, -0.18),
+        index_tip=object_camera_point(0.00),
+        thumb_tip=object_camera_point(-0.04),
     )
     second_packet.pinch_distance = 0.04
     second_packet = with_secondary_hand(
         second_packet,
         pinch_state="open",
         pinch_distance=0.05,
-        index_tip=Vec3(0.08, -0.08, -0.18),
-        thumb_tip=Vec3(0.04, -0.08, -0.18),
-        wrist=Vec3(0.06, -0.12, -0.18),
+        index_tip=object_camera_point(0.08),
+        thumb_tip=object_camera_point(0.04),
+        wrist=object_camera_point(0.06, -0.04),
     )
 
     second_commands = bridge.process(second_packet)
@@ -821,8 +823,8 @@ def test_bridge_dual_scale_has_no_per_session_ratio_cap() -> None:
     baseline_packet = with_secondary_hand(
         hover_packet(frame_id=2, timestamp_ms=120, pinch_state="pinched"),
         pinch_state="pinched",
-        index_tip=Vec3(0.03, -0.08, -0.18),
-        thumb_tip=Vec3(0.01, -0.08, -0.18),
+        index_tip=object_camera_point(0.03),
+        thumb_tip=object_camera_point(0.01),
     )
     bridge.process(baseline_packet)
 
@@ -831,12 +833,12 @@ def test_bridge_dual_scale_has_no_per_session_ratio_cap() -> None:
             frame_id=3,
             timestamp_ms=140,
             pinch_state="pinched",
-            index_tip=Vec3(-0.23, -0.08, -0.18),
-            thumb_tip=Vec3(-0.27, -0.08, -0.18),
+            index_tip=object_camera_point(-0.23),
+            thumb_tip=object_camera_point(-0.27),
         ),
         pinch_state="pinched",
-        index_tip=Vec3(0.27, -0.08, -0.18),
-        thumb_tip=Vec3(0.23, -0.08, -0.18),
+        index_tip=object_camera_point(0.27),
+        thumb_tip=object_camera_point(0.23),
     )
     commands = bridge.process(expanded_packet)
     pose = [
@@ -958,9 +960,9 @@ def test_bridge_dual_scale_activates_when_only_secondary_hovers_object() -> None
     packet = with_secondary_hand(
         far_primary,
         pinch_state="pinched",
-        index_tip=Vec3(0.02, -0.08, -0.18),
-        thumb_tip=Vec3(-0.02, -0.08, -0.18),
-        wrist=Vec3(0.0, -0.12, -0.18),
+        index_tip=object_camera_point(0.02),
+        thumb_tip=object_camera_point(-0.02),
+        wrist=object_camera_point(0.0, -0.04),
     )
     commands = bridge.process(packet)
 
