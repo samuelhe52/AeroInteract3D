@@ -73,6 +73,9 @@ class CaptureRuntime:
         self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
         self._capture.set(cv2.CAP_PROP_FPS, target_fps)
+        # Backends that support it should keep only the freshest camera frame.
+        # This prevents inference from working through an increasingly stale queue.
+        self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def read(self) -> np.ndarray | None:
         ok, frame = self._capture.read()
@@ -130,16 +133,16 @@ class HandLandmarkerRuntime:
         return observations[0]
 
     def detect_multi(self, frame_bgr: np.ndarray, *, timestamp_ms: int) -> list[RawHandObservation]:
-        frame_gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        blur_level = self._estimate_blur_level(frame_gray)
         detect_frame = resize_for_detection(frame_bgr, max_side=GESTURE_DETECT_MAX_SIDE)
+        frame_gray = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2GRAY)
+        blur_level = self._estimate_blur_level(frame_gray)
         rgb_frame = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
         image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb_frame)
         result = self._landmarker.detect_for_video(image, timestamp_ms)
 
         if not result.hand_landmarks:
             fallback = self._detect_fallback(
-                frame_bgr,
+                detect_frame,
                 frame_gray,
                 timestamp_ms=timestamp_ms,
                 blur_level=blur_level,

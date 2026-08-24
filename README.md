@@ -15,6 +15,9 @@ In the current build, you can:
 - open the built-in settings and calibration views
 - adjust local run defaults with a simple config file
 
+The live pipeline also recovers from repeated camera read failures, stabilizes hover selection
+between nearby props, and keeps two-hand scaling within scene-safe bounds.
+
 ## Quick Start
 
 Requirements:
@@ -75,5 +78,7 @@ make lint
 ## Notes
 
 - The main app shows the camera preview inside the Panda3D window.
+- Camera capture requests a low-latency single-frame backend buffer and automatically reopens after repeated read failures.
+- Invalid runtime ranges are rejected before camera or rendering initialization.
 - Calibration and UI settings are stored per machine under `~/.config/AeroInteract3D/calibration_profiles.json` unless `XDG_CONFIG_HOME` is set.
 - For development details, see [DEVELOPMENT.md](DEVELOPMENT.md).

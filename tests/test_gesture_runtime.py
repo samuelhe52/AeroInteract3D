@@ -9,6 +9,7 @@ import pytest
 from src.contracts import Vec3
 from src.contracts import GesturePacket
 from src.gesture.debug.live_preview_runtime import GesturePreviewWindow
+from src.gesture.constants import GESTURE_DETECT_MAX_SIDE
 from src.gesture.runtime import CaptureRuntime, HandLandmarkerRuntime, landmark_to_camera_vec3
 
 
@@ -56,6 +57,14 @@ def test_capture_runtime_can_leave_frames_unflipped(monkeypatch: pytest.MonkeyPa
 
     assert frame is not None
     assert np.array_equal(frame, FakeVideoCapture(0).frame)
+
+
+def test_capture_runtime_requests_single_frame_backend_buffer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cv2, "VideoCapture", FakeVideoCapture)
+
+    runtime = CaptureRuntime(camera_index=0, frame_width=640, frame_height=480, target_fps=30.0)
+
+    assert runtime._capture.settings[cv2.CAP_PROP_BUFFERSIZE] == 1
 
 
 def test_landmark_to_camera_vec3_preserves_negative_xy_coordinates() -> None:
@@ -110,6 +119,42 @@ def test_detect_reuses_single_gray_conversion_for_detected_frames(monkeypatch: p
     assert calls.count(cv2.COLOR_BGR2RGB) == 1
     assert len(captured_gray) == 1
     assert captured_gray[0].shape == frame.shape[:2]
+
+
+def test_detect_runs_quality_and_fallback_tracking_at_detection_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = HandLandmarkerRuntime.__new__(HandLandmarkerRuntime)
+    captured_rgb_shapes: list[tuple[int, ...]] = []
+    captured_gray_shapes: list[tuple[int, ...]] = []
+    runtime._mp = SimpleNamespace(
+        ImageFormat=SimpleNamespace(SRGB="srgb"),
+        Image=lambda *, image_format, data: (
+            captured_rgb_shapes.append(data.shape)
+            or SimpleNamespace(image_format=image_format, data=data)
+        ),
+    )
+    runtime._landmarker = SimpleNamespace(
+        detect_for_video=lambda image, timestamp_ms: SimpleNamespace(
+            hand_landmarks=[
+                [SimpleNamespace(x=0.5, y=0.5, z=0.0) for _ in range(21)]
+            ],
+            handedness=[[SimpleNamespace(category_name="Right", score=0.9)]],
+        )
+    )
+    runtime._fallback_state = SimpleNamespace()
+
+    def record_update(self, frame_gray: np.ndarray, observation, *, timestamp_ms: int) -> None:
+        captured_gray_shapes.append(frame_gray.shape)
+
+    monkeypatch.setattr(runtime, "_update_fallback_state", record_update.__get__(runtime, HandLandmarkerRuntime))
+
+    frame = np.full((960, 1280, 3), 32, dtype=np.uint8)
+    observation = runtime.detect(frame, timestamp_ms=100)
+
+    assert observation is not None
+    assert captured_rgb_shapes == [(480, GESTURE_DETECT_MAX_SIDE, 3)]
+    assert captured_gray_shapes == [(480, GESTURE_DETECT_MAX_SIDE)]
 
 
 def test_detect_multi_returns_two_hands_when_detector_reports_both(monkeypatch: pytest.MonkeyPatch) -> None:

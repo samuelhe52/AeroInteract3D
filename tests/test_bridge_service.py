@@ -5,7 +5,13 @@ import logging
 import numpy as np
 import pytest
 
-from src.bridge.service import BridgeServiceImpl, TABLE_SCENE_OBJECTS, TABLE_SURFACE_Y
+from src.bridge.service import (
+    OBJECT_SCALE_RATIO_MAX,
+    OBJECT_SCALE_RATIO_MIN,
+    BridgeServiceImpl,
+    TABLE_SCENE_OBJECTS,
+    TABLE_SURFACE_Y,
+)
 from src.contracts import GesturePacket, Vec3
 from src.gesture.runtime import RawHandObservation
 from src.gesture.service import GestureServiceImpl
@@ -188,6 +194,34 @@ def test_bridge_emits_hover_when_hand_moves_near_object() -> None:
     assert [command.command_type for command in commands] == ["set_hand_pose", "set_object_state"]
     assert commands[0].payload["visible"] is True
     assert commands[1].payload["interaction_state"] == "pending_grab"
+
+
+def test_bridge_hover_selection_is_sticky_until_another_object_is_clearly_closer() -> None:
+    bridge = BridgeServiceImpl()
+    bridge._ensure_object_state(
+        "left",
+        world_position=Vec3(0.0, 0.0, 0.0),
+        interaction_radius=0.15,
+        half_height=0.1,
+        world_scale=(0.2, 0.2, 0.2),
+        interaction_state="idle",
+        initialized=True,
+    )
+    bridge._ensure_object_state(
+        "right",
+        world_position=Vec3(0.08, 0.0, 0.0),
+        interaction_radius=0.15,
+        half_height=0.1,
+        world_scale=(0.2, 0.2, 0.2),
+        interaction_state="idle",
+        initialized=True,
+    )
+
+    stable = bridge._select_hovered_object(Vec3(0.055, 0.0, 0.0), sticky_object_id="left")
+    switched = bridge._select_hovered_object(Vec3(0.075, 0.0, 0.0), sticky_object_id="left")
+
+    assert stable is not None and stable.object_id == "left"
+    assert switched is not None and switched.object_id == "right"
 
 
 def test_bridge_requires_hover_before_grab() -> None:
@@ -849,6 +883,72 @@ def test_bridge_dual_scale_has_no_per_session_ratio_cap() -> None:
 
     ratio = pose.payload["debug"]["dual_scale"]["ratio"]
     assert ratio > 2.8
+
+
+def test_bridge_dual_scale_applies_global_safety_bounds() -> None:
+    bridge = BridgeServiceImpl()
+    bridge.start()
+
+    bridge.process(make_packet(frame_id=1, timestamp_ms=100))
+    baseline = with_secondary_hand(
+        hover_packet(frame_id=2, timestamp_ms=120, pinch_state="pinched"),
+        pinch_state="pinched",
+        index_tip=object_camera_point(0.03),
+        thumb_tip=object_camera_point(0.01),
+    )
+    bridge.process(baseline)
+
+    expanded = with_secondary_hand(
+        make_packet(
+            frame_id=3,
+            timestamp_ms=140,
+            pinch_state="pinched",
+            index_tip=object_camera_point(-0.78),
+            thumb_tip=object_camera_point(-0.82),
+        ),
+        pinch_state="pinched",
+        index_tip=object_camera_point(0.82),
+        thumb_tip=object_camera_point(0.78),
+    )
+    expanded_commands = bridge.process(expanded)
+    expanded_pose = [
+        command
+        for command in expanded_commands
+        if command.command_type == "set_object_pose" and "scale" in command.payload
+    ][-1]
+
+    contracted = with_secondary_hand(
+        make_packet(
+            frame_id=4,
+            timestamp_ms=160,
+            pinch_state="pinched",
+            index_tip=object_camera_point(0.02),
+            thumb_tip=object_camera_point(-0.02),
+        ),
+        pinch_state="pinched",
+        index_tip=object_camera_point(0.02),
+        thumb_tip=object_camera_point(-0.02),
+    )
+    contracted_commands = bridge.process(contracted)
+    contracted_pose = [
+        command
+        for command in contracted_commands
+        if command.command_type == "set_object_pose" and "scale" in command.payload
+    ][-1]
+
+    assert expanded_pose.payload["debug"]["dual_scale"]["ratio"] == pytest.approx(
+        OBJECT_SCALE_RATIO_MAX
+    )
+    assert contracted_pose.payload["debug"]["dual_scale"]["ratio"] == pytest.approx(
+        OBJECT_SCALE_RATIO_MIN
+    )
+    half_height = float(scene_object_descriptor(default_test_object_id())["collision_half_height"])
+    assert expanded_pose.payload["position"]["y"] == pytest.approx(
+        TABLE_SURFACE_Y + (half_height * OBJECT_SCALE_RATIO_MAX)
+    )
+    assert contracted_pose.payload["position"]["y"] == pytest.approx(
+        TABLE_SURFACE_Y + (half_height * OBJECT_SCALE_RATIO_MIN)
+    )
 
 
 def test_bridge_dual_scale_uses_xy_distance_only() -> None:

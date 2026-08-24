@@ -14,6 +14,7 @@ from src.rendering.debug.data_panel import DataPanelManager
 from src.rendering.rendering_core import MAIN_MENU_BACKGROUND_COLOR, RenderingCoreManager
 from src.rendering import service as rendering_service
 from src.rendering.service import (
+    DEFAULT_CUSTOM_MODELS_DIR,
     MAX_EXECUTED_COMMAND_HISTORY,
     ObjectInitialState,
     RenderingServiceImpl,
@@ -21,7 +22,7 @@ from src.rendering.service import (
 from src.rendering.ui.input_adapter import UIGestureInputAdapter
 from src.rendering.ui.interaction import UIButtonBounds, UIButtonInteractionController
 from src.rendering.ui.state import UIInputState, UISettingsState
-from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
+from src.utils.runtime import LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
 
 
 @pytest.fixture(autouse=True)
@@ -664,6 +665,15 @@ def test_rendering_start_resets_state_and_can_restart(monkeypatch) -> None:
     assert service.active_view == "home"
 
 
+def test_rendering_resolves_default_models_from_package_not_entrypoint(monkeypatch) -> None:
+    monkeypatch.chdir(Path("/tmp"))
+
+    service = RenderingServiceImpl()
+
+    assert Path(service._custom_models_dir) == DEFAULT_CUSTOM_MODELS_DIR
+    assert DEFAULT_CUSTOM_MODELS_DIR.is_dir()
+
+
 def test_rendering_start_keeps_camera_preview_when_debug_stats_disabled(monkeypatch) -> None:
     patch_ui_views(monkeypatch)
     created_components: list[tuple[str, object]] = []
@@ -935,7 +945,7 @@ def test_rendering_validation_does_not_mutate_invalid_command() -> None:
 
     assert command.frame_id == "7"
     assert command.payload == []
-    assert service.health()["lifecycle_state"] == LIFECYCLE_DEGRADED
+    assert service.health()["lifecycle_state"] == LIFECYCLE_RUNNING
     assert [error["code"] for error in service.health()["errors"]] == [
         "scene.frame_id.invalid",
         "scene.payload.invalid",
@@ -960,7 +970,7 @@ def test_rendering_error_history_is_bounded() -> None:
 
     health = service.health()
 
-    assert health["lifecycle_state"] == LIFECYCLE_DEGRADED
+    assert health["lifecycle_state"] == LIFECYCLE_RUNNING
     assert len(health["errors"]) == 10
     assert all(error["code"] == "scene.payload.invalid" for error in health["errors"])
 
@@ -982,6 +992,33 @@ def test_rendering_health_exposes_structured_metrics() -> None:
     assert stats["duplicate_commands"] == 1
     assert stats["stale_commands"] == 1
     assert stats["rejected_commands"] == 1
+
+
+def test_rendering_continues_after_rejecting_malformed_command() -> None:
+    service = RenderingServiceImpl()
+    service._status = LIFECYCLE_RUNNING
+
+    service.push(
+        make_command(
+            command_id="invalid-1",
+            frame_id=1,
+            command_type="heartbeat",
+            payload=[],  # type: ignore[arg-type]
+        )
+    )
+    service.push(
+        make_command(
+            command_id="heartbeat-2",
+            frame_id=2,
+            command_type="heartbeat",
+        )
+    )
+
+    health = service.health()
+    assert health["lifecycle_state"] == LIFECYCLE_RUNNING
+    assert health["stats"]["rejected_commands"] == 1
+    assert health["stats"]["heartbeats_received"] == 1
+    assert health["stats"]["commands_applied"] == 1
 
 
 def test_rendering_command_history_is_bounded() -> None:
@@ -1307,6 +1344,29 @@ def test_model_factory_applies_scene_scale_to_object_root() -> None:
 
     assert object_np.scale == pytest.approx((0.22, 0.22, 0.22))
     assert object_np.children[0].scale is None
+
+
+def test_model_factory_reports_missing_builtin_fallback_without_recursing() -> None:
+    class EmptyModel:
+        def isEmpty(self) -> bool:
+            return True
+
+    class EmptyLoader:
+        def loadModel(self, model_path, **kwargs):
+            return EmptyModel()
+
+    factory = rendering_service.ModelResourceFactory(loader=EmptyLoader())
+
+    assert factory._load_model_template("cube") is None
+    with pytest.raises(RuntimeError, match="cube"):
+        factory.create_instance(
+            shape_id="cube",
+            parent=FakeNodePath("scene_root"),
+            object_id="missing_cube",
+            scale=(0.2, 0.2, 0.2),
+            color=(1.0, 1.0, 1.0, 1.0),
+            interactable=True,
+        )
 
 
 def test_model_factory_applies_template_default_scale_to_object_root(tmp_path) -> None:

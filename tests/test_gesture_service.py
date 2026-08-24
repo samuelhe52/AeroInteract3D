@@ -6,7 +6,7 @@ import numpy as np
 
 import src.gesture.service as gesture_service
 from src.gesture.runtime import RawHandObservation
-from src.gesture.service import GestureServiceImpl
+from src.gesture.service import CAPTURE_RESTART_FAILURE_THRESHOLD, GestureServiceImpl
 from src.gesture.constants import ROT_SLOT_COUNT
 from src.utils.runtime import LIFECYCLE_DEGRADED, LIFECYCLE_RUNNING, LIFECYCLE_STOPPED
 from src.contracts import Vec3
@@ -178,6 +178,50 @@ def test_gesture_service_enters_degraded_mode_when_backends_fail_to_start() -> N
     service.stop()
 
     assert service.lifecycle_state == LIFECYCLE_STOPPED
+
+
+def test_gesture_service_reopens_camera_after_repeated_read_failures() -> None:
+    captures: list[FakeCapture] = []
+
+    class FailedCapture(FakeCapture):
+        def __init__(self, **_: object) -> None:
+            self.frames = [None] * CAPTURE_RESTART_FAILURE_THRESHOLD
+            self.closed = False
+
+    class RecoveredCapture(FakeCapture):
+        def __init__(self, **_: object) -> None:
+            self.frames = [np.zeros((8, 8, 3), dtype=np.uint8)]
+            self.closed = False
+
+    def capture_factory(**kwargs: object) -> FakeCapture:
+        capture: FakeCapture
+        if not captures:
+            capture = FailedCapture(**kwargs)
+        else:
+            capture = RecoveredCapture(**kwargs)
+        captures.append(capture)
+        return capture
+
+    service = GestureServiceImpl(
+        capture_factory=capture_factory,
+        detector_factory=FakeDetector,
+        clock=iter([10.0, 10.1, 10.2, 10.3]).__next__,
+    )
+
+    service.start()
+    for _ in range(CAPTURE_RESTART_FAILURE_THRESHOLD):
+        service.poll()
+    recovered_packet = service.poll()
+
+    assert captures[0].closed is True
+    assert len(captures) == 2
+    assert recovered_packet is not None
+    assert recovered_packet.tracking_state == "tracked"
+    assert service.lifecycle_state == LIFECYCLE_RUNNING
+    stats = service.health()["stats"]
+    assert stats["capture_restart_attempts"] == 1
+    assert stats["capture_restarts"] == 1
+    assert stats["consecutive_capture_failures"] == 0
 
 
 def test_gesture_summary_logging_is_debug_only(monkeypatch, caplog) -> None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import deque
 import logging
+import os
+from pathlib import Path
 import time
 from typing import List, Dict, Optional, Set, Any, Callable
 
@@ -41,6 +43,7 @@ VALID_PAYLOAD_KEYS = {
 }
 TABLE_INTERACTION_LOCKED_COMMAND_TYPES = frozenset({"set_object_pose", "set_object_state", "reset_interaction"})
 MAX_EXECUTED_COMMAND_HISTORY = 4096
+DEFAULT_CUSTOM_MODELS_DIR = Path(__file__).resolve().parents[2] / "assets" / "custom_models"
 
 
 class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
@@ -56,27 +59,13 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
         custom_models_dir: str | None = None,
     ):
         super().__init__()
-        # ========== 100%正确的路径计算，无拼写错误 ==========
-        import os
-        import sys
-        # 直接从main.py所在目录获取项目根目录，兼容WSL环境
-        if hasattr(sys.modules['__main__'], '__file__'):
-            main_file_path = sys.modules['__main__'].__file__
-            project_root = os.path.dirname(os.path.abspath(main_file_path))
-        else:
-            project_root = os.getcwd()
-        
-        # 拼接默认的自定义模型文件夹绝对路径
-        DEFAULT_MODELS_DIR = os.path.join(project_root, "assets", "custom_models")
-        # 【修复】正确赋值给self._custom_models_dir，无拼写错误
-        self._custom_models_dir = custom_models_dir or DEFAULT_MODELS_DIR
-        
+        models_dir = DEFAULT_CUSTOM_MODELS_DIR if custom_models_dir is None else Path(custom_models_dir).expanduser()
+        self._custom_models_dir = str(models_dir)
         logger.debug(
             "Resolved custom models directory: path=%s exists=%s",
             self._custom_models_dir,
             os.path.isdir(self._custom_models_dir),
         )
-        # ========== 路径计算结束 ==========
 
         self._expected_contract_version = EXPECTED_CONTRACT_VERSION
         self._window_adapter_factory = window_adapter_factory or RenderingCoreManager
@@ -553,8 +542,6 @@ class RenderingServiceImpl(RenderingServiceUIMixin, RenderOutputPort):
 
             if not self._validate_command(command):
                 self._metrics.rejected_commands += 1
-                if self._status == LIFECYCLE_RUNNING:
-                    self._status = LIFECYCLE_DEGRADED
                 return
 
             if self._status in [LIFECYCLE_INITIALIZING, LIFECYCLE_STOPPED]:

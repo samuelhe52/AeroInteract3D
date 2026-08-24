@@ -34,6 +34,8 @@ from src.utils.runtime import (
 logger = logging.getLogger("gesture.service")
 
 SECONDARY_HAND_ID = "hand-2"
+CAPTURE_RESTART_FAILURE_THRESHOLD = 3
+CAPTURE_RETRY_INTERVAL_FRAMES = 30
 
 
 @dataclass(slots=True)
@@ -44,6 +46,8 @@ class GestureMetrics:
     temporary_loss_packets: int = 0
     not_detected_packets: int = 0
     capture_failures: int = 0
+    capture_restart_attempts: int = 0
+    capture_restarts: int = 0
     detector_failures: int = 0
     validation_failures: int = 0
 
@@ -129,6 +133,8 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         self._last_secondary_wrist: Vec3 | None = None
         self._frame_id = 0
         self._last_timestamp_ms = 0
+        self._consecutive_capture_failures = 0
+        self._next_capture_retry_frame = 0
         self._dual_scale_ratio: float = 1.0
         self._dual_scale_baseline_distance_xy: float | None = None
 
@@ -149,10 +155,14 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
         self._last_secondary_wrist = None
         self._frame_id = 0
         self._last_timestamp_ms = 0
+        self._consecutive_capture_failures = 0
+        self._next_capture_retry_frame = 0
         self._dual_scale_ratio = 1.0
         self._dual_scale_baseline_distance_xy = None
 
         self._capture = self._build_capture()
+        if self._capture is None:
+            self._next_capture_retry_frame = CAPTURE_RETRY_INTERVAL_FRAMES
         self._detector = self._build_detector()
         self._preview = self._build_preview() if self._config.preview_enabled else None
 
@@ -244,6 +254,9 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
                 "temporary_loss_packets": self._metrics.temporary_loss_packets,
                 "not_detected_packets": self._metrics.not_detected_packets,
                 "capture_failures": self._metrics.capture_failures,
+                "capture_restart_attempts": self._metrics.capture_restart_attempts,
+                "capture_restarts": self._metrics.capture_restarts,
+                "consecutive_capture_failures": self._consecutive_capture_failures,
                 "detector_failures": self._metrics.detector_failures,
                 "validation_failures": self._metrics.validation_failures,
                 "preview_enabled": self._config.preview_enabled,
@@ -359,21 +372,76 @@ class GestureServiceImpl(GestureInputPort, DebugFrameSource):
 
     def _read_frame(self):
         if self._capture is None:
+            self._maybe_restart_capture()
             return None
-        frame = self._capture.read()
+        try:
+            frame = self._capture.read()
+        except Exception as exc:
+            self._record_capture_read_failure(error=str(exc))
+            return None
         if frame is None:
-            self._metrics.capture_failures += 1
-            self.lifecycle_state = LIFECYCLE_DEGRADED
-            self._record_error(
-                error_entry(
-                    "gesture.capture.read_failed",
-                    "Unable to read a frame from the camera",
-                    recoverable=True,
-                    hint="The service will emit loss packets until camera frames become available again.",
-                    details={"frame_id": self._frame_id},
-                )
-            )
+            self._record_capture_read_failure()
+            return None
+
+        self._consecutive_capture_failures = 0
+        if self._detector is not None and self.lifecycle_state == LIFECYCLE_DEGRADED:
+            self.lifecycle_state = LIFECYCLE_RUNNING
         return frame
+
+    def _record_capture_read_failure(self, *, error: str | None = None) -> None:
+        self._metrics.capture_failures += 1
+        self._consecutive_capture_failures += 1
+        self.lifecycle_state = LIFECYCLE_DEGRADED
+        details: dict[str, Any] = {
+            "frame_id": self._frame_id,
+            "consecutive_failures": self._consecutive_capture_failures,
+        }
+        if error is not None:
+            details["error"] = error
+        self._record_error(
+            error_entry(
+                "gesture.capture.read_failed",
+                "Unable to read a frame from the camera",
+                recoverable=True,
+                hint="Camera capture will be reopened automatically after repeated failures.",
+                details=details,
+            )
+        )
+        if self._consecutive_capture_failures >= CAPTURE_RESTART_FAILURE_THRESHOLD:
+            self._restart_capture()
+
+    def _maybe_restart_capture(self) -> None:
+        if self._frame_id < self._next_capture_retry_frame:
+            return
+        self._restart_capture()
+
+    def _restart_capture(self) -> None:
+        self._metrics.capture_restart_attempts += 1
+        self._close_component(self._capture, component_name="camera capture")
+        self._capture = None
+        replacement = self._build_capture()
+        if replacement is None:
+            self._next_capture_retry_frame = self._frame_id + CAPTURE_RETRY_INTERVAL_FRAMES
+            return
+
+        self._capture = replacement
+        self._consecutive_capture_failures = 0
+        self._next_capture_retry_frame = 0
+        self._metrics.capture_restarts += 1
+        if self._detector is not None:
+            self.lifecycle_state = LIFECYCLE_RUNNING
+        logger.info("Camera capture reopened after runtime failure")
+
+    @staticmethod
+    def _close_component(component: Any | None, *, component_name: str) -> None:
+        if component is None:
+            return
+        try:
+            close = getattr(component, "close", None)
+            if callable(close):
+                close()
+        except Exception:
+            logger.exception("Failed to close %s", component_name)
 
     def _detect_all(self, frame, *, timestamp_ms: int) -> list[RawHandObservation]:
         try:

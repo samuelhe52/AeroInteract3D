@@ -93,6 +93,21 @@ def test_app_run_steps_render_output_every_loop_iteration() -> None:
     assert render_output.step_calls == 1
 
 
+def test_app_shutdown_request_does_not_wait_for_next_frame(monkeypatch) -> None:
+    config = AppConfig(target_fps=1)
+    gesture_input = FakeGestureInput()
+    bridge = FakeBridge()
+    render_output = FakeRenderOutput()
+    app = App(config, gesture_input, bridge, render_output)
+    gesture_input.app = app
+    app.lifecycle_state = LIFECYCLE_RUNNING
+    monkeypatch.setattr(main.time, "sleep", lambda _: pytest.fail("shutdown should not sleep"))
+
+    app.run()
+
+    assert render_output.step_calls == 1
+
+
 def test_app_run_reads_camera_data_through_port() -> None:
     class CameraGestureInput(FakeGestureInput):
         def __init__(self) -> None:
@@ -360,6 +375,46 @@ def test_parse_args_accepts_bridge_rotation_sensitivity() -> None:
     config = build_config(args)
 
     assert config.bridge_rotation_sensitivity == 1.9
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--camera-index", "-1"],
+        ["--target-fps", "0"],
+        ["--target-fps", "241"],
+        ["--frame-width", "0"],
+        ["--frame-height", "-1"],
+        ["--render-position-sensitivity", "0"],
+        ["--render-position-sensitivity", "nan"],
+        ["--bridge-rotation-sensitivity", "-0.5"],
+    ],
+)
+def test_parse_args_rejects_invalid_runtime_ranges(args: list[str]) -> None:
+    with pytest.raises(SystemExit):
+        parse_args(["--no-run-config", *args])
+
+
+@pytest.mark.parametrize(
+    "config_text",
+    [
+        "camera_index: -1\n",
+        "target_fps: 0\n",
+        "target_fps: 241\n",
+        "frame_width: 0\n",
+        "frame_height: -1\n",
+        "log_level: verbose\n",
+        "virtual_hand:\n  scale: 0\n",
+        "virtual_hand:\n  stable_threshold: false\n",
+        "virtual_hand:\n  bone_color: [1.2, 0.5, 0.5]\n",
+    ],
+)
+def test_run_config_rejects_invalid_runtime_ranges(tmp_path, config_text: str) -> None:
+    config_path = tmp_path / "invalid.yaml"
+    config_path.write_text(config_text, encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        main.load_run_config(config_path)
 
 
 def test_build_app_disables_gesture_preview_and_passes_debug_stats_to_renderer(monkeypatch) -> None:

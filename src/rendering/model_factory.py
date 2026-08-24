@@ -374,6 +374,9 @@ class ModelResourceFactory:
             return model
 
         except Exception as e:
+            if shape_id == "cube":
+                logger.error("Failed to load built-in cube fallback: %s", e, exc_info=True)
+                return None
             logger.error(f"Failed to load model {shape_id}: {str(e)}, fallback to cube", exc_info=True)
             return self._load_model_template("cube")
 

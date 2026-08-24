@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 from pathlib import Path
 import signal
 import sys
@@ -28,6 +29,8 @@ LIFECYCLE_RUNNING = "RUNNING"
 LIFECYCLE_STOPPED = "STOPPED"
 DEFAULT_RUN_CONFIG_PATH = Path(__file__).resolve().with_name(".run.yaml")
 RUN_CONFIG_HELP = "Path to a YAML file with machine-local default run options."
+VALID_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
+MAX_TARGET_FPS = 240
 RUN_CONFIG_KEYS = frozenset(
     {
         "log_level",
@@ -87,6 +90,34 @@ def _built_in_run_defaults() -> dict[str, object]:
     }
 
 
+def _non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be zero or greater")
+    return parsed
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be greater than zero")
+    return parsed
+
+
+def _target_fps(value: str) -> int:
+    parsed = _positive_int(value)
+    if parsed > MAX_TARGET_FPS:
+        raise argparse.ArgumentTypeError(f"value must not exceed {MAX_TARGET_FPS}")
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise argparse.ArgumentTypeError("value must be a finite number greater than zero")
+    return parsed
+
+
 def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
     if config_data is None:
         return {}
@@ -104,6 +135,14 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
         if key in {"log_level", "motion_preset"}:
             if not isinstance(value, str):
                 raise ValueError(f"Run config {path} field '{key}' must be a string")
+            if key == "log_level":
+                normalized_level = value.upper()
+                if normalized_level not in VALID_LOG_LEVELS:
+                    choices = ", ".join(level.lower() for level in VALID_LOG_LEVELS)
+                    raise ValueError(
+                        f"Run config {path} field 'log_level' must be one of: {choices}"
+                    )
+                value = normalized_level
             validated[key] = value
             continue
 
@@ -121,14 +160,24 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
         }:
             if not isinstance(value, int) or isinstance(value, bool):
                 raise ValueError(f"Run config {path} field '{key}' must be an integer")
+            if key == "camera_index" and value < 0:
+                raise ValueError(f"Run config {path} field 'camera_index' must be zero or greater")
+            if key == "target_fps" and not 1 <= value <= MAX_TARGET_FPS:
+                raise ValueError(
+                    f"Run config {path} field 'target_fps' must be between 1 and {MAX_TARGET_FPS}"
+                )
+            if key in {"frame_width", "frame_height"} and value <= 0:
+                raise ValueError(f"Run config {path} field '{key}' must be greater than zero")
             validated[key] = value
             continue
 
         if key in {"render_position_sensitivity", "bridge_rotation_sensitivity"}:
             if not isinstance(value, (int, float)) or isinstance(value, bool):
                 raise ValueError(f"Run config {path} field '{key}' must be a number")
-            if float(value) <= 0.0:
-                raise ValueError(f"Run config {path} field '{key}' must be greater than zero")
+            if not math.isfinite(float(value)) or float(value) <= 0.0:
+                raise ValueError(
+                    f"Run config {path} field '{key}' must be a finite number greater than zero"
+                )
             validated[key] = float(value)
             continue
 
@@ -148,12 +197,32 @@ def _validate_run_config(config_data: object, path: Path) -> dict[str, object]:
                 raise ValueError(f"Run config {path} field 'virtual_hand.depth_scale' must be a number")
             if "perspective_scale" in value and not isinstance(value["perspective_scale"], (int, float)):
                 raise ValueError(f"Run config {path} field 'virtual_hand.perspective_scale' must be a number")
-            if "stable_threshold" in value and not (isinstance(value["stable_threshold"], int) and value["stable_threshold"] > 0):
+            if "stable_threshold" in value and not (
+                isinstance(value["stable_threshold"], int)
+                and not isinstance(value["stable_threshold"], bool)
+                and value["stable_threshold"] > 0
+            ):
                 raise ValueError(f"Run config {path} field 'virtual_hand.stable_threshold' must be a positive integer")
             if "bone_color" in value and not (isinstance(value["bone_color"], list) and len(value["bone_color"]) == 3):
                 raise ValueError(f"Run config {path} field 'virtual_hand.bone_color' must be a list of 3 numbers")
             if "bone_width" in value and not isinstance(value["bone_width"], (int, float)):
                 raise ValueError(f"Run config {path} field 'virtual_hand.bone_width' must be a number")
+            for numeric_key in ("scale", "depth_scale", "perspective_scale", "bone_width"):
+                if numeric_key in value and (
+                    isinstance(value[numeric_key], bool)
+                    or not math.isfinite(float(value[numeric_key]))
+                    or float(value[numeric_key]) <= 0.0
+                ):
+                    raise ValueError(
+                        f"Run config {path} field 'virtual_hand.{numeric_key}' must be greater than zero"
+                    )
+            if "bone_color" in value and (
+                not all(isinstance(channel, int | float) and not isinstance(channel, bool) for channel in value["bone_color"])
+                or not all(0.0 <= float(channel) <= 1.0 for channel in value["bone_color"])
+            ):
+                raise ValueError(
+                    f"Run config {path} field 'virtual_hand.bone_color' values must be numbers between 0 and 1"
+                )
             validated[key] = value
             continue
 
@@ -223,12 +292,11 @@ class App:
             raise RuntimeError("App is not ready to run")
 
         frame_interval = 1.0 / max(self.config.target_fps, 1)
+        next_frame_deadline = time.perf_counter()
         self._running = True
         logging.info("Application loop started")
 
         while self._running:
-            loop_start = time.perf_counter()
-
             self.render_output.step()
 
             packet = self.gesture_input.poll()
@@ -248,10 +316,16 @@ class App:
                 for command in commands:
                     self.render_output.push(command)
 
-            elapsed = time.perf_counter() - loop_start
-            sleep_for = frame_interval - elapsed
-            if sleep_for > 0:
-                time.sleep(sleep_for)
+            if not self._running:
+                break
+
+            next_frame_deadline += frame_interval
+            now = time.perf_counter()
+            if next_frame_deadline <= now:
+                if now - next_frame_deadline >= frame_interval:
+                    next_frame_deadline = now
+                continue
+            time.sleep(next_frame_deadline - now)
 
     def request_stop(self) -> None:
         self._running = False
@@ -287,8 +361,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Ignore .run.yaml and use built-in defaults unless CLI flags override them.",
     )
-    parser.add_argument("--log-level", default=defaults["log_level"])
-    parser.add_argument("--camera-index", type=int, default=defaults["camera_index"])
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=VALID_LOG_LEVELS,
+        default=defaults["log_level"],
+    )
+    parser.add_argument("--camera-index", type=_non_negative_int, default=defaults["camera_index"])
     parser.add_argument(
         "--flip-camera",
         dest="flip_camera",
@@ -301,18 +380,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_false",
         help="Keep the camera input unmirrored.",
     )
-    parser.add_argument("--target-fps", type=int, default=defaults["target_fps"])
-    parser.add_argument("--frame-width", type=int, default=defaults["frame_width"])
-    parser.add_argument("--frame-height", type=int, default=defaults["frame_height"])
+    parser.add_argument("--target-fps", type=_target_fps, default=defaults["target_fps"])
+    parser.add_argument("--frame-width", type=_positive_int, default=defaults["frame_width"])
+    parser.add_argument("--frame-height", type=_positive_int, default=defaults["frame_height"])
     parser.add_argument(
         "--render-position-sensitivity",
-        type=float,
+        type=_positive_float,
         default=defaults["render_position_sensitivity"],
         help="Sensitivity multiplier applied to object translation in the rendering module.",
     )
     parser.add_argument(
         "--bridge-rotation-sensitivity",
-        type=float,
+        type=_positive_float,
         default=defaults["bridge_rotation_sensitivity"],
         help="Sensitivity multiplier applied to rotation deltas before the bridge emits object hpr updates.",
     )

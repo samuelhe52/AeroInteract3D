@@ -97,6 +97,10 @@ The main app entrypoint in `main.py` currently supports:
 - `--frame-width`
 - `--frame-height`
 - `--render-position-sensitivity`
+- `--bridge-rotation-sensitivity`
+- `--motion-preset`
+- `--aggressive-release-guard`
+- `--debug-stats`
 
 Current defaults are `30 FPS` and `1280x960` requested capture resolution.
 
@@ -107,6 +111,11 @@ and adjust it per machine. Use `--no-run-config` to ignore the local file for on
 Use `--no-debug-stats` or `--no-aggressive-release-guard` when you need to override a boolean
 enabled in the local file. The main entrypoint no longer supports the old `live_preview` key or a
 separate OpenCV preview window.
+
+Runtime configuration is validated before subsystem startup: camera indexes must be non-negative,
+frame dimensions and sensitivity values must be positive, and target FPS must be between 1 and 240.
+During a live run, three consecutive camera read failures trigger capture reinitialization; failed
+reopen attempts are retried periodically while the gesture service continues emitting loss packets.
 
 The gesture live preview uses the same capture configuration shape through `GesturePreviewConfig` in `src/gesture/debug/live_preview.py`.
 

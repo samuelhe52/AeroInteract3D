@@ -242,6 +242,10 @@ class SecondaryHandState:
 
 DUAL_SCALE_RATIO_EXPONENT = 0.85
 DUAL_SCALE_RATIO_EPSILON = 1e-6
+OBJECT_SCALE_RATIO_MIN = 0.25
+OBJECT_SCALE_RATIO_MAX = 6.0
+HOVER_RELEASE_MARGIN = 0.04
+HOVER_SWITCH_ADVANTAGE = 0.03
 PRIMARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.12
 SECONDARY_PINCH_FALLBACK_ENTER_DISTANCE = 0.12
 SECONDARY_PINCH_FALLBACK_RELEASE_DISTANCE = 0.24
@@ -275,6 +279,7 @@ class BridgeServiceImpl(BridgeService):
         self._dual_scale_object_id: str | None = None
         self._dual_scale_baseline_distance_xy: float | None = None
         self._dual_scale_baseline_scale: tuple[float, float, float] | None = None
+        self._dual_scale_baseline_clearance_y: float | None = None
         self._dual_scale_ratio: float = 1.0
         self._pinch_capture_lock_object_id: str | None = None
         self._dual_scale_rotation_blocked_until_open: bool = False
@@ -299,6 +304,7 @@ class BridgeServiceImpl(BridgeService):
         self._dual_scale_object_id = None
         self._dual_scale_baseline_distance_xy = None
         self._dual_scale_baseline_scale = None
+        self._dual_scale_baseline_clearance_y = None
         self._dual_scale_ratio = 1.0
         self._pinch_capture_lock_object_id = None
         self._dual_scale_rotation_blocked_until_open = False
@@ -418,6 +424,7 @@ class BridgeServiceImpl(BridgeService):
         self._dual_scale_object_id = None
         self._dual_scale_baseline_distance_xy = None
         self._dual_scale_baseline_scale = None
+        self._dual_scale_baseline_clearance_y = None
         self._dual_scale_ratio = 1.0
         self._pinch_capture_lock_object_id = None
         self._dual_scale_rotation_blocked_until_open = False
@@ -445,7 +452,14 @@ class BridgeServiceImpl(BridgeService):
             return commands
 
         hand_anchor_world = self._camera_to_world_control_position(self._interaction_anchor(packet)) if primary_available else Vec3(0.0, 0.0, 0.0)
-        hovered_object = self._select_hovered_object(hand_anchor_world) if primary_available else None
+        hovered_object = (
+            self._select_hovered_object(
+                hand_anchor_world,
+                sticky_object_id=self._hovered_object_id,
+            )
+            if primary_available
+            else None
+        )
         hovered_object_id = hovered_object.object_id if hovered_object is not None else None
         secondary_anchor_world = None
         if secondary_hand is not None:
@@ -1099,6 +1113,7 @@ class BridgeServiceImpl(BridgeService):
         self._dual_scale_object_id = None
         self._dual_scale_baseline_distance_xy = None
         self._dual_scale_baseline_scale = None
+        self._dual_scale_baseline_clearance_y = None
 
     def _handle_dual_scale_mode(
         self,
@@ -1121,17 +1136,34 @@ class BridgeServiceImpl(BridgeService):
             self._dual_scale_object_id = object_state.object_id
             self._dual_scale_baseline_distance_xy = max(distance_xy, 1e-4)
             self._dual_scale_baseline_scale = object_state.world_scale
+            self._dual_scale_baseline_clearance_y = object_state.world_position.y - (
+                TABLE_SURFACE_Y + (object_state.half_height * object_state.absolute_scale_ratio)
+            )
 
         baseline_distance = max(self._dual_scale_baseline_distance_xy or 1e-4, 1e-4)
         baseline_scale = self._dual_scale_baseline_scale or object_state.world_scale
         ratio_raw = distance_xy / baseline_distance
-        ratio = max(ratio_raw, DUAL_SCALE_RATIO_EPSILON) ** DUAL_SCALE_RATIO_EXPONENT
+        session_ratio = max(ratio_raw, DUAL_SCALE_RATIO_EPSILON) ** DUAL_SCALE_RATIO_EXPONENT
+        initial_scale_x = max(float(object_state.initial_world_scale[0]), 1e-6)
+        baseline_absolute_ratio = float(baseline_scale[0]) / initial_scale_x
+        target_absolute_ratio = max(
+            OBJECT_SCALE_RATIO_MIN,
+            min(OBJECT_SCALE_RATIO_MAX, baseline_absolute_ratio * session_ratio),
+        )
+        ratio_from_baseline = target_absolute_ratio / max(baseline_absolute_ratio, 1e-6)
         object_state.world_scale = (
-            baseline_scale[0] * ratio,
-            baseline_scale[1] * ratio,
-            baseline_scale[2] * ratio,
+            baseline_scale[0] * ratio_from_baseline,
+            baseline_scale[1] * ratio_from_baseline,
+            baseline_scale[2] * ratio_from_baseline,
         )
         object_state.absolute_scale_ratio = self._absolute_scale_ratio(object_state)
+        object_state.world_position = Vec3(
+            object_state.world_position.x,
+            TABLE_SURFACE_Y
+            + (object_state.half_height * object_state.absolute_scale_ratio)
+            + (self._dual_scale_baseline_clearance_y or 0.0),
+            object_state.world_position.z,
+        )
         self._dual_scale_ratio = object_state.absolute_scale_ratio
         self._grabbed_object_id = object_state.object_id
         self._hovered_object_id = object_state.object_id
@@ -1271,7 +1303,9 @@ class BridgeServiceImpl(BridgeService):
         return self._constrain_object_to_table(unconstrained_position, object_state)
 
     def _constrain_object_to_table(self, world_position: Vec3, object_state: ObjectInteractionState) -> tuple[Vec3, bool]:
-        minimum_center_y = TABLE_SURFACE_Y + object_state.half_height
+        minimum_center_y = TABLE_SURFACE_Y + (
+            object_state.half_height * object_state.absolute_scale_ratio
+        )
         if world_position.y >= minimum_center_y:
             return world_position, False
         return Vec3(world_position.x, minimum_center_y, world_position.z), True
@@ -1500,7 +1534,12 @@ class BridgeServiceImpl(BridgeService):
     def _is_hovering_object(self, hand_anchor_world: Vec3, object_state: ObjectInteractionState) -> bool:
         return self._distance(hand_anchor_world, object_state.world_position) <= object_state.interaction_radius
 
-    def _select_hovered_object(self, hand_anchor_world: Vec3) -> ObjectInteractionState | None:
+    def _select_hovered_object(
+        self,
+        hand_anchor_world: Vec3,
+        *,
+        sticky_object_id: str | None = None,
+    ) -> ObjectInteractionState | None:
         best_match: ObjectInteractionState | None = None
         best_distance: float | None = None
         for object_state in self._object_states.values():
@@ -1510,7 +1549,18 @@ class BridgeServiceImpl(BridgeService):
             if best_distance is None or distance < best_distance:
                 best_match = object_state
                 best_distance = distance
-        return best_match
+
+        sticky_object = self._object_states.get(sticky_object_id) if sticky_object_id is not None else None
+        if sticky_object is None:
+            return best_match
+        sticky_distance = self._distance(hand_anchor_world, sticky_object.world_position)
+        if sticky_distance > sticky_object.interaction_radius + HOVER_RELEASE_MARGIN:
+            return best_match
+        if best_match is None or best_match.object_id == sticky_object.object_id:
+            return sticky_object
+        if best_distance is not None and best_distance + HOVER_SWITCH_ADVANTAGE < sticky_distance:
+            return best_match
+        return sticky_object
 
     @staticmethod
     def _add_vec3(a: Vec3, b: Vec3) -> Vec3:
